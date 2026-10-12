@@ -14,6 +14,8 @@ pub enum BgEvent {
     CountLoaded { key: String, result: Result<u64, String> },
     TestDone { result: Result<String, String> },
     AutoTables { conn_id: String, tables: Vec<shujing_core::TableMeta> },
+    PkLoaded { key: String, cols: Vec<String> },
+    ChangesSaved { key: String, result: Result<u64, String> },
     Saved { result: Result<Vec<ConnInfo>, String> },
     Exported { result: Result<String, String> },
 }
@@ -32,6 +34,14 @@ pub struct TableTab {
     pub error: Option<String>,
     /// 列排序:(列名, 升序)
     pub sort: Option<(String, bool)>,
+    /// 主键列名(决定可编辑性;空 = 只读)
+    pub pk_cols: Vec<String>,
+    pub pk_loaded: bool,
+    /// 未保存修改:(页内行号, 列名, 新值;None = NULL)
+    pub changes: Vec<(usize, String, Option<String>)>,
+    /// 正在编辑的格(页内行号, 列下标)与草稿
+    pub editing: Option<(usize, usize)>,
+    pub draft: String,
 }
 
 impl TableTab {
@@ -48,6 +58,11 @@ impl TableTab {
             loading: true,
             error: None,
             sort: None,
+            pk_cols: vec![],
+            pk_loaded: false,
+            changes: vec![],
+            editing: None,
+            draft: String::new(),
         }
     }
 
@@ -338,6 +353,23 @@ impl ShujingApp {
                         self.open_table(&conn_id, &name, None);
                     }
                 }
+                BgEvent::PkLoaded { key, cols } => {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.key() == key) {
+                        tab.pk_cols = cols;
+                    }
+                }
+                BgEvent::ChangesSaved { key, result } => match result {
+                    Ok(n) => {
+                        if let Some(tab) = self.tabs.iter_mut().find(|t| t.key() == key) {
+                            tab.changes.clear();
+                            let cid = tab.conn_id.clone();
+                            drop(self.load_rows(&key));
+                            let _ = (cid, n);
+                        }
+                        self.toast_error(format!("已保存 {n} 处修改"));
+                    }
+                    Err(e) => self.toast_error(format!("保存失败: {e}")),
+                },
                 BgEvent::TestDone { result } => {
                     if let Some(m) = self.conn_modal.as_mut() {
                         m.testing = false;
@@ -374,6 +406,28 @@ impl ShujingApp {
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         tab.loading = true;
+        tab.changes.clear();
+        tab.editing = None;
+        if !tab.pk_loaded {
+            tab.pk_loaded = true;
+            let (tx2, conn_id2, table2, database2, key2) = (
+                tx.clone(),
+                conn_id.clone(),
+                table.clone(),
+                database.clone(),
+                key.clone(),
+            );
+            let service2 = service.clone();
+            net::spawn(async move {
+                let st = service2
+                    .get_table_structure(&conn_id2, &table2, database2.clone())
+                    .await;
+                let cols = st
+                    .map(|s| s.columns.iter().filter(|c| c.key == "PRI").map(|c| c.name.clone()).collect())
+                    .unwrap_or_default();
+                let _ = tx2.send(BgEvent::PkLoaded { key: key2, cols });
+            });
+        }
         net::spawn(async move {
             let full = match &database {
                 Some(db) => format!("{}.{}", quote_ident(db, true), quote_ident(&table, true)),

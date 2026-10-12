@@ -1,40 +1,33 @@
-//! 表数据网格视图 + 连接弹窗。
-//! egui 即时模式惯例:绘制函数返回"动作",由 update 循环执行(避免 self 双重借用)。
+//! 表数据网格视图 + 标签栏 + 连接弹窗 + eframe::App 实现。
 
 use crate::app::{BgEvent, ConnModal, ShujingApp, TableTab};
 use egui::RichText;
+use crate::net;
+use crate::sidebar;
+use shujing_core::Service;
 
-/// 表格视图产生的用户动作
 pub enum TabAction {
     Reload { key: String },
     SetPage { key: String, page: usize },
     ExportCsv { key: String },
+    SaveChanges { key: String },
 }
 
-/// 连接弹窗产生的动作
 pub enum ConnAction {
     Save(shujing_core::ConnInfo),
     Test(shujing_core::ConnInfo),
     Cancel,
 }
 
-pub fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
+fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
     egui::TopBottomPanel::top("tabbar")
-        .frame(egui::Frame::default().inner_margin(egui::Margin {
-            left: 8,
-            right: 8,
-            top: 4,
-            bottom: 0,
-        }))
+        .frame(egui::Frame::default().inner_margin(egui::Margin::symmetric(8, 6)))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
                 let n = app.tabs.len();
                 for i in 0..n {
                     let t = &app.tabs[i];
-                    let label: RichText =
-                        RichText::new(format!("{}▤ {}", if i == app.active_tab { "● " } else { "" }, t.table))
-                            .size(12.0);
+                    let label = RichText::new(format!("{} {}", if i == app.active_tab { "*" } else { "" }, t.table)).size(12.0);
                     if ui.selectable_label(i == app.active_tab, label).clicked() {
                         app.active_tab = i;
                     }
@@ -43,7 +36,7 @@ pub fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
         });
 }
 
-pub fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction> {
+fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let key = tab.key();
 
@@ -52,21 +45,21 @@ pub fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&tab.table).strong().size(14.0));
-                if let Some(db) = &tab.database {
-                    ui.label(RichText::new(db).weak().size(11.0));
-                }
                 if tab.loading {
                     ui.spinner();
                 }
                 if let Some(err) = &tab.error {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(255, 120, 120),
-                        RichText::new(err).size(11.0),
-                    );
+                    ui.colored_label(egui::Color32::from_rgb(255, 120, 120), RichText::new(err).size(11.0));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("导出 CSV").clicked() {
                         actions.push(TabAction::ExportCsv { key: key.clone() });
+                    }
+                    if !tab.changes.is_empty() {
+                        let n = tab.changes.len();
+                        if ui.button(format!("保存修改 ({n})")).clicked() {
+                            actions.push(TabAction::SaveChanges { key: key.clone() });
+                        }
                     }
                     if ui.button("刷新").clicked() && !tab.loading {
                         actions.push(TabAction::Reload { key: key.clone() });
@@ -90,48 +83,10 @@ pub fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction
                     .striped(true)
                     .num_columns(tab.columns.len() + 1)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("#").size(12.0).weak());
-                        for c in &tab.columns {
-                            let label = match &tab.sort {
-                                Some((sc, asc)) if sc == c => {
-                                    format!("{c} {}", if *asc { "▲" } else { "▼" })
-                                }
-                                _ => c.clone(),
-                            };
-                            if ui
-                                .add(egui::Button::new(RichText::new(label).strong().size(12.0)))
-                                .clicked()
-                            {
-                                tab.sort = match &tab.sort {
-                                    Some((sc, true)) if sc == c => Some((c.clone(), false)),
-                                    Some((sc, false)) if sc == c => None,
-                                    _ => Some((c.clone(), true)),
-                                };
-                                tab.page = 1;
-                                actions.push(TabAction::Reload { key: key.clone() });
-                            }
-                            ui.end_row();
-                        }
                         for (ri, row) in tab.rows.iter().enumerate() {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{}",
-                                    (tab.page - 1) * tab.page_size + ri + 1
-                                ))
-                                .size(11.0)
-                                .weak(),
-                            );
+                            ui.label(RichText::new(format!("{}", (tab.page - 1) * tab.page_size + ri + 1)).size(11.0));
                             for v in row {
-                                let text = v
-                                    .as_deref()
-                                    .map(|s| {
-                                        if s.len() > 200 {
-                                            format!("{}…", &s[..200])
-                                        } else {
-                                            s.to_string()
-                                        }
-                                    })
-                                    .unwrap_or_else(|| "NULL".into());
+                                let text = v.as_deref().map(|s| s.to_string()).unwrap_or_else(|| "NULL".into());
                                 ui.label(RichText::new(text).size(12.0));
                             }
                             ui.end_row();
@@ -145,26 +100,12 @@ pub fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let total = tab.total.unwrap_or(0);
-                let total_pages =
-                    (total + tab.page_size as u64 - 1) / tab.page_size.max(1) as u64;
-                if ui
-                    .add_enabled(tab.page > 1 && !tab.loading, egui::Button::new("‹ 上一页"))
-                    .clicked()
-                {
+                let total_pages = (total + tab.page_size as u64 - 1) / tab.page_size.max(1) as u64;
+                if ui.add_enabled(tab.page > 1 && !tab.loading, egui::Button::new("‹ 上一页")).clicked() {
                     actions.push(TabAction::SetPage { key: key.clone(), page: tab.page - 1 });
                 }
-                ui.label(RichText::new(format!(
-                    "第 {} 页 / {} · 共 {total} 行",
-                    tab.page, total_pages
-                ))
-                .size(11.0));
-                if ui
-                    .add_enabled(
-                        total_pages > 0 && (tab.page as u64) < total_pages && !tab.loading,
-                        egui::Button::new("下一页 ›"),
-                    )
-                    .clicked()
-                {
+                ui.label(RichText::new(format!("第 {} 页 / {} · 共 {total} 行", tab.page, total_pages)).size(11.0));
+                if ui.add_enabled(total_pages > 0 && (tab.page as u64) < total_pages && !tab.loading, egui::Button::new("下一页 ›")).clicked() {
                     actions.push(TabAction::SetPage { key: key.clone(), page: tab.page + 1 });
                 }
             });
@@ -173,7 +114,7 @@ pub fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction
     actions
 }
 
-pub fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
+fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
     match action {
         TabAction::Reload { key } => app.load_rows(&key),
         TabAction::SetPage { key, page } => {
@@ -190,10 +131,13 @@ pub fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
                 }
             }
         }
+        TabAction::SaveChanges { key } => {
+            app.toast_error("保存逻辑构建中".to_string());
+            let _ = key;
+        }
     }
 }
 
-/// 导出当前页为 CSV,返回目标路径或错误
 pub fn export_csv_to_file(tab: &TableTab) -> Result<String, String> {
     let mut out = String::from("\u{FEFF}");
     out.push_str(&tab.columns.join(","));
@@ -304,15 +248,7 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
         id: m
             .editing_id
             .clone()
-            .unwrap_or_else(|| {
-                format!(
-                    "c{:x}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0)
-                )
-            }),
+            .unwrap_or_else(|| format!("c{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0))),
         name: m.name.clone(),
         db_type: m.db_type,
         host: (!m.host.is_empty()).then(|| m.host.clone()),
@@ -323,5 +259,79 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
         file_path: (!m.file_path.is_empty()).then(|| m.file_path.clone()),
         color: None,
         read_only: false,
+    }
+}
+
+impl eframe::App for ShujingApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.drain_events(ctx);
+        self.autoopen();
+
+        self.draw_sidebar_panel(ctx);
+        draw_tabs(self, ctx);
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if self.tabs.is_empty() {
+                ui.centered_and_justified(|ui| {
+                    ui.label(RichText::new("点击左侧连接,展开库/表后点击表名开始").weak());
+                });
+                return;
+            }
+            if !self.tabs[self.active_tab].columns.is_empty() {
+                let actions = {
+                    let tab = &mut self.tabs[self.active_tab];
+                    draw_table_view(ctx, tab)
+                };
+                for a in actions {
+                    execute_tab_action(self, a);
+                }
+            } else {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let t = &self.tabs[self.active_tab];
+                    ui.label(RichText::new(t.error.clone().unwrap_or_else(|| "加载中…".into())));
+                    if ui.button("重试").clicked() {
+                        let key = t.key();
+                        self.load_rows(&key);
+                    }
+                });
+            }
+        });
+
+        if self.conn_modal.is_some() {
+            let mut modal = self.conn_modal.take().unwrap();
+            let action = draw_conn_modal(ctx, &mut modal);
+            match action {
+                Some(ConnAction::Save(info)) => match self.service.save_connection(info.clone()) {
+                    Ok(conns) => {
+                        self.conns = conns;
+                        self.conn_modal = None;
+                    }
+                    Err(e) => {
+                        self.conn_modal = Some(modal);
+                        self.toast_error(format!("保存失败: {e}"));
+                    }
+                },
+                Some(ConnAction::Test(info)) => {
+                    modal.testing = true;
+                    modal.test_result = None;
+                    self.conn_modal = Some(modal);
+                    let tx = self.event_tx.clone();
+                    let service = self.service.clone();
+                    net::spawn(async move {
+                        let r = Service::test_connection(info).await;
+                        let payload = r.map(|ok| format!("连接成功: {}", ok.version)).map_err(|e| e);
+                        let _ = tx.send(BgEvent::TestDone { result: payload });
+                    });
+                }
+                Some(ConnAction::Cancel) => self.conn_modal = None,
+                None => self.conn_modal = Some(modal),
+            }
+        }
+
+        if let Some((_, at)) = &self.error_toast {
+            if at.elapsed().as_secs() >= 6 {
+                self.error_toast = None;
+            }
+        }
     }
 }
