@@ -1,0 +1,17 @@
+[package]
+name = "shujing-app"
+version = "0.1.0"
+edition = "2021"
+description = "数镜原生版界面(egui/eframe)"
+
+[dependencies]
+shujing-core = { path = "../core" }
+eframe = { version = "0.31", features = [] }
+egui = "0.31"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rfd = "0.15"
+
+[features]
+default = []

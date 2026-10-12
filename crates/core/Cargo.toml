@@ -1,0 +1,14 @@
+[package]
+name = "shujing-core"
+version = "0.1.0"
+edition = "2021"
+description = "数镜原生版核心:连接池/SQL 执行/编辑回写/结构查询(自 dbclient src-tauri 迁移)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true }
+mysql_async = { workspace = true }
+rusqlite = { workspace = true }
+redis = { workspace = true }
