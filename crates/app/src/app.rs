@@ -380,6 +380,21 @@ impl ShujingApp {
                     Ok(conns) => self.conns = conns,
                     Err(e) => self.toast_error(format!("保存失败: {e}")),
                 },
+                BgEvent::PkLoaded { key, cols } => {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.key() == key) {
+                        tab.pk_cols = cols;
+                    }
+                }
+                BgEvent::ChangesSaved { key, result } => match result {
+                    Ok(n) => {
+                        if let Some(tab) = self.tabs.iter_mut().find(|t| t.key() == key) {
+                            tab.changes.clear();
+                        }
+                        self.load_rows(&key);
+                        self.toast_error(format!("已保存 {n} 处修改"));
+                    }
+                    Err(e) => self.toast_error(format!("保存失败: {e}")),
+                },
                 BgEvent::Exported { result } => match result {
                     Ok(path) => self.toast_error(format!("已导出: {path}")),
                     Err(e) => self.toast_error(format!("导出失败: {e}")),
@@ -406,6 +421,33 @@ impl ShujingApp {
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         tab.loading = true;
+        tab.changes.clear();
+        tab.editing = None;
+        // 首次加载时拉主键列(决定可编辑性)
+        if !tab.pk_loaded {
+            tab.pk_loaded = true;
+            let (tx2, conn2, table2, db2, key2) = (
+                tx.clone(),
+                conn_id.clone(),
+                table.clone(),
+                database.clone(),
+                key.clone(),
+            );
+            let service2 = service.clone();
+            net::spawn(async move {
+                let st = service2.get_table_structure(&conn2, &table2, db2).await;
+                let cols = st
+                    .map(|s| {
+                        s.columns
+                            .iter()
+                            .filter(|c| c.key == "PRI")
+                            .map(|c| c.name.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let _ = tx2.send(BgEvent::PkLoaded { key: key2, cols });
+            });
+        }
         tab.changes.clear();
         tab.editing = None;
         if !tab.pk_loaded {
