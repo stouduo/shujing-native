@@ -363,7 +363,7 @@ impl ShujingApp {
                         if let Some(tab) = self.tabs.iter_mut().find(|t| t.key() == key) {
                             tab.changes.clear();
                             let cid = tab.conn_id.clone();
-                            drop(self.load_rows(&key));
+                            self.load_rows(&key);
                             let _ = (cid, n);
                         }
                         self.toast_error(format!("已保存 {n} 处修改"));
@@ -378,21 +378,6 @@ impl ShujingApp {
                 }
                 BgEvent::Saved { result } => match result {
                     Ok(conns) => self.conns = conns,
-                    Err(e) => self.toast_error(format!("保存失败: {e}")),
-                },
-                BgEvent::PkLoaded { key, cols } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.key() == key) {
-                        tab.pk_cols = cols;
-                    }
-                }
-                BgEvent::ChangesSaved { key, result } => match result {
-                    Ok(n) => {
-                        if let Some(tab) = self.tabs.iter_mut().find(|t| t.key() == key) {
-                            tab.changes.clear();
-                        }
-                        self.load_rows(&key);
-                        self.toast_error(format!("已保存 {n} 处修改"));
-                    }
                     Err(e) => self.toast_error(format!("保存失败: {e}")),
                 },
                 BgEvent::Exported { result } => match result {

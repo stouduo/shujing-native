@@ -217,7 +217,42 @@ fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction> {
 
         actions
     });
-    inner.inner
+    let mut actions = inner.inner;
+
+    // 分页器(底部)
+    egui::TopBottomPanel::bottom("table_pager")
+        .frame(egui::Frame::default().inner_margin(egui::Margin::symmetric(8, 6)))
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let total = tab.total.unwrap_or(0);
+                let total_pages =
+                    (total + tab.page_size as u64 - 1) / tab.page_size.max(1) as u64;
+                if ui
+                    .add_enabled(tab.page > 1 && !tab.loading, egui::Button::new("‹ 上一页"))
+                    .clicked()
+                {
+                    actions.push(TabAction::SetPage { key: key.clone(), page: tab.page - 1 });
+                }
+                ui.label(
+                    RichText::new(format!(
+                        "第 {} 页 / {} · 共 {total} 行",
+                        tab.page, total_pages
+                    ))
+                    .size(11.0),
+                );
+                if ui
+                    .add_enabled(
+                        total_pages > 0 && (tab.page as u64) < total_pages && !tab.loading,
+                        egui::Button::new("下一页 ›"),
+                    )
+                    .clicked()
+                {
+                    actions.push(TabAction::SetPage { key: key.clone(), page: tab.page + 1 });
+                }
+            });
+        });
+
+    actions
 }
 
 fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
