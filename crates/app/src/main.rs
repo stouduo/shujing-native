@@ -2,7 +2,9 @@
 
 mod app;
 mod net;
+mod query;
 mod sidebar;
+mod structure;
 mod table_view;
 
 use app::ShujingApp;

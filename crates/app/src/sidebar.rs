@@ -115,8 +115,8 @@ impl ShujingApp {
         let service = self.service.clone();
         let (cid, db) = (conn_id.to_string(), db.to_string());
         net::spawn(async move {
-            let result = service.list_tables(&cid, Some(db.clone())).await;
-            let _ = tx.send(BgEvent::TablesLoaded { conn_id: cid, database: Some(db), result });
+            let tables = service.list_tables(&cid, Some(db.clone())).await;
+            let _ = tx.send(BgEvent::TablesLoaded { conn_id: cid, database: Some(db), tables: tables.unwrap_or_default() });
         });
     }
 

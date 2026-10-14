@@ -1,18 +1,22 @@
 //! 表数据网格视图 + 标签栏 + 连接弹窗 + eframe::App 实现。
 //! egui 即时模式惯例:绘制函数返回"动作",由 update 循环执行(避免 self 双重借用)。
 
+use crate::app::{BgEvent, ConnModal, QueryTab, ShujingApp, Tab, TabKind, TableTab};
 use crate::net;
+use crate::query;
 use crate::sidebar;
-use crate::app::{BgEvent, ConnModal, ShujingApp, TableTab};
+use crate::structure;
 use egui::RichText;
 use shujing_core::Service;
 
 /// 表格视图产生的用户动作
 pub enum TabAction {
-    Reload { key: String },
-    SetPage { key: String, page: usize },
-    ExportCsv { key: String },
-    SaveChanges { key: String },
+    Reload { tab_id: String },
+    SetPage { tab_id: String, page: usize },
+    ExportCsv { tab_id: String },
+    ExportSql { tab_id: String },
+    SaveChanges { tab_id: String },
+    RunQuery { tab_id: String },
 }
 
 /// 连接弹窗产生的动作
@@ -36,29 +40,43 @@ fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 let n = app.tabs.len();
                 for i in 0..n {
                     let t = &app.tabs[i];
+                    let icon = match &t.kind {
+                        TabKind::Table(_) => "\u{25a4}",
+                        TabKind::Structure(_) => "\u{2637}",
+                        TabKind::Query(_) => "\u{25b6}",
+                    };
+                    let active = i == app.active_tab;
                     let label = RichText::new(format!(
-                        "{}▤ {}",
-                        if i == app.active_tab { "● " } else { "" },
-                        t.table
+                        "{}{} {}",
+                        if active { "\u{25cf} " } else { "" },
+                        icon,
+                        t.title
                     ))
                     .size(12.0);
-                    if ui.selectable_label(i == app.active_tab, label).clicked() {
+                    if ui.selectable_label(active, label).clicked() {
                         app.active_tab = i;
+                    }
+                    if ui.small_button("×").clicked() {
+                        app.close_tab(i);
+                        break;
                     }
                 }
             });
         });
 }
 
-fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction> {
+fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut TableTab) -> Vec<TabAction> {
     let mut actions = Vec::new();
-    let key = tab.key();
+    let tab_id = tab_id.to_string();
 
     egui::TopBottomPanel::top("table_toolbar")
         .frame(egui::Frame::default().inner_margin(egui::Margin::symmetric(8, 6)))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&tab.table).strong().size(14.0));
+                if let Some(db) = &tab.database {
+                    ui.label(RichText::new(db).weak().size(11.0));
+                }
                 if tab.loading {
                     ui.spinner();
                 }
@@ -69,17 +87,20 @@ fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction> {
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("导出 SQL").clicked() {
+                        actions.push(TabAction::ExportSql { tab_id: tab_id.clone() });
+                    }
                     if ui.button("导出 CSV").clicked() {
-                        actions.push(TabAction::ExportCsv { key: key.clone() });
+                        actions.push(TabAction::ExportCsv { tab_id: tab_id.clone() });
                     }
                     if !tab.changes.is_empty() {
                         let n = tab.changes.len();
                         if ui.button(format!("保存修改 ({n})")).clicked() {
-                            actions.push(TabAction::SaveChanges { key: key.clone() });
+                            actions.push(TabAction::SaveChanges { tab_id: tab_id.clone() });
                         }
                     }
                     if ui.button("刷新").clicked() && !tab.loading {
-                        actions.push(TabAction::Reload { key: key.clone() });
+                        actions.push(TabAction::Reload { tab_id: tab_id.clone() });
                     }
                 });
             });
@@ -135,7 +156,7 @@ fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction> {
                                     _ => Some((c.clone(), true)),
                                 };
                                 tab.page = 1;
-                                actions.push(TabAction::Reload { key: key.clone() });
+                                actions.push(TabAction::Reload { tab_id: tab_id.clone() });
                             }
                             ui.end_row();
                         }
@@ -180,13 +201,13 @@ fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction> {
                                     if v.is_none() {
                                         label = label.weak();
                                     }
-                                    // 未保存修改的格:文字高亮(琥珀色加粗)
                                     if changed {
                                         label = label
                                             .color(egui::Color32::from_rgb(190, 220, 140))
                                             .strong();
                                     }
-                                    let resp = ui.add(egui::Label::new(label).sense(egui::Sense::click()));
+                                    let resp =
+                                        ui.add(egui::Label::new(label).sense(egui::Sense::click()));
                                     if resp.double_clicked() && !pk_cols.is_empty() {
                                         start_edit = Some((ri, ci));
                                         *draft = v.as_deref().unwrap_or("").to_string();
@@ -217,65 +238,55 @@ fn draw_table_view(ctx: &egui::Context, tab: &mut TableTab) -> Vec<TabAction> {
 
         actions
     });
-    let mut actions = inner.inner;
-
-    // 分页器(底部)
-    egui::TopBottomPanel::bottom("table_pager")
-        .frame(egui::Frame::default().inner_margin(egui::Margin::symmetric(8, 6)))
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let total = tab.total.unwrap_or(0);
-                let total_pages =
-                    (total + tab.page_size as u64 - 1) / tab.page_size.max(1) as u64;
-                if ui
-                    .add_enabled(tab.page > 1 && !tab.loading, egui::Button::new("‹ 上一页"))
-                    .clicked()
-                {
-                    actions.push(TabAction::SetPage { key: key.clone(), page: tab.page - 1 });
-                }
-                ui.label(
-                    RichText::new(format!(
-                        "第 {} 页 / {} · 共 {total} 行",
-                        tab.page, total_pages
-                    ))
-                    .size(11.0),
-                );
-                if ui
-                    .add_enabled(
-                        total_pages > 0 && (tab.page as u64) < total_pages && !tab.loading,
-                        egui::Button::new("下一页 ›"),
-                    )
-                    .clicked()
-                {
-                    actions.push(TabAction::SetPage { key: key.clone(), page: tab.page + 1 });
-                }
-            });
-        });
-
-    actions
+    inner.inner
 }
 
 fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
     match action {
-        TabAction::Reload { key } => app.load_rows(&key),
-        TabAction::SetPage { key, page } => {
-            if let Some(t) = app.tabs.iter_mut().find(|t| t.key() == key) {
+        TabAction::Reload { tab_id } => app.load_rows(&tab_id),
+        TabAction::SetPage { tab_id, page } => {
+            if let Some(t) = app.table_tab_mut(&tab_id) {
                 t.page = page;
             }
-            app.load_rows(&key);
+            app.load_rows(&tab_id);
         }
-        TabAction::ExportCsv { key } => {
-            if let Some(t) = app.tabs.iter().find(|t| t.key() == key) {
+        TabAction::ExportCsv { tab_id } => {
+            if let Some(t) = app.table_tab(&tab_id) {
                 match export_csv_to_file(t) {
                     Ok(path) => app.toast_error(format!("已导出到 {path}")),
                     Err(e) => app.toast_error(e),
                 }
             }
         }
-        TabAction::SaveChanges { key } => {
-            let Some(t) = app.tabs.iter().find(|t| t.key() == key) else { return };
+        TabAction::ExportSql { tab_id } => {
+            let Some(t) = app.table_tab(&tab_id) else { return };
+            let default_name = format!("{}_schema.sql", t.table);
+            let Some(path) = rfd::FileDialog::new()
+                .set_file_name(&default_name)
+                .add_filter("SQL", &["sql"])
+                .save_file()
+            else {
+                return;
+            };
+            let conn_id = t.conn_id.clone();
+            let table = t.table.clone();
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            net::spawn(async move {
+                let result = service
+                    .export_table_sql(&conn_id, &table, true)
+                    .await
+                    .and_then(|(sql, _rows)| {
+                        std::fs::write(&path, sql).map_err(|e| format!("写入失败: {e}"))
+                    })
+                    .map(|_| path.display().to_string());
+                let _ = tx.send(BgEvent::ExportDone { result });
+            });
+        }
+        TabAction::SaveChanges { tab_id } => {
+            let Some(t) = app.table_tab(&tab_id) else { return };
             if t.pk_cols.is_empty() {
-                app.toast_error(String::from("该表没有主键,无法回写"));
+                app.toast_error("该表没有主键,无法回写".to_string());
                 return;
             }
             let pk_idxs: Vec<usize> = t
@@ -284,7 +295,7 @@ fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
                 .filter_map(|p| t.columns.iter().position(|c| c == p))
                 .collect();
             if pk_idxs.len() != t.pk_cols.len() {
-                app.toast_error(String::from("主键列不在结果集中,无法回写"));
+                app.toast_error("主键列不在结果集中,无法回写".to_string());
                 return;
             }
             let mut updates = Vec::new();
@@ -303,7 +314,7 @@ fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
                 });
             }
             if updates.is_empty() {
-                app.toast_error(String::from("没有可保存的修改"));
+                app.toast_error("没有可保存的修改".to_string());
                 return;
             }
             let conn_id = t.conn_id.clone();
@@ -315,11 +326,12 @@ fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
                     .apply_changes(&conn_id, &table, &updates, &[], &[])
                     .await;
                 let _ = tx.send(BgEvent::ChangesSaved {
-                    key,
+                    tab_id: tab_id.clone(),
                     result: result.map(|r| r.affected),
                 });
             });
         }
+        TabAction::RunQuery { tab_id } => app.run_query(&tab_id),
     }
 }
 
@@ -471,25 +483,17 @@ impl eframe::App for ShujingApp {
                 });
                 return;
             }
-            if !self.tabs[self.active_tab].columns.is_empty() {
-                let actions = {
-                    let tab = &mut self.tabs[self.active_tab];
-                    draw_table_view(ctx, tab)
-                };
-                for a in actions {
-                    execute_tab_action(self, a);
+            let tab_id = self.tabs[self.active_tab].id.clone();
+            let actions = match &mut self.tabs[self.active_tab].kind {
+                TabKind::Table(t) => draw_table_view(ctx, &tab_id, t),
+                TabKind::Structure(s) => structure::draw_structure_view(ctx, s),
+                TabKind::Query(q) => {
+                    let conns = self.conns.clone();
+                    query::draw_query_view(&conns, ctx, q)
                 }
-            } else {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let t = &self.tabs[self.active_tab];
-                    ui.label(RichText::new(
-                        t.error.clone().unwrap_or_else(|| "加载中…".into()),
-                    ));
-                    if ui.button("重试").clicked() {
-                        let key = t.key();
-                        self.load_rows(&key);
-                    }
-                });
+            };
+            for a in actions {
+                execute_tab_action(self, a);
             }
         });
 
