@@ -39,6 +39,14 @@ pub struct TableTab {
     pub changes: Vec<(usize, String, Option<String>)>,
     pub editing: Option<(usize, usize)>,
     pub draft: String,
+    /// 当前选中单元格(点击/复制目标)
+    pub selected: Option<(usize, usize)>,
+    /// 筛选输入框内容
+    pub filter: String,
+    /// 已应用的筛选(全列 LIKE)
+    pub active_filter: Option<String>,
+    /// 最近一次查询耗时
+    pub last_elapsed_ms: Option<u64>,
 }
 
 impl TableTab {
@@ -60,6 +68,10 @@ impl TableTab {
             changes: vec![],
             editing: None,
             draft: String::new(),
+            selected: None,
+            filter: String::new(),
+            active_filter: None,
+            last_elapsed_ms: None,
         }
     }
 }
@@ -370,15 +382,23 @@ impl ShujingApp {
         let tab_id = tab_id.to_string();
         let tx = self.event_tx.clone();
         let service = self.service.clone();
+        let mysql = mysql_quote(&self.conns, &tab_id);
         let Some(tab) = self.table_tab_mut(&tab_id) else { return };
         let conn_id = tab.conn_id.clone();
         let database = tab.database.clone();
         let table = tab.table.clone();
         let (limit, offset) = (tab.page_size, (tab.page - 1) * tab.page_size);
+        let cols_snapshot = tab.columns.clone();
         let order = tab
             .sort
             .as_ref()
-            .map(|(c, asc)| format!("{} {}", c, if *asc { "ASC" } else { "DESC" }));
+            .map(|(c, asc)| {
+                format!("{} {}", quote_ident_by(c, mysql), if *asc { "ASC" } else { "DESC" })
+            });
+        let where_clause = tab
+            .active_filter
+            .as_ref()
+            .map(|q| build_like_filter(&cols_snapshot, q, mysql));
         tab.loading = true;
         tab.changes.clear();
         tab.editing = None;
@@ -408,13 +428,17 @@ impl ShujingApp {
         }
         net::spawn(async move {
             let full = match &database {
-                Some(db) => format!("{}.{}", quote_ident(db, true), quote_ident(&table, true)),
-                None => quote_ident(&table, true),
+                Some(db) => format!("{}.{}", quote_ident_by(db, mysql), quote_ident_by(&table, mysql)),
+                None => quote_ident_by(&table, mysql),
             };
-            let sql = match &order {
-                Some(o) => format!("SELECT * FROM {full} ORDER BY {o} LIMIT {limit} OFFSET {offset}"),
-                None => format!("SELECT * FROM {full} LIMIT {limit} OFFSET {offset}"),
-            };
+            let mut sql = format!("SELECT * FROM {full}");
+            if let Some(w) = &where_clause {
+                sql.push_str(&format!(" WHERE {w}"));
+            }
+            if let Some(o) = &order {
+                sql.push_str(&format!(" ORDER BY {o}"));
+            }
+            sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
             let result = service.run_sql(&conn_id, sql, Some(limit)).await;
             let result = result.map(|mut rs| rs.pop().unwrap_or_default());
             let _ = tx.send(BgEvent::RowsLoaded { tab_id: tab_id.clone(), result });
@@ -566,10 +590,14 @@ impl ShujingApp {
                         t.loading = false;
                         match result {
                             Ok(r) => {
+                                t.last_elapsed_ms = Some(r.elapsed_ms);
                                 t.columns = r.columns;
                                 t.rows = r.rows;
                             }
-                            Err(e) => t.error = Some(e),
+                            Err(e) => {
+                                t.last_elapsed_ms = None;
+                                t.error = Some(e);
+                            }
                         }
                     }
                 }
@@ -647,7 +675,27 @@ impl ShujingApp {
     }
 }
 
-pub fn quote_ident(name: &str, mysql: bool) -> String {
+/// 该连接是否用 MySQL 反引号引注标识符(SQLite 接受反引号,Postgres 必须双引号)
+fn mysql_quote(conns: &[ConnInfo], conn_id: &str) -> bool {
+    conns
+        .iter()
+        .find(|c| c.id == conn_id)
+        .map(|c| c.db_type == shujing_core::DbType::MySql)
+        .unwrap_or(true)
+}
+
+/// 全列 LIKE 筛选:列名按方言引注,值转义单引号
+pub fn build_like_filter(columns: &[String], query: &str, mysql: bool) -> String {
+    let escaped = query.replace('\'', "''");
+    let pattern = format!("'%{escaped}%'");
+    columns
+        .iter()
+        .map(|c| format!("{} LIKE {}", quote_ident_by(c, mysql), pattern))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+
+pub fn quote_ident_by(name: &str, mysql: bool) -> String {
     let q = if mysql { '`' } else { '"' };
     format!(
         "{q}{}{q}",
@@ -659,4 +707,21 @@ fn rand_suffix() -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static N: AtomicUsize = AtomicUsize::new(1);
     N.fetch_add(1, Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn like_filter_escapes_and_quotes() {
+        let cols = vec!["id".to_string(), "na`me".to_string()];
+        // 值里的单引号翻倍;列名里的方言引号翻倍
+        let mysql = build_like_filter(&cols, "o'brien", true);
+        assert!(mysql.contains("`id` LIKE '%o''brien%'"), "{mysql}");
+        assert!(mysql.contains("`na``me` LIKE '%o''brien%'"), "{mysql}");
+        let pg_cols = vec!["na\"me".to_string()];
+        let pg = build_like_filter(&pg_cols, "x", false);
+        assert!(pg.contains("\"na\"\"me\" LIKE '%x%'"), "{pg}");
+    }
 }

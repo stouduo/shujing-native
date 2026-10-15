@@ -175,6 +175,37 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 if let Some(err) = &tab.error {
                     ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(theme::RED));
                 }
+                ui.add_space(6.0);
+                // 筛选:回车应用(全列 LIKE),⌫ 清除
+                let filter_w = 180.0;
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut tab.filter)
+                        .id(egui::Id::new("table-filter"))
+                        .hint_text(RichText::new("筛选行… (⌘F)").color(theme::MUTED))
+                        .desired_width(filter_w)
+                        .font(egui::TextStyle::Body),
+                );
+                if resp.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
+                    tab.active_filter = (!tab.filter.trim().is_empty()).then(|| tab.filter.trim().to_string());
+                    tab.page = 1;
+                    actions.push(TabAction::Reload { tab_id: tab_id.clone() });
+                }
+                if tab.active_filter.is_some() {
+                    if ui
+                        .button(RichText::new("✕").color(theme::MUTED))
+                        .on_hover_text("清除筛选")
+                        .clicked()
+                    {
+                        tab.filter.clear();
+                        tab.active_filter = None;
+                        tab.page = 1;
+                        actions.push(TabAction::Reload { tab_id: tab_id.clone() });
+                    }
+                } else if !tab.filter.is_empty() {
+                    ui.label(RichText::new("回车筛选").size(12.0).color(theme::MUTED));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("导出 SQL").clicked() {
                         actions.push(TabAction::ExportSql { tab_id: tab_id.clone() });
@@ -219,6 +250,16 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     None => "行数未知".to_string(),
                 };
                 ui.label(RichText::new(total_text).size(12.0).color(theme::MUTED));
+                if tab.active_filter.is_some() {
+                    ui.label(
+                        RichText::new(format!("· 已筛选「{}」", icons::clip(tab.active_filter.as_deref().unwrap_or(""), 20)))
+                            .size(12.0)
+                            .color(theme::ACCENT),
+                    );
+                }
+                if let Some(ms) = tab.last_elapsed_ms {
+                    ui.label(RichText::new(format!("· {ms} ms")).size(12.0).color(theme::MUTED));
+                }
                 if !tab.changes.is_empty() {
                     ui.label(
                         RichText::new(format!("· {} 处未保存", tab.changes.len()))
@@ -294,19 +335,24 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
             sort,
             page,
             page_size,
+            selected,
             ..
         } = tab;
 
         let mut sort_click: Option<String> = None;
         let mut commit: Option<(usize, usize, String)> = None;
+        let mut new_selection: Option<Option<(usize, usize)>> = None;
+        let mut copy_text: Option<String> = None;
         {
             let sc = &mut sort_click;
             let cr = &mut commit;
             let srt = &*sort;
 
+            let pointer = ui.input(|i| i.pointer.latest_pos());
             let mut tb = egui_extras::TableBuilder::new(ui)
                 .id_salt("data-table")
                 .striped(true)
+                .sense(egui::Sense::click())
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .vscroll(true)
                 .column(Column::exact(52.0));
@@ -364,18 +410,29 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 }
             })
             .body(|mut body| {
+                // 行悬停:由行号列的 y 波段判定,整行单元格共享
+                let mut row_band: Option<(f32, f32)> = None;
                 for (ri, rowdata) in rows.iter().enumerate() {
                     let is_editing_row = matches!(*editing, Some((er, _)) if er == ri);
                     let h = if is_editing_row { 32.0 } else { 26.0 };
                     let row_no = (*page - 1) * *page_size + ri + 1;
                     body.row(h, |mut row| {
                         row.col(|ui| {
+                            let band = row_band.get_or_insert((ui.max_rect().top(), ui.max_rect().bottom()));
+                            band.0 = band.0.min(ui.max_rect().top());
+                            band.1 = band.1.max(ui.max_rect().bottom());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.label(
-                                    RichText::new(format!("{row_no}")).size(12.0).color(theme::MUTED),
+                                    RichText::new(format!("{row_no}"))
+                                        .size(12.0)
+                                        .color(theme::MUTED),
                                 );
                             });
                         });
+                        let hover_row = row_band
+                            .zip(pointer)
+                            .map(|((top, bot), p)| p.y >= top && p.y < bot)
+                            .unwrap_or(false);
                         for (ci, col_name) in columns.iter().enumerate() {
                             let cell_editing =
                                 matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
@@ -401,6 +458,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                                 });
                             } else {
                                 let v = &rowdata[ci];
+                                let is_sel = matches!(*selected, Some((sr, sc)) if sr == ri && sc == ci);
                                 row.col(|ui| {
                                     draw_data_cell(
                                         ui,
@@ -409,8 +467,15 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                                         !pk_cols.is_empty(),
                                         ri,
                                         ci,
+                                        is_sel,
+                                        hover_row,
                                         editing,
                                         draft,
+                                        selected,
+                                        &mut new_selection,
+                                        &mut copy_text,
+                                        columns,
+                                        rowdata,
                                     );
                                 });
                             }
@@ -418,6 +483,25 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     });
                 }
             });
+        }
+
+        // 单击选中 / ⌘C 复制选中格
+        if let Some(sel) = new_selection {
+            *selected = sel;
+        }
+        if copy_text.is_none() {
+            if let Some((sr, sc)) = *selected {
+                if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) {
+                    if let Some(r) = rows.get(sr) {
+                        if let Some(v) = r.get(sc) {
+                            copy_text = v.clone();
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(t) = copy_text {
+            ui.ctx().copy_text(t);
         }
 
         if let Some(c) = sort_click {
@@ -441,7 +525,8 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
     actions
 }
 
-/// 普通数据格:满格绘制,双击进入编辑(有主键时)
+/// 普通数据格:满格绘制;单击选中,双击编辑(有主键),右键菜单
+#[allow(clippy::too_many_arguments)]
 fn draw_data_cell(
     ui: &mut egui::Ui,
     v: &Option<String>,
@@ -449,8 +534,15 @@ fn draw_data_cell(
     has_pk: bool,
     ri: usize,
     ci: usize,
+    is_sel: bool,
+    hover_row: bool,
     editing: &mut Option<(usize, usize)>,
     draft: &mut String,
+    selected: &mut Option<(usize, usize)>,
+    new_selection: &mut Option<Option<(usize, usize)>>,
+    copy_text: &mut Option<String>,
+    columns: &[String],
+    rowdata: &[Option<String>],
 ) {
     let text = icons::cell_text(v, 2000);
     let color = icons::cell_text_color(v, changed);
@@ -459,14 +551,56 @@ fn draw_data_cell(
     if changed {
         painter.rect_filled(rect.expand2(egui::vec2(1.0, 2.0)), 2, theme::CHANGE_BG);
     }
+    if is_sel {
+        painter.rect_filled(rect, 2, theme::CELL_SELECT);
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 2, theme::CELL_HOVER);
+    } else if hover_row {
+        painter.rect_filled(rect, 2, theme::ROW_HOVER);
+    }
     let galley = painter.layout_no_wrap(text, egui::FontId::monospace(12.0), color);
     let pos = egui::pos2(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0);
     painter.galley(pos, galley, color);
+
+    if resp.clicked() {
+        *new_selection = Some(Some((ri, ci)));
+    }
     if has_pk && resp.double_clicked() {
         *editing = Some((ri, ci));
         *draft = v.as_deref().unwrap_or("").to_string();
     }
+    resp.context_menu(|ui| {
+        *selected = Some((ri, ci));
+        if ui.button("复制单元格").clicked() {
+            *copy_text = v.clone();
+            ui.close_menu();
+        }
+        if ui.button("复制整行 (TSV)").clicked() {
+            let tsv: Vec<String> = rowdata
+                .iter()
+                .map(|c| c.as_deref().unwrap_or("NULL"))
+                .map(|s| s.replace('\t', " ").replace('\n', " "))
+                .collect();
+            *copy_text = Some(tsv.join("\t"));
+            ui.close_menu();
+        }
+        ui.separator();
+        if ui
+            .add_enabled(has_pk, egui::Button::new("编辑此格"))
+            .clicked()
+        {
+            *editing = Some((ri, ci));
+            *draft = v.as_deref().unwrap_or("").to_string();
+            ui.close_menu();
+        }
+        ui.label(
+            egui::RichText::new(format!("{} · 行 {}", columns.get(ci).map(|s| s.as_str()).unwrap_or("?"), ri + 1))
+                .size(12.0)
+                .color(theme::MUTED),
+        );
+    });
 }
+
 
 fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
     match action {
@@ -719,6 +853,26 @@ impl eframe::App for ShujingApp {
 
         if ui_input_new_query(ctx) {
             self.open_query_tab(None);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.command) && !self.tabs.is_empty()
+        {
+            self.close_tab(self.active_tab);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.command) && !self.tabs.is_empty()
+        {
+            let id = self.tabs[self.active_tab].id.clone();
+            let is_struct = matches!(self.tabs[self.active_tab].kind, TabKind::Structure(_));
+            let is_query = matches!(self.tabs[self.active_tab].kind, TabKind::Query(_));
+            if is_struct {
+                self.load_structure(&id);
+            } else if is_query {
+                self.run_query(&id);
+            } else {
+                self.load_rows(&id);
+            }
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command) {
+            ctx.memory_mut(|m| m.request_focus(egui::Id::new("table-filter")));
         }
 
         // 面板按占用顺序:侧栏 → 标签栏 → toast → 工具/分页/内容

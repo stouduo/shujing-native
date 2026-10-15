@@ -6,6 +6,7 @@ mod icons;
 mod net;
 mod query;
 mod sidebar;
+mod sql_highlight;
 mod structure;
 mod table_view;
 mod theme;

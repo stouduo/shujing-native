@@ -67,6 +67,10 @@ fn fake_table_tab() -> TableTab {
     tab.page_size = 100;
     tab.sort = Some(("created".into(), false));
     tab.changes.push((2, "role_name".into(), Some("已修改的名字".into())));
+    tab.selected = Some((1, 2));
+    tab.filter = "admin".into();
+    tab.active_filter = Some("admin".into());
+    tab.last_elapsed_ms = Some(37);
     tab
 }
 

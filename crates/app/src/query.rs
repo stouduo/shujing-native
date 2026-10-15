@@ -63,11 +63,17 @@ pub fn draw_query_view(
             (ui.available_height() * 0.32).clamp(110.0, 260.0)
         };
         ui.allocate_ui(egui::vec2(ui.available_width(), editor_h), |ui| {
+            let mut layouter = |ui: &egui::Ui, sql: &str, wrap_width: f32| {
+                let mut job = crate::sql_highlight::highlight(sql);
+                job.wrap.max_width = wrap_width;
+                ui.fonts(|f| f.layout_job(job))
+            };
             ui.add(
                 egui::TextEdit::multiline(&mut q.sql)
                     .code_editor()
                     .desired_width(f32::INFINITY)
-                    .desired_rows(6),
+                    .desired_rows(6)
+                    .layouter(&mut layouter),
             );
         });
 

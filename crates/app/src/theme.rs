@@ -19,6 +19,17 @@ pub const RED: Color32 = Color32::from_rgb(0xff, 0x6b, 0x70);
 pub const CHANGE_BG: Color32 = Color32::from_rgb(0x14, 0x2a, 0x20);
 pub const CHANGE_FG: Color32 = Color32::from_rgb(0xa7, 0xf3, 0xd0);
 
+/// 行悬停/格悬停/选中格(叠加在文字之上,低透明度保证可读)
+pub const ROW_HOVER: Color32 = Color32::from_rgba_premultiplied(8, 8, 8, 8);
+pub const CELL_HOVER: Color32 = Color32::from_rgba_premultiplied(16, 16, 16, 16);
+pub const CELL_SELECT: Color32 = Color32::from_rgba_premultiplied(31, 31, 57, 60);
+
+/// SQL 高亮配色
+pub const SQL_KEYWORD: Color32 = Color32::from_rgb(0x9d, 0x9f, 0xff);
+pub const SQL_STRING: Color32 = Color32::from_rgb(0x7e, 0xc8, 0xa6);
+pub const SQL_NUMBER: Color32 = Color32::from_rgb(0xe5, 0xc0, 0x7b);
+pub const SQL_COMMENT: Color32 = Color32::from_rgb(0x6b, 0x6d, 0x76);
+
 pub fn apply(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     let v = &mut style.visuals;
@@ -62,6 +73,7 @@ pub fn apply(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(8.0, 4.0);
     style.spacing.button_padding = egui::vec2(9.0, 3.0);
     style.spacing.menu_margin = egui::Margin::symmetric(6, 4);
+    style.spacing.scroll = egui::style::ScrollStyle::thin();
 
     style.text_styles = [
         (TextStyle::Heading, FontId::proportional(15.0)),
