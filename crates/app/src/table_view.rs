@@ -1,12 +1,13 @@
 //! 表数据网格视图 + 标签栏 + 连接弹窗 + eframe::App 实现。
 //! egui 即时模式惯例:绘制函数返回"动作",由 update 循环执行(避免 self 双重借用)。
 
-use crate::app::{BgEvent, ConnModal, QueryTab, ShujingApp, Tab, TabKind, TableTab};
+use crate::app::{BgEvent, ConnModal, ShujingApp, TabKind, TableTab};
 use crate::net;
 use crate::query;
-use crate::sidebar;
 use crate::structure;
+use crate::{icons, theme};
 use egui::RichText;
+use egui_extras::Column;
 use shujing_core::Service;
 
 /// 表格视图产生的用户动作
@@ -26,65 +27,153 @@ pub enum ConnAction {
     Cancel,
 }
 
-fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
+// ---------------------------------------------------------------- 标签栏
+
+pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
+    let mut activate: Option<usize> = None;
+    let mut close: Option<usize> = None;
+    let mut new_query = false;
+
     egui::TopBottomPanel::top("tabbar")
-        .frame(egui::Frame::default().inner_margin(egui::Margin {
-            left: 8,
-            right: 8,
-            top: 4,
-            bottom: 0,
-        }))
+        .frame(
+            egui::Frame::new()
+                .fill(theme::BG)
+                .inner_margin(egui::Margin { left: 8, right: 8, top: 3, bottom: 0 }),
+        )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let n = app.tabs.len();
-                for i in 0..n {
-                    let t = &app.tabs[i];
-                    let icon = match &t.kind {
-                        TabKind::Table(_) => "\u{25a4}",
-                        TabKind::Structure(_) => "\u{2637}",
-                        TabKind::Query(_) => "\u{25b6}",
-                    };
-                    let active = i == app.active_tab;
-                    let label = RichText::new(format!(
-                        "{}{} {}",
-                        if active { "\u{25cf} " } else { "" },
-                        icon,
-                        t.title
-                    ))
-                    .size(12.0);
-                    if ui.selectable_label(active, label).clicked() {
-                        app.active_tab = i;
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for i in 0..app.tabs.len() {
+                    let title = app.tabs[i].title.clone();
+                    let (a, c) = draw_one_tab(ui, i == app.active_tab, &title);
+                    if a {
+                        activate = Some(i);
                     }
-                    if ui.small_button("×").clicked() {
-                        app.close_tab(i);
-                        break;
+                    if c {
+                        close = Some(i);
+                    }
+                }
+                if app.tabs.len() < 12 {
+                    ui.add_space(6.0);
+                    if ui
+                        .button(RichText::new("＋").size(13.0))
+                        .on_hover_text("新建查询标签 (⌘T)")
+                        .clicked()
+                    {
+                        new_query = true;
                     }
                 }
             });
+            let r = ui.max_rect();
+            ui.painter().line_segment(
+                [egui::pos2(r.left(), r.bottom()), egui::pos2(r.right(), r.bottom())],
+                egui::Stroke::new(1.0, theme::BORDER),
+            );
         });
+
+    if let Some(i) = close {
+        app.close_tab(i);
+    }
+    if let Some(i) = activate {
+        app.active_tab = i;
+    }
+    if new_query {
+        app.open_query_tab(None);
+    }
 }
 
-fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut TableTab) -> Vec<TabAction> {
+/// 自绘单个标签:激活态浅底+底部强调线,悬停显关闭钮;返回 (激活, 关闭)
+fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str) -> (bool, bool) {
+    let h = 30.0;
+    let font = egui::FontId::proportional(12.5);
+    let measure = ui.painter().layout_no_wrap(title.to_string(), font.clone(), theme::TEXT2);
+    let w = (measure.size().x + 48.0).clamp(96.0, 230.0);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+    let mut activated = resp.clicked();
+    let mut closed = resp.middle_clicked();
+
+    let fill = if active {
+        theme::PANEL
+    } else if resp.hovered() {
+        theme::HOVER
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let p = ui.painter().clone();
+    p.rect_filled(
+        rect,
+        egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+        fill,
+    );
+    if active {
+        p.rect_filled(
+            egui::Rect::from_min_size(
+                rect.left_bottom() + egui::vec2(8.0, 0.0),
+                egui::vec2(w - 16.0, 2.0),
+            ),
+            0,
+            theme::ACCENT,
+        );
+    }
+    let tcol = if active { theme::TEXT } else { theme::TEXT2 };
+    let galley = p.layout_no_wrap(title.to_string(), font, tcol);
+    let tpos = egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0);
+    p.galley(tpos, galley, tcol);
+
+    let crect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 14.0, rect.center().y),
+        egui::vec2(16.0, 16.0),
+    );
+    let cresp = ui.allocate_rect(crect, egui::Sense::click());
+    if cresp.clicked() {
+        closed = true;
+        activated = false;
+    }
+    let xcol = if cresp.hovered() {
+        theme::TEXT
+    } else if resp.hovered() || active {
+        theme::TEXT2
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    if xcol != egui::Color32::TRANSPARENT {
+        let c = crect.center();
+        let d = 3.0;
+        let st = egui::Stroke::new(1.3, xcol);
+        p.line_segment([egui::pos2(c.x - d, c.y - d), egui::pos2(c.x + d, c.y + d)], st);
+        p.line_segment([egui::pos2(c.x - d, c.y + d), egui::pos2(c.x + d, c.y - d)], st);
+    }
+    (activated, closed)
+}
+
+// ---------------------------------------------------------------- 表数据视图
+
+pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut TableTab) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let tab_id = tab_id.to_string();
 
+    // 工具栏
     egui::TopBottomPanel::top("table_toolbar")
-        .frame(egui::Frame::default().inner_margin(egui::Margin::symmetric(8, 6)))
+        .frame(
+            egui::Frame::new()
+                .fill(theme::PANEL)
+                .inner_margin(egui::Margin::symmetric(10, 7)),
+        )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&tab.table).strong().size(14.0));
                 if let Some(db) = &tab.database {
-                    ui.label(RichText::new(db).weak().size(11.0));
+                    ui.label(RichText::new(db).size(11.0).color(theme::MUTED));
                 }
                 if tab.loading {
                     ui.spinner();
                 }
+                if !tab.pk_cols.is_empty() || tab.pk_loaded {
+                    let hint = if tab.pk_cols.is_empty() { "无主键 · 只读" } else { "双击单元格编辑" };
+                    ui.label(RichText::new(hint).size(10.5).color(theme::MUTED));
+                }
                 if let Some(err) = &tab.error {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(255, 120, 120),
-                        RichText::new(err).size(11.0),
-                    );
+                    ui.label(RichText::new(icons::clip(err, 120)).size(11.0).color(theme::RED));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("导出 SQL").clicked() {
@@ -95,7 +184,17 @@ fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut TableTab) -> Vec
                     }
                     if !tab.changes.is_empty() {
                         let n = tab.changes.len();
-                        if ui.button(format!("保存修改 ({n})")).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(format!("保存修改 ({n})"))
+                                        .color(theme::BG)
+                                        .strong(),
+                                )
+                                .fill(theme::GREEN),
+                            )
+                            .clicked()
+                        {
                             actions.push(TabAction::SaveChanges { tab_id: tab_id.clone() });
                         }
                     }
@@ -106,14 +205,85 @@ fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut TableTab) -> Vec
             });
         });
 
-    let inner = egui::CentralPanel::default().show(ctx, |ui| {
+    // 底部分页条
+    egui::TopBottomPanel::bottom("table_pager")
+        .frame(
+            egui::Frame::new()
+                .fill(theme::BG)
+                .inner_margin(egui::Margin::symmetric(10, 6)),
+        )
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let total_text = match tab.total {
+                    Some(t) => format!("共 {t} 行"),
+                    None => "行数未知".to_string(),
+                };
+                ui.label(RichText::new(total_text).size(11.5).color(theme::MUTED));
+                if !tab.changes.is_empty() {
+                    ui.label(
+                        RichText::new(format!("· {} 处未保存", tab.changes.len()))
+                            .size(11.5)
+                            .color(theme::GREEN),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut ps = tab.page_size;
+                    egui::ComboBox::from_id_salt("page-size")
+                        .selected_text(format!("{ps} 行/页"))
+                        .width(88.0)
+                        .show_ui(ui, |ui| {
+                            for v in [50usize, 100, 200, 500] {
+                                ui.selectable_value(&mut ps, v, format!("{v} 行/页"));
+                            }
+                        });
+                    if ps != tab.page_size {
+                        tab.page_size = ps;
+                        actions.push(TabAction::SetPage { tab_id: tab_id.clone(), page: 1 });
+                    }
+                    let total_pages =
+                        tab.total.map(|t| t.div_ceil(tab.page_size as u64) as usize);
+                    let at_first = tab.page <= 1;
+                    let at_last = match total_pages {
+                        Some(n) => tab.page >= n,
+                        None => tab.rows.len() < tab.page_size,
+                    };
+                    if ui
+                        .add_enabled(!at_last && !tab.loading, egui::Button::new("下一页 ›"))
+                        .clicked()
+                    {
+                        actions.push(TabAction::SetPage { tab_id: tab_id.clone(), page: tab.page + 1 });
+                    }
+                    ui.label(
+                        RichText::new(match total_pages {
+                            Some(n) => format!("第 {} / {n} 页", tab.page),
+                            None => format!("第 {} 页", tab.page),
+                        })
+                        .size(11.5),
+                    );
+                    if ui
+                        .add_enabled(!at_first && !tab.loading, egui::Button::new("‹ 上一页"))
+                        .clicked()
+                    {
+                        actions.push(TabAction::SetPage { tab_id: tab_id.clone(), page: tab.page - 1 });
+                    }
+                });
+            });
+        });
+
+    // 主内容
+    egui::CentralPanel::default().show(ctx, |ui| {
         if tab.columns.is_empty() {
             ui.centered_and_justified(|ui| {
-                ui.label(if tab.loading { "加载中…" } else { "无数据" });
+                let msg = if tab.loading {
+                    "加载中…".to_string()
+                } else {
+                    tab.error.clone().unwrap_or_else(|| "无数据".into())
+                };
+                ui.label(RichText::new(msg).color(theme::MUTED));
             });
-            return Vec::new();
+            return;
         }
-        // 字段解构:rows 与编辑状态的分离借用
+
         let TableTab {
             rows,
             columns,
@@ -122,128 +292,195 @@ fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut TableTab) -> Vec
             changes,
             pk_cols,
             sort,
+            page,
+            page_size,
             ..
         } = tab;
 
-        let mut start_edit: Option<(usize, usize)> = None;
+        let mut sort_click: Option<String> = None;
         let mut commit: Option<(usize, usize, String)> = None;
-        let mut cancel = false;
+        {
+            let sc = &mut sort_click;
+            let cr = &mut commit;
+            let srt = &*sort;
 
-        egui::ScrollArea::vertical()
-            .id_salt("data-scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                egui::Grid::new("data-grid")
-                    .striped(true)
-                    .num_columns(columns.len() + 1)
-                    .show(ui, |ui| {
-                        ui.label(RichText::new("#").size(12.0).weak());
-                        for c in columns.iter() {
-                            let label = match &*sort {
-                                Some((sc, asc)) if sc == c => {
-                                    format!("{c} {}", if *asc { "▲" } else { "▼" })
-                                }
-                                _ => c.clone(),
-                            };
-                            if ui
-                                .button(RichText::new(label).strong().size(12.0))
-                                .clicked()
-                            {
-                                // 排序循环:无 → 升 → 降 → 无
-                                *sort = match &*sort {
-                                    Some((sc, true)) if sc == c => Some((c.clone(), false)),
-                                    Some((sc, false)) if sc == c => None,
-                                    _ => Some((c.clone(), true)),
-                                };
-                                tab.page = 1;
-                                actions.push(TabAction::Reload { tab_id: tab_id.clone() });
-                            }
-                            ui.end_row();
+            let mut tb = egui_extras::TableBuilder::new(ui)
+                .id_salt("data-table")
+                .striped(true)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .vscroll(true)
+                .column(Column::exact(52.0));
+            for (i, _c) in columns.iter().enumerate() {
+                tb = tb.column(if i + 1 == columns.len() {
+                    Column::remainder().clip(true)
+                } else {
+                    Column::initial(170.0)
+                        .resizable(true)
+                        .clip(true)
+                        .at_least(56.0)
+                });
+            }
+            tb.header(28.0, |mut header| {
+                header.col(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new("#").size(11.5).color(theme::MUTED));
+                    });
+                });
+                for c in columns.iter() {
+                    let active_sort =
+                        srt.as_ref().and_then(|(scn, asc)| (*scn == *c).then_some(*asc));
+                    let mut label_text = c.clone();
+                    if active_sort.is_some() {
+                        label_text.push_str("   ");
+                    }
+                    header.col(|ui| {
+                        let resp = ui.selectable_label(
+                            active_sort.is_some(),
+                            RichText::new(&label_text).size(12.5).strong(),
+                        );
+                        if resp.clicked() {
+                            *sc = Some(c.clone());
                         }
-                        for (ri, row) in rows.iter().enumerate() {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{}",
-                                    (tab.page - 1) * tab.page_size + ri + 1
-                                ))
-                                .size(11.0)
-                                .weak(),
-                            );
-                            for (ci, v) in row.iter().enumerate() {
-                                let col_name = &columns[ci];
-                                let editing_here = editing.as_ref() == Some(&(ri, ci));
-                                let changed =
-                                    changes.iter().any(|(r, cn, _)| *r == ri && cn == col_name);
-                                if editing_here {
-                                    let resp = ui.add(
-                                        egui::TextEdit::singleline(draft)
-                                            .desired_width(160.0)
-                                            .font(egui::TextStyle::Monospace),
-                                    );
-                                    resp.request_focus();
-                                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                        cancel = true;
-                                    } else if resp.lost_focus() {
-                                        commit = Some((ri, ci, draft.clone()));
-                                    }
-                                } else {
-                                    let text = v
-                                        .as_deref()
-                                        .map(|s| {
-                                            if s.len() > 200 {
-                                                format!("{}…", &s[..200])
-                                            } else {
-                                                s.to_string()
-                                            }
-                                        })
-                                        .unwrap_or_else(|| "NULL".into());
-                                    let mut label = RichText::new(text).monospace();
-                                    if v.is_none() {
-                                        label = label.weak();
-                                    }
-                                    if changed {
-                                        label = label
-                                            .color(egui::Color32::from_rgb(190, 220, 140))
-                                            .strong();
-                                    }
-                                    let resp =
-                                        ui.add(egui::Label::new(label).sense(egui::Sense::click()));
-                                    if resp.double_clicked() && !pk_cols.is_empty() {
-                                        start_edit = Some((ri, ci));
-                                        *draft = v.as_deref().unwrap_or("").to_string();
-                                    }
-                                }
-                                ui.end_row();
-                            }
-                            ui.end_row();
+                        if let Some(asc) = active_sort {
+                            let p = ui.painter();
+                            let c0 = resp.rect.right_center() - egui::vec2(9.0, 0.0);
+                            let s = 3.2;
+                            let pts = if asc {
+                                vec![
+                                    egui::pos2(c0.x - s, c0.y + s / 2.0),
+                                    egui::pos2(c0.x + s, c0.y + s / 2.0),
+                                    egui::pos2(c0.x, c0.y - s),
+                                ]
+                            } else {
+                                vec![
+                                    egui::pos2(c0.x - s, c0.y - s / 2.0),
+                                    egui::pos2(c0.x + s, c0.y - s / 2.0),
+                                    egui::pos2(c0.x, c0.y + s),
+                                ]
+                            };
+                            p.add(egui::Shape::convex_polygon(pts, theme::ACCENT, egui::Stroke::NONE));
                         }
                     });
+                }
+            })
+            .body(|mut body| {
+                for (ri, rowdata) in rows.iter().enumerate() {
+                    let is_editing_row = matches!(*editing, Some((er, _)) if er == ri);
+                    let h = if is_editing_row { 32.0 } else { 26.0 };
+                    let row_no = (*page - 1) * *page_size + ri + 1;
+                    body.row(h, |mut row| {
+                        row.col(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(
+                                    RichText::new(format!("{row_no}")).size(11.0).color(theme::MUTED),
+                                );
+                            });
+                        });
+                        for (ci, col_name) in columns.iter().enumerate() {
+                            let cell_editing =
+                                matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
+                            let changed = changes
+                                .iter()
+                                .any(|(r, cn, _)| *r == ri && cn == col_name);
+                            if cell_editing {
+                                row.col(|ui| {
+                                    let resp = ui.add(
+                                        egui::TextEdit::singleline(draft)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(ui.available_width().max(120.0)),
+                                    );
+                                    resp.request_focus();
+                                    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                    if esc {
+                                        *editing = None;
+                                    } else if resp.lost_focus() || enter {
+                                        *cr = Some((ri, ci, draft.clone()));
+                                        *editing = None;
+                                    }
+                                });
+                            } else {
+                                let v = &rowdata[ci];
+                                row.col(|ui| {
+                                    draw_data_cell(
+                                        ui,
+                                        v,
+                                        changed,
+                                        !pk_cols.is_empty(),
+                                        ri,
+                                        ci,
+                                        editing,
+                                        draft,
+                                    );
+                                });
+                            }
+                        }
+                    });
+                }
             });
+        }
 
-        if cancel {
-            *editing = None;
+        if let Some(c) = sort_click {
+            *sort = match &*sort {
+                Some((sc, true)) if sc == &c => Some((c.clone(), false)),
+                Some((sc, false)) if sc == &c => None,
+                _ => Some((c, true)),
+            };
+            *page = 1;
+            actions.push(TabAction::Reload { tab_id });
         }
         if let Some((ri, ci, val)) = commit {
             let col_name = columns[ci].clone();
             let new_val = (!val.is_empty()).then_some(val);
             rows[ri][ci] = new_val.clone();
-            *editing = None;
             changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
             changes.push((ri, col_name, new_val));
         }
-        if let Some((ri, ci)) = start_edit {
-            *editing = Some((ri, ci));
-            *draft = rows[ri][ci].as_deref().unwrap_or("").to_string();
-        }
-
-        actions
     });
-    inner.inner
+
+    actions
+}
+
+/// 普通数据格:满格绘制,双击进入编辑(有主键时)
+fn draw_data_cell(
+    ui: &mut egui::Ui,
+    v: &Option<String>,
+    changed: bool,
+    has_pk: bool,
+    ri: usize,
+    ci: usize,
+    editing: &mut Option<(usize, usize)>,
+    draft: &mut String,
+) {
+    let text = icons::cell_text(v, 2000);
+    let color = icons::cell_text_color(v, changed);
+    let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
+    let painter = ui.painter().with_clip_rect(rect);
+    if changed {
+        painter.rect_filled(rect.expand2(egui::vec2(1.0, 2.0)), 2, theme::CHANGE_BG);
+    }
+    let galley = painter.layout_no_wrap(text, egui::FontId::monospace(12.0), color);
+    let pos = egui::pos2(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0);
+    painter.galley(pos, galley, color);
+    if has_pk && resp.double_clicked() {
+        *editing = Some((ri, ci));
+        *draft = v.as_deref().unwrap_or("").to_string();
+    }
 }
 
 fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
     match action {
-        TabAction::Reload { tab_id } => app.load_rows(&tab_id),
+        TabAction::Reload { tab_id } => {
+            let is_struct = app
+                .tabs
+                .iter()
+                .any(|t| t.id == tab_id && matches!(t.kind, TabKind::Structure(_)));
+            if is_struct {
+                app.load_structure(&tab_id);
+            } else {
+                app.load_rows(&tab_id);
+            }
+        }
         TabAction::SetPage { tab_id, page } => {
             if let Some(t) = app.table_tab_mut(&tab_id) {
                 t.page = page;
@@ -369,7 +606,7 @@ pub fn export_csv_to_file(tab: &TableTab) -> Result<String, String> {
 pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAction> {
     let mut action = None;
     let mut open = true;
-    egui::Window::new("连接配置")
+    egui::Window::new(RichText::new("连接配置").size(14.0).strong())
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -377,7 +614,7 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
         .show(ctx, |ui| {
             egui::Grid::new("conn-form")
                 .num_columns(2)
-                .spacing([8.0, 6.0])
+                .spacing([10.0, 7.0])
                 .show(ui, |ui| {
                     ui.label("名称");
                     ui.text_edit_singleline(&mut m.name);
@@ -385,6 +622,7 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                     ui.label("类型");
                     egui::ComboBox::from_id_salt("dbtype")
                         .selected_text(format!("{:?}", m.db_type))
+                        .width(160.0)
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut m.db_type, shujing_core::DbType::MySql, "MySQL");
                             ui.selectable_value(&mut m.db_type, shujing_core::DbType::Sqlite, "SQLite");
@@ -413,25 +651,31 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                         ui.end_row();
                     }
                 });
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui.button("测试连接").clicked() {
                     action = Some(ConnAction::Test(app_conn_from_modal(m)));
                 }
                 if let Some(r) = &m.test_result {
                     match r {
-                        Ok(msg) => ui.colored_label(egui::Color32::from_rgb(80, 200, 120), msg),
-                        Err(e) => ui.colored_label(egui::Color32::from_rgb(255, 120, 120), e),
+                        Ok(msg) => ui.label(RichText::new(msg).size(11.5).color(theme::GREEN)),
+                        Err(e) => ui.label(RichText::new(icons::clip(e, 60)).size(11.5).color(theme::RED)),
                     };
                 }
             });
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("保存").color(theme::BG).strong())
+                            .fill(theme::ACCENT),
+                    )
+                    .clicked()
+                {
+                    action = Some(ConnAction::Save(app_conn_from_modal(m)));
+                }
                 if ui.button("取消").clicked() {
                     action = Some(ConnAction::Cancel);
-                }
-                if ui.button("保存").clicked() {
-                    action = Some(ConnAction::Save(app_conn_from_modal(m)));
                 }
             });
         });
@@ -473,23 +717,29 @@ impl eframe::App for ShujingApp {
         self.drain_events(ctx);
         self.autoopen();
 
+        if ui_input_new_query(ctx) {
+            self.open_query_tab(None);
+        }
+
+        // 面板按占用顺序:侧栏 → 标签栏 → toast → 工具/分页/内容
         self.draw_sidebar_panel(ctx);
         draw_tabs(self, ctx);
+        self.draw_toast(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.tabs.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("点击左侧连接,展开库/表后点击表名开始").weak());
+                    ui.label(RichText::new("点击左侧连接,展开库/表后点击表名开始").color(theme::MUTED));
                 });
                 return;
             }
             let tab_id = self.tabs[self.active_tab].id.clone();
             let actions = match &mut self.tabs[self.active_tab].kind {
                 TabKind::Table(t) => draw_table_view(ctx, &tab_id, t),
-                TabKind::Structure(s) => structure::draw_structure_view(ctx, s),
+                TabKind::Structure(s) => structure::draw_structure_view(ctx, &tab_id, s),
                 TabKind::Query(q) => {
                     let conns = self.conns.clone();
-                    query::draw_query_view(&conns, ctx, q)
+                    query::draw_query_view(&conns, ctx, &tab_id, q)
                 }
             };
             for a in actions {
@@ -518,7 +768,6 @@ impl eframe::App for ShujingApp {
                     modal.test_result = None;
                     self.conn_modal = Some(modal);
                     let tx = self.event_tx.clone();
-                    let service = self.service.clone();
                     net::spawn(async move {
                         let r = Service::test_connection(info).await;
                         let payload = r
@@ -538,4 +787,9 @@ impl eframe::App for ShujingApp {
             }
         }
     }
+}
+
+/// ⌘T 新建查询标签
+fn ui_input_new_query(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.key_pressed(egui::Key::T) && (i.modifiers.command || i.modifiers.ctrl))
 }

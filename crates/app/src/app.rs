@@ -19,7 +19,6 @@ pub enum BgEvent {
     AutoTables { conn_id: String, tables: Vec<shujing_core::TableMeta> },
     TestDone { result: Result<String, String> },
     ExportDone { result: Result<String, String> },
-    ConnsSaved { conns: Vec<ConnInfo> },
 }
 
 /// 表数据标签
@@ -155,11 +154,27 @@ impl ConnModal {
             test_result: None,
         }
     }
+
+    /// 编辑已有连接:带出原配置(含 id,保存时按 id 覆盖)
+    pub fn from_conn(c: &ConnInfo) -> Self {
+        Self {
+            editing_id: Some(c.id.clone()),
+            name: c.name.clone(),
+            db_type: c.db_type,
+            host: c.host.clone().unwrap_or_default(),
+            port: c.port.map(|p| p.to_string()).unwrap_or_default(),
+            user: c.user.clone().unwrap_or_default(),
+            password: c.password.clone().unwrap_or_default(),
+            database: c.database.clone().unwrap_or_default(),
+            file_path: c.file_path.clone().unwrap_or_default(),
+            testing: false,
+            test_result: None,
+        }
+    }
 }
 
 pub struct ShujingApp {
     pub service: Arc<Service>,
-    pub config_dir: std::path::PathBuf,
     pub conns: Vec<ConnInfo>,
     pub trees: HashMap<String, ConnTree>,
     pub tabs: Vec<Tab>,
@@ -170,6 +185,8 @@ pub struct ShujingApp {
     pub error_toast: Option<(String, std::time::Instant)>,
     pub autoopen_done: bool,
     pub query_seq: usize,
+    /// 侧栏表名搜索
+    pub table_filter: String,
 }
 
 impl ShujingApp {
@@ -184,7 +201,6 @@ impl ShujingApp {
         crate::theme::apply(&cc.egui_ctx);
         Self {
             service,
-            config_dir,
             conns,
             trees: HashMap::new(),
             tabs: vec![],
@@ -195,11 +211,17 @@ impl ShujingApp {
             error_toast: None,
             autoopen_done: false,
             query_seq: 0,
+            table_filter: String::new(),
         }
     }
 
     /// CJK 字体:macOS 依次尝试常见系统中文字体(egui 默认只有拉丁字形)
     pub fn install_fonts(cc: &eframe::CreationContext<'_>) {
+        Self::apply_fonts(&cc.egui_ctx);
+    }
+
+    /// 字体配置(供启动与无头渲染测试共用)
+    pub fn apply_fonts(ctx: &egui::Context) {
         // 按体积选最小可用(egui 会驻留字体原始字节,PingFang.ttc 偏大)
         let candidates = [
             "/System/Library/Fonts/Hiragino Sans GB.ttc",
@@ -219,15 +241,11 @@ impl ShujingApp {
                 break;
             }
         }
-        cc.egui_ctx.set_fonts(fonts);
+        ctx.set_fonts(fonts);
     }
 
     pub fn toast_error(&mut self, msg: impl Into<String>) {
         self.error_toast = Some((msg.into(), std::time::Instant::now()));
-    }
-
-    pub fn conn_by_id(&self, id: &str) -> Option<&ConnInfo> {
-        self.conns.iter().find(|c| c.id == id)
     }
 
     pub fn table_tab_mut(&mut self, tab_id: &str) -> Option<&mut TableTab> {
@@ -242,6 +260,16 @@ impl ShujingApp {
             .iter()
             .find(|t| t.id == tab_id)
             .and_then(|t| t.table_data())
+    }
+
+    /// 当前激活标签代表的 (连接, 表, 库),用于侧栏高亮;查询标签返回 None
+    pub fn active_tab_info(&self) -> Option<(&str, &str, Option<&str>)> {
+        let t = self.tabs.get(self.active_tab)?;
+        Some(match &t.kind {
+            TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
+            TabKind::Structure(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
+            TabKind::Query(_) => return None,
+        })
     }
 
     /// 打开表数据标签(已开则激活)
@@ -603,7 +631,6 @@ impl ShujingApp {
                     Ok(path) => self.toast_error(format!("已导出: {path}")),
                     Err(e) => self.toast_error(format!("导出失败: {e}")),
                 },
-                BgEvent::ConnsSaved { conns } => self.conns = conns,
             }
         }
         if dirty {

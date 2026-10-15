@@ -2,27 +2,27 @@
 
 use crate::app::QueryTab;
 use crate::table_view::TabAction;
+use crate::{grid, icons, theme};
 use egui::RichText;
 use shujing_core::ConnInfo;
-
-pub enum QueryAction {
-    Run { tab_id: String },
-    Close { tab_id: String },
-}
 
 pub fn draw_query_view(
     conns: &[ConnInfo],
     ctx: &egui::Context,
+    tab_id: &str,
     q: &mut QueryTab,
 ) -> Vec<TabAction> {
     let mut actions = Vec::new();
-    let tab_id = format!("query:{}", q.conn_id);
 
     egui::TopBottomPanel::top("query_toolbar")
-        .frame(egui::Frame::default().inner_margin(egui::Margin::symmetric(8, 6)))
+        .frame(
+            egui::Frame::new()
+                .fill(theme::PANEL)
+                .inner_margin(egui::Margin::symmetric(10, 7)),
+        )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label("连接");
+                ui.label(RichText::new("连接").size(12.0).color(theme::MUTED));
                 let selected = conns
                     .iter()
                     .find(|c| c.id == q.conn_id)
@@ -42,123 +42,90 @@ pub fn draw_query_view(
                 if ui
                     .add_enabled(
                         !q.running && !q.sql.trim().is_empty() && !q.conn_id.is_empty(),
-                        egui::Button::new("▶ 运行 (⌘↵)"),
+                        egui::Button::new(RichText::new("运行 ⌘↵").color(theme::BG).strong())
+                            .fill(theme::ACCENT),
                     )
                     .clicked()
                 {
-                    actions.push(TabAction::RunQuery { tab_id: tab_id.clone() });
+                    actions.push(TabAction::RunQuery { tab_id: tab_id.to_string() });
                 }
                 if let Some(err) = &q.error {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(255, 120, 120),
-                        RichText::new(err).size(11.0),
-                    );
+                    ui.label(RichText::new(icons::clip(err, 140)).size(11.0).color(theme::RED));
                 }
             });
         });
 
-    egui::CentralPanel::default()
-        .show(ctx, |ui| {
-            // SQL 编辑区(上)
-            let editor_height = if q.results.is_empty() {
-                ui.available_height()
-            } else {
-                (ui.available_height() * 0.35).max(120.0)
-            };
-            egui::ScrollArea::vertical()
-                .id_salt("sql-editor")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut q.sql)
-                            .desired_rows(8)
-                            .desired_width(ui.available_width())
-                            .font(egui::TextStyle::Monospace),
-                    );
-                });
-            ui.add_space(4.0);
-            // ⌘↵ 运行
-            if ui.input(|i| {
-                i.key_pressed(egui::Key::Enter)
-                    && (i.modifiers.command || i.modifiers.ctrl)
-            }) {
-                actions.push(TabAction::RunQuery { tab_id: tab_id.clone() });
-            }
-
-            // 结果集(下)
-            if !q.results.is_empty() {
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if q.results.len() > 1 {
-                        ui.label(
-                            RichText::new(format!(
-                                "结果集 {}/{}",
-                                q.active_set + 1,
-                                q.results.len()
-                            ))
-                            .size(11.0),
-                        );
-                        if ui.button("‹").clicked() && q.active_set > 0 {
-                            q.active_set -= 1;
-                        }
-                        if ui.button("›").clicked() && q.active_set + 1 < q.results.len() {
-                            q.active_set += 1;
-                        }
-                    }
-                    let r = &q.results[q.active_set.min(q.results.len().saturating_sub(1))];
-                    if r.columns.is_empty() {
-                        ui.label(
-                            RichText::new(format!("OK(影响 {} 行)", r.affected))
-                                .size(11.0),
-                        );
-                    } else {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} 行{}",
-                                r.rows.len(),
-                                if r.truncated { "(已截断)" } else { "" }
-                            ))
-                            .size(11.0)
-                            .weak(),
-                        );
-                    }
-                });
-                let Some(r) = q.results.get(q.active_set) else { return };
-                if r.columns.is_empty() {
-                    return;
-                }
-                egui::ScrollArea::vertical()
-                    .id_salt("query-results")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        egui::Grid::new("query-grid")
-                            .striped(true)
-                            .num_columns(r.columns.len())
-                            .show(ui, |ui| {
-                                for c in &r.columns {
-                                    ui.label(RichText::new(c).size(12.0).strong());
-                                }
-                                ui.end_row();
-                                for row in &r.rows {
-                                    for v in row {
-                                        let text = v
-                                            .as_deref()
-                                            .map(|s| {
-                                                if s.len() > 200 {
-                                                    format!("{}…", &s[..200])
-                                                } else {
-                                                    s.to_string()
-                                                }
-                                            })
-                                            .unwrap_or_else(|| "NULL".into());
-                                        ui.label(RichText::new(text).size(12.0));
-                                    }
-                                    ui.end_row();
-                                }
-                            });
-                    });
-            }
+    egui::CentralPanel::default().show(ctx, |ui| {
+        // SQL 编辑区(有结果时压缩到上部 1/3)
+        let editor_h = if q.results.is_empty() {
+            (ui.available_height() - 8.0).max(160.0)
+        } else {
+            (ui.available_height() * 0.32).clamp(110.0, 260.0)
+        };
+        ui.allocate_ui(egui::vec2(ui.available_width(), editor_h), |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut q.sql)
+                    .code_editor()
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(6),
+            );
         });
+
+        // ⌘↵ 运行
+        if ui.input(|i| {
+            i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
+        }) {
+            actions.push(TabAction::RunQuery { tab_id: tab_id.to_string() });
+        }
+
+        // 结果集(下)
+        if !q.results.is_empty() {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if q.results.len() > 1 {
+                    ui.label(
+                        RichText::new(format!(
+                            "结果集 {}/{}",
+                            q.active_set + 1,
+                            q.results.len()
+                        ))
+                        .size(11.5)
+                        .color(theme::MUTED),
+                    );
+                    if ui.button("‹").clicked() && q.active_set > 0 {
+                        q.active_set -= 1;
+                    }
+                    if ui.button("›").clicked() && q.active_set + 1 < q.results.len() {
+                        q.active_set += 1;
+                    }
+                }
+                let r = &q.results[q.active_set.min(q.results.len().saturating_sub(1))];
+                if r.columns.is_empty() {
+                    ui.label(
+                        RichText::new(format!("OK(影响 {} 行)", r.affected))
+                            .size(11.5)
+                            .color(theme::GREEN),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} 行{}",
+                            r.rows.len(),
+                            if r.truncated { "(已截断)" } else { "" }
+                        ))
+                        .size(11.5)
+                        .color(theme::MUTED),
+                    );
+                }
+            });
+            ui.add_space(2.0);
+            if let Some(r) = q.results.get(q.active_set) {
+                if !r.columns.is_empty() {
+                    grid::result_rows(ui, "query-results", &r.columns, &r.rows);
+                }
+            }
+        }
+    });
 
     actions
 }

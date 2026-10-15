@@ -11,7 +11,8 @@ mod search;
 pub mod store;
 
 pub use model::{
-    AppState, ConnInfo, ConnectResult, DbType, ExecResult, LiveConn, TableMeta, TableStructure,
+    AppState, ColumnDef, ConnInfo, ConnectResult, DbType, ExecResult, IndexDef, LiveConn,
+    TableMeta, TableStructure,
 };
 
 use model::CancelState;

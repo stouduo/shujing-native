@@ -1,12 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod grid;
+mod icons;
 mod net;
 mod query;
 mod sidebar;
 mod structure;
 mod table_view;
 mod theme;
+
+#[cfg(test)]
+mod render_test;
 
 use app::ShujingApp;
 

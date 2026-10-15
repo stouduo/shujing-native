@@ -8,6 +8,7 @@ description = "数镜原生版界面(egui/eframe)"
 shujing-core = { path = "../core" }
 eframe = { version = "0.31", features = [] }
 egui = "0.31"
+egui_extras = { version = "0.31", default-features = false }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -15,3 +16,6 @@ rfd = "0.15"
 
 [features]
 default = []
+
+[dev-dependencies]
+egui_kittest = { version = "0.31.0", features = ["snapshot", "wgpu"] }
