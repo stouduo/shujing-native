@@ -43,7 +43,8 @@ pub fn draw_query_view(
                     .add_enabled(
                         !q.running && !q.sql.trim().is_empty() && !q.conn_id.is_empty(),
                         egui::Button::new(RichText::new("运行 ⌘↵").color(theme::BG).strong())
-                            .fill(theme::ACCENT),
+                            .fill(theme::ACCENT)
+                            .corner_radius(egui::CornerRadius::same(9)),
                     )
                     .clicked()
                 {
@@ -53,6 +54,7 @@ pub fn draw_query_view(
                     ui.label(RichText::new(icons::clip(err, 140)).size(12.0).color(theme::RED));
                 }
             });
+            crate::theme::hairline_bottom(ui);
         });
 
     egui::CentralPanel::default().show(ctx, |ui| {

@@ -234,19 +234,24 @@ impl ShujingApp {
 
     /// 字体配置(供启动与无头渲染测试共用)
     pub fn apply_fonts(ctx: &egui::Context) {
-        // mmap 系统字体:字节保持文件页(可回收/可共享),不占 23MB 匿名脏堆
-        let candidates = [
-            "/System/Library/Fonts/Hiragino Sans GB.ttc",
-            "/System/Library/Fonts/PingFang.ttc",
-            "/System/Library/Fonts/STHeiti Light.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        // mmap 系统字体:字节保持文件页(可回收/可共享),不占匿名脏堆。
+        // PingFang 是 iOS/macOS 界面中文字体;ttc 需选 SC face(索引)。
+        let candidates: &[(&str, u32)] = &[
+            ("/System/Library/Fonts/PingFang.ttc", 2),
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+            ("/System/Library/Fonts/STHeiti Light.ttc", 0),
         ];
         let mut fonts = egui::FontDefinitions::default();
-        for path in candidates {
+        for (path, index) in candidates {
             if let Some(bytes) = Self::mmap_static(path) {
+                let data = egui::FontData {
+                    font: std::borrow::Cow::Borrowed(bytes),
+                    index: *index,
+                    tweak: Default::default(),
+                };
                 fonts
                     .font_data
-                    .insert("cjk".to_owned(), std::sync::Arc::new(egui::FontData::from_static(bytes)));
+                    .insert("cjk".to_owned(), std::sync::Arc::new(data));
                 for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
                     fonts.families.entry(family).or_default().push("cjk".to_owned());
                 }

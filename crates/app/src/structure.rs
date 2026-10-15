@@ -31,16 +31,17 @@ pub fn draw_structure_view(
                     ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(theme::RED));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("刷新").clicked() && !s.loading {
+                    if !s.loading && crate::theme::text_button(ui, "刷新") {
                         actions.push(TabAction::Reload { tab_id: tab_id.to_string() });
                     }
                     if let Some(d) = &s.data {
-                        if ui.button("复制 DDL").clicked() {
+                        if crate::theme::text_button(ui, "复制 DDL") {
                             ui.ctx().copy_text(d.ddl.clone());
                         }
                     }
                 });
             });
+            crate::theme::hairline_bottom(ui);
         });
 
     egui::CentralPanel::default().show(ctx, |ui| {

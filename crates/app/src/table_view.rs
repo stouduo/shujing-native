@@ -64,11 +64,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                     }
                 }
             });
-            let r = ui.max_rect();
-            ui.painter().line_segment(
-                [egui::pos2(r.left(), r.bottom()), egui::pos2(r.right(), r.bottom())],
-                egui::Stroke::new(1.0, theme::BORDER),
-            );
+            theme::hairline_bottom(ui);
         });
 
     if let Some(i) = close {
@@ -93,28 +89,14 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str) -> (bool, bool) {
     let mut closed = resp.middle_clicked();
 
     let fill = if active {
-        theme::PANEL
+        theme::ELEVATED
     } else if resp.hovered() {
         theme::HOVER
     } else {
         egui::Color32::TRANSPARENT
     };
     let p = ui.painter().clone();
-    p.rect_filled(
-        rect,
-        egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
-        fill,
-    );
-    if active {
-        p.rect_filled(
-            egui::Rect::from_min_size(
-                rect.left_bottom() + egui::vec2(8.0, 0.0),
-                egui::vec2(w - 16.0, 2.0),
-            ),
-            0,
-            theme::ACCENT,
-        );
-    }
+    p.rect_filled(rect, egui::CornerRadius::same(8), fill);
     let tcol = if active { theme::TEXT } else { theme::TEXT2 };
     let galley = p.layout_no_wrap(title.to_string(), font, tcol);
     let tpos = egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0);
@@ -207,10 +189,10 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     ui.label(RichText::new("回车筛选").size(12.0).color(theme::MUTED));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("导出 SQL").clicked() {
+                    if theme::text_button(ui, "导出 SQL") {
                         actions.push(TabAction::ExportSql { tab_id: tab_id.clone() });
                     }
-                    if ui.button("导出 CSV").clicked() {
+                    if theme::text_button(ui, "导出 CSV") {
                         actions.push(TabAction::ExportCsv { tab_id: tab_id.clone() });
                     }
                     if !tab.changes.is_empty() {
@@ -222,18 +204,20 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                                         .color(theme::BG)
                                         .strong(),
                                 )
-                                .fill(theme::GREEN),
+                                .fill(theme::GREEN)
+                                .corner_radius(egui::CornerRadius::same(9)),
                             )
                             .clicked()
                         {
                             actions.push(TabAction::SaveChanges { tab_id: tab_id.clone() });
                         }
                     }
-                    if ui.button("刷新").clicked() && !tab.loading {
+                    if !tab.loading && theme::text_button(ui, "刷新") {
                         actions.push(TabAction::Reload { tab_id: tab_id.clone() });
                     }
                 });
             });
+            theme::hairline_bottom(ui);
         });
 
     // 底部分页条
@@ -244,6 +228,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 .inner_margin(egui::Margin::symmetric(10, 6)),
         )
         .show(ctx, |ui| {
+            theme::hairline_top(ui);
             ui.horizontal(|ui| {
                 let total_text = match tab.total {
                     Some(t) => format!("共 {t} 行"),

@@ -50,8 +50,10 @@ impl ShujingApp {
         ui.add_space(8.0);
         if ui
             .add_sized(
-                [ui.available_width(), 26.0],
-                egui::Button::new(RichText::new("＋ 新建连接").size(13.0)),
+                [ui.available_width(), 30.0],
+                egui::Button::new(RichText::new("＋ 新建连接").size(13.0).color(theme::BG).strong())
+                    .fill(theme::ACCENT)
+                    .corner_radius(egui::CornerRadius::same(9)),
             )
             .clicked()
         {
@@ -170,23 +172,35 @@ impl ShujingApp {
             .active_tab_info()
             .map(|(c, t, d)| c == conn_id && t == name && d == Some(db))
             .unwrap_or(false);
-        ui.horizontal(|ui| {
-            icons::table(ui, active);
-            let lbl = ui.selectable_label(
-                active,
-                RichText::new(name)
-                    .size(13.0)
-                    .color(if active { theme::ACCENT } else { theme::TEXT2 }),
-            );
-            let tip = if active { "当前标签" } else { "打开表数据" };
-            let hovered = lbl.hovered();
-            if lbl.clicked() {
-                self.open_table(conn_id, name, Some(db.to_string()));
-            }
-            lbl.on_hover_text(tip);
-            if hovered && icons::structure(ui).clicked() {
-                self.open_structure(conn_id, name, Some(db.to_string()));
-            }
+        // iOS 列表:选中行 = 系统蓝浸染 + 圆角;普通行透明
+        let frame = if active {
+            egui::Frame::new()
+                .fill(theme::ACTIVE_ROW)
+                .corner_radius(egui::CornerRadius::same(7))
+                .inner_margin(egui::Margin::symmetric(6, 3))
+        } else {
+            egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(6, 3))
+        };
+        frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                icons::table(ui, active);
+                let lbl = ui.selectable_label(
+                    active,
+                    RichText::new(name)
+                        .size(13.0)
+                        .color(if active { theme::TEXT } else { theme::TEXT2 }),
+                );
+                let tip = if active { "当前标签" } else { "打开表数据" };
+                let hovered = lbl.hovered();
+                if lbl.clicked() {
+                    self.open_table(conn_id, name, Some(db.to_string()));
+                }
+                lbl.on_hover_text(tip);
+                if hovered && icons::structure(ui).clicked() {
+                    self.open_structure(conn_id, name, Some(db.to_string()));
+                }
+            });
         });
     }
 
