@@ -6,6 +6,7 @@ mod query;
 mod sidebar;
 mod structure;
 mod table_view;
+mod theme;
 
 use app::ShujingApp;
 

@@ -181,7 +181,7 @@ impl ShujingApp {
         let service = Arc::new(Service::new(&config_dir));
         let conns = service.list_saved_connections();
         let (event_tx, events) = std::sync::mpsc::channel();
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        crate::theme::apply(&cc.egui_ctx);
         Self {
             service,
             config_dir,

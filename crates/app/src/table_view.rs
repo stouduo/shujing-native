@@ -197,7 +197,7 @@ fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut TableTab) -> Vec
                                             }
                                         })
                                         .unwrap_or_else(|| "NULL".into());
-                                    let mut label = RichText::new(text).size(12.0);
+                                    let mut label = RichText::new(text).monospace();
                                     if v.is_none() {
                                         label = label.weak();
                                     }
