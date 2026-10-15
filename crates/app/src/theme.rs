@@ -66,8 +66,8 @@ pub fn apply(ctx: &egui::Context) {
     style.text_styles = [
         (TextStyle::Heading, FontId::proportional(15.0)),
         (TextStyle::Body, FontId::proportional(13.0)),
-        (TextStyle::Button, FontId::proportional(12.5)),
-        (TextStyle::Small, FontId::proportional(11.0)),
+        (TextStyle::Button, FontId::proportional(13.0)),
+        (TextStyle::Small, FontId::proportional(12.0)),
         (TextStyle::Monospace, FontId::monospace(12.0)),
     ]
     .into();

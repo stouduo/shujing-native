@@ -222,7 +222,7 @@ impl ShujingApp {
 
     /// 字体配置(供启动与无头渲染测试共用)
     pub fn apply_fonts(ctx: &egui::Context) {
-        // 按体积选最小可用(egui 会驻留字体原始字节,PingFang.ttc 偏大)
+        // mmap 系统字体:字节保持文件页(可回收/可共享),不占 23MB 匿名脏堆
         let candidates = [
             "/System/Library/Fonts/Hiragino Sans GB.ttc",
             "/System/Library/Fonts/PingFang.ttc",
@@ -231,10 +231,10 @@ impl ShujingApp {
         ];
         let mut fonts = egui::FontDefinitions::default();
         for path in candidates {
-            if let Ok(bytes) = std::fs::read(path) {
+            if let Some(bytes) = Self::mmap_static(path) {
                 fonts
                     .font_data
-                    .insert("cjk".to_owned(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+                    .insert("cjk".to_owned(), std::sync::Arc::new(egui::FontData::from_static(bytes)));
                 for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
                     fonts.families.entry(family).or_default().push("cjk".to_owned());
                 }
@@ -242,6 +242,14 @@ impl ShujingApp {
             }
         }
         ctx.set_fonts(fonts);
+    }
+
+    /// 只读 mmap 并故意泄漏以获得 'static 生命周期(进程存续期内映射常驻)
+    fn mmap_static(path: &str) -> Option<&'static [u8]> {
+        let file = std::fs::File::open(path).ok()?;
+        let mmap = unsafe { memmap2::Mmap::map(&file).ok()? };
+        let leaked = Box::leak(Box::new(mmap));
+        Some(unsafe { std::slice::from_raw_parts(leaked.as_ptr(), leaked.len()) })
     }
 
     pub fn toast_error(&mut self, msg: impl Into<String>) {

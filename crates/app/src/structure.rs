@@ -20,15 +20,15 @@ pub fn draw_structure_view(
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&s.table).strong().size(14.0));
+                ui.label(RichText::new(&s.table).strong().size(15.0));
                 if let Some(db) = &s.database {
-                    ui.label(RichText::new(db).size(11.0).color(theme::MUTED));
+                    ui.label(RichText::new(db).size(12.0).color(theme::MUTED));
                 }
                 if s.loading {
                     ui.spinner();
                 }
                 if let Some(err) = &s.error {
-                    ui.label(RichText::new(icons::clip(err, 120)).size(11.0).color(theme::RED));
+                    ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(theme::RED));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("刷新").clicked() && !s.loading {
@@ -62,7 +62,7 @@ pub fn draw_structure_view(
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format!("字段 ({})", data.columns.len()))
-                        .size(12.5)
+                        .size(13.0)
                         .strong()
                         .color(theme::TEXT2),
                 );
@@ -74,18 +74,18 @@ pub fn draw_structure_view(
                     .show(ui, |ui| {
                         // 表头
                         for h in ["名称", "类型", "可空", "键", "默认值", "注释"] {
-                            ui.label(RichText::new(h).size(11.5).strong().color(theme::MUTED));
+                            ui.label(RichText::new(h).size(12.0).strong().color(theme::MUTED));
                         }
                         ui.end_row();
                         for c in &data.columns {
                             let is_pk = c.key == "PRI";
                             ui.label(
                                 RichText::new(&c.name)
-                                    .size(12.5)
+                                    .size(13.0)
                                     .monospace()
                                     .color(if is_pk { theme::ACCENT } else { theme::TEXT }),
                             );
-                            ui.label(RichText::new(&c.data_type).size(12.5).monospace().color(theme::TEXT2));
+                            ui.label(RichText::new(&c.data_type).size(13.0).monospace().color(theme::TEXT2));
                             ui.label(
                                 RichText::new(if c.nullable { "YES" } else { "NO" })
                                     .size(12.0)
@@ -110,14 +110,14 @@ pub fn draw_structure_view(
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new(format!("索引 ({})", data.indexes.len()))
-                        .size(12.5)
+                        .size(13.0)
                         .strong()
                         .color(theme::TEXT2),
                 );
                 ui.add_space(2.0);
                 for ix in &data.indexes {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&ix.name).size(12.5).monospace().color(theme::TEXT));
+                        ui.label(RichText::new(&ix.name).size(13.0).monospace().color(theme::TEXT));
                         ui.label(RichText::new(&ix.columns).size(12.0).color(theme::MUTED));
                         if ix.unique {
                             icons::chip(ui, "UNIQUE", theme::ACCENT);
@@ -126,7 +126,7 @@ pub fn draw_structure_view(
                 }
 
                 ui.add_space(14.0);
-                ui.label(RichText::new("DDL (建表语句)").size(12.5).strong().color(theme::TEXT2));
+                ui.label(RichText::new("DDL (建表语句)").size(13.0).strong().color(theme::TEXT2));
                 ui.add_space(4.0);
                 egui::Frame::default()
                     .fill(theme::PANEL)

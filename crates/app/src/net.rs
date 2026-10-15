@@ -6,7 +6,13 @@ use std::sync::OnceLock;
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 pub fn runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().expect("tokio runtime"))
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2) // 纯 DB IO,不需要核数个线程;线程栈与调度器都占内存
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+    })
 }
 
 /// 在后台 tokio 线程上执行 future(不阻塞 UI 帧)

@@ -50,7 +50,7 @@ pub fn draw_query_view(
                     actions.push(TabAction::RunQuery { tab_id: tab_id.to_string() });
                 }
                 if let Some(err) = &q.error {
-                    ui.label(RichText::new(icons::clip(err, 140)).size(11.0).color(theme::RED));
+                    ui.label(RichText::new(icons::clip(err, 140)).size(12.0).color(theme::RED));
                 }
             });
         });
@@ -89,7 +89,7 @@ pub fn draw_query_view(
                             q.active_set + 1,
                             q.results.len()
                         ))
-                        .size(11.5)
+                        .size(12.0)
                         .color(theme::MUTED),
                     );
                     if ui.button("‹").clicked() && q.active_set > 0 {
@@ -103,7 +103,7 @@ pub fn draw_query_view(
                 if r.columns.is_empty() {
                     ui.label(
                         RichText::new(format!("OK(影响 {} 行)", r.affected))
-                            .size(11.5)
+                            .size(12.0)
                             .color(theme::GREEN),
                     );
                 } else {
@@ -113,7 +113,7 @@ pub fn draw_query_view(
                             r.rows.len(),
                             if r.truncated { "(已截断)" } else { "" }
                         ))
-                        .size(11.5)
+                        .size(12.0)
                         .color(theme::MUTED),
                     );
                 }

@@ -31,12 +31,12 @@ pub fn result_rows(
     tb.header(26.0, |mut header| {
         header.col(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new("#").size(11.5).color(theme::MUTED));
+                ui.label(egui::RichText::new("#").size(12.0).color(theme::MUTED));
             });
         });
         for c in columns {
             header.col(|ui| {
-                ui.label(egui::RichText::new(c).size(12.5).strong());
+                ui.label(egui::RichText::new(c).size(13.0).strong());
             });
         }
     })
@@ -46,7 +46,7 @@ pub fn result_rows(
                 row.col(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new(format!("{}", ri + 1)).size(11.0).color(theme::MUTED),
+                            egui::RichText::new(format!("{}", ri + 1)).size(12.0).color(theme::MUTED),
                         );
                     });
                 });

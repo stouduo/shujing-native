@@ -44,14 +44,14 @@ impl ShujingApp {
 
     pub fn draw_sidebar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("数镜").size(16.0).strong());
-            ui.label(RichText::new("Native").size(11.0).color(theme::MUTED));
+            ui.label(RichText::new("数镜").size(15.0).strong());
+            ui.label(RichText::new("Native").size(12.0).color(theme::MUTED));
         });
         ui.add_space(8.0);
         if ui
             .add_sized(
                 [ui.available_width(), 26.0],
-                egui::Button::new(RichText::new("＋ 新建连接").size(12.5)),
+                egui::Button::new(RichText::new("＋ 新建连接").size(13.0)),
             )
             .clicked()
         {
@@ -97,14 +97,14 @@ impl ShujingApp {
             resp.on_hover_text(tip);
             if hovered {
                 if ui
-                    .small_button(RichText::new("编辑").size(10.0))
+                    .small_button(RichText::new("编辑").size(12.0))
                     .on_hover_text("编辑连接")
                     .clicked()
                 {
                     self.conn_modal = Some(ConnModal::from_conn(c));
                 }
                 if ui
-                    .small_button(RichText::new("删").size(10.0))
+                    .small_button(RichText::new("删").size(12.0))
                     .on_hover_text("删除连接")
                     .clicked()
                 {
@@ -144,7 +144,7 @@ impl ShujingApp {
                     self.toggle_database(conn_id, &db);
                 }
                 if is_open && filter.is_empty() {
-                    ui.label(RichText::new(format!("{}", tables.len())).size(10.0).color(theme::MUTED));
+                    ui.label(RichText::new(format!("{}", tables.len())).size(12.0).color(theme::MUTED));
                 }
             });
             if is_open {
@@ -158,7 +158,7 @@ impl ShujingApp {
                         self.draw_table_row(ui, conn_id, &db, &t.name);
                     }
                     if !filter.is_empty() && shown == 0 {
-                        ui.label(RichText::new("无匹配表").size(11.0).color(theme::MUTED));
+                        ui.label(RichText::new("无匹配表").size(12.0).color(theme::MUTED));
                     }
                 });
             }
@@ -175,7 +175,7 @@ impl ShujingApp {
             let lbl = ui.selectable_label(
                 active,
                 RichText::new(name)
-                    .size(12.5)
+                    .size(13.0)
                     .color(if active { theme::ACCENT } else { theme::TEXT2 }),
             );
             let tip = if active { "当前标签" } else { "打开表数据" };

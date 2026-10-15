@@ -8,6 +8,7 @@ description = "数镜原生版界面(egui/eframe)"
 shujing-core = { path = "../core" }
 eframe = { version = "0.31", features = [] }
 egui = "0.31"
+memmap2 = "0.9"
 egui_extras = { version = "0.31", default-features = false }
 tokio = { workspace = true }
 serde = { workspace = true }
