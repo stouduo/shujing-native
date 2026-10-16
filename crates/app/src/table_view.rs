@@ -42,11 +42,11 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
         .frame(
             egui::Frame::new()
                 .fill(theme::BG)
-                .inner_margin(egui::Margin { left: 8, right: 8, top: 3, bottom: 0 }),
+                .inner_margin(egui::Margin { left: 10, right: 10, top: 4, bottom: 5 }),
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.spacing_mut().item_spacing.x = 4.0;
                 for i in 0..app.tabs.len() {
                     let title = app.tabs[i].title.clone();
                     let (a, c) = draw_one_tab(ui, i == app.active_tab, &title);
@@ -68,7 +68,11 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                     }
                 }
             });
-            theme::hairline_bottom(ui);
+            let r = ui.max_rect();
+            ui.painter().line_segment(
+                [egui::pos2(r.left() - 12.0, r.bottom()), egui::pos2(r.right() + 12.0, r.bottom())],
+                egui::Stroke::new(1.0, theme::BORDER),
+            );
         });
 
     if let Some(i) = close {
@@ -102,7 +106,17 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str) -> (bool, bool) {
         egui::Color32::TRANSPARENT
     };
     let p = ui.painter().clone();
-    p.rect_filled(rect, egui::CornerRadius::same(8), fill);
+    // 激活标签:与工具栏同色,底部延伸 2px 吞掉分隔线 → 与内容区连通
+    if active {
+        let connected = rect.expand2(egui::vec2(0.0, 3.0));
+        p.rect_filled(
+            connected,
+            egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 },
+            theme::PANEL,
+        );
+    } else {
+        p.rect_filled(rect, egui::CornerRadius::same(8), fill);
+    }
     let tcol = if active { theme::TEXT } else { theme::TEXT2 };
     p.text(
         egui::pos2(rect.left() + 10.0, rect.center().y),
@@ -1229,7 +1243,10 @@ impl eframe::App for ShujingApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.tabs.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("点击左侧连接,展开库/表后点击表名开始").color(theme::MUTED));
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(90.0);
+                        draw_empty_state(ui);
+                    });
                 });
                 return;
             }
@@ -1339,6 +1356,32 @@ impl eframe::App for ShujingApp {
             }
         }
     }
+}
+
+/// 空状态:数据库圆柱图形 + 主/副文案
+fn draw_empty_state(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 52.0), egui::Sense::hover());
+    let p = ui.painter().clone();
+    let c = rect.center();
+    let (rw, rh) = (22.0, 7.0);
+    let top = egui::pos2(c.x, c.y - 18.0);
+    let st = egui::Stroke::new(1.6, theme::MUTED);
+    p.add(egui::Shape::ellipse_stroke(top, egui::vec2(rw, rh), st));
+    p.line_segment([top - egui::vec2(rw, 0.0), top + egui::vec2(rw, 20.0)], st);
+    p.line_segment([top + egui::vec2(rw, 0.0), top + egui::vec2(-rw, 20.0)], st);
+    p.add(egui::Shape::ellipse_stroke(
+        top + egui::vec2(0.0, 20.0),
+        egui::vec2(rw, rh),
+        st,
+    ));
+    ui.add_space(16.0);
+    ui.label(RichText::new("没有打开的标签").size(15.0).strong());
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("在左侧连接一个数据库,点击表名浏览数据\n⌘T 新建查询标签")
+            .size(12.0)
+            .color(theme::MUTED),
+    );
 }
 
 /// ⌘T 新建查询标签

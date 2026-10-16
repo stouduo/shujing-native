@@ -8,13 +8,14 @@ use egui::RichText;
 impl ShujingApp {
     pub fn draw_sidebar_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("sidebar")
-            .default_width(236.0)
+            .default_width(238.0)
             .min_width(190.0)
             .resizable(true)
             .frame(
                 egui::Frame::new()
                     .fill(theme::BG)
-                    .inner_margin(egui::Margin { left: 12, right: 8, top: 10, bottom: 8 }),
+                    .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                    .inner_margin(egui::Margin { left: 12, right: 10, top: 10, bottom: 8 }),
             )
             .show(ctx, |ui| {
                 self.draw_sidebar(ui);
@@ -44,22 +45,16 @@ impl ShujingApp {
 
     pub fn draw_sidebar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("数镜").size(15.0).strong());
-            ui.label(RichText::new("Native").size(12.0).color(theme::MUTED));
+            ui.label(RichText::new("数镜").size(14.0).strong());
+            ui.label(RichText::new("Native").size(11.0).color(theme::MUTED));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::text_button(ui, "＋ 连接") {
+                    self.conn_modal = Some(ConnModal::new());
+                }
+            });
         });
+        theme::hairline_bottom(ui);
         ui.add_space(8.0);
-        if ui
-            .add_sized(
-                [ui.available_width(), 30.0],
-                egui::Button::new(RichText::new("＋ 新建连接").size(13.0).color(theme::BG).strong())
-                    .fill(theme::ACCENT)
-                    .corner_radius(egui::CornerRadius::same(9)),
-            )
-            .clicked()
-        {
-            self.conn_modal = Some(ConnModal::new());
-        }
-        ui.add_space(6.0);
 
         let has_tables = self
             .trees
@@ -93,7 +88,8 @@ impl ShujingApp {
                 false,
                 RichText::new(&c.name)
                     .size(13.0)
-                    .color(if online { theme::TEXT } else { theme::TEXT2 }),
+                    .strong()
+                    .color(if online { theme::TEXT } else { theme::TEXT2}),
             );
             let tip = if online { "点击断开" } else { "点击连接" };
             let hovered = resp.hovered();
@@ -160,7 +156,8 @@ impl ShujingApp {
                 let lbl = ui.selectable_label(
                     is_open,
                     RichText::new(&db)
-                        .size(13.0)
+                        .size(12.5)
+                        .strong()
                         .color(if is_open { theme::TEXT } else { theme::TEXT2 }),
                 );
                 if lbl.clicked() {
