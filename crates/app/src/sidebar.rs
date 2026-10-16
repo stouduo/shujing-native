@@ -61,7 +61,10 @@ impl ShujingApp {
         }
         ui.add_space(6.0);
 
-        let has_tables = self.trees.values().any(|t| t.online && !t.tables.is_empty());
+        let has_tables = self
+            .trees
+            .values()
+            .any(|t| t.online && !t.tables_by_db.values().all(|v| v.is_empty()));
         if has_tables {
             ui.add(
                 egui::TextEdit::singleline(&mut self.table_filter)
@@ -121,17 +124,31 @@ impl ShujingApp {
     }
 
     fn draw_tree(&mut self, ui: &mut egui::Ui, conn_id: &str) {
-        let Some(tree) = self.trees.get(conn_id) else { return };
-        if !tree.online {
+        // 先快照再释放借用:循环内要调 &mut self
+        let Some((online, databases, expanded, tables_by_db, loading)) = self
+            .trees
+            .get(conn_id)
+            .map(|t| {
+                (
+                    t.online,
+                    t.databases.clone(),
+                    t.expanded_db.clone(),
+                    t.tables_by_db.clone(),
+                    t.loading,
+                )
+            })
+        else {
+            return;
+        };
+        if !online {
             return;
         }
-        let databases = tree.databases.clone();
-        let expanded = tree.expanded_db.clone();
-        let tables = tree.tables.clone();
         let filter = self.table_filter.to_lowercase();
 
         for db in databases {
             let is_open = expanded.as_deref() == Some(db.as_str());
+            let tables: Vec<shujing_core::TableMeta> =
+                tables_by_db.get(&db).cloned().unwrap_or_default();
             ui.horizontal(|ui| {
                 let tri = icons::triangle(ui, is_open);
                 if tri.clicked() {
@@ -147,7 +164,11 @@ impl ShujingApp {
                     self.toggle_database(conn_id, &db);
                 }
                 if is_open && filter.is_empty() {
-                    ui.label(RichText::new(format!("{}", tables.len())).size(12.0).color(theme::MUTED));
+                    if loading {
+                        ui.spinner();
+                    } else {
+                        ui.label(RichText::new(format!("{}", tables.len())).size(12.0).color(theme::MUTED));
+                    }
                 }
             });
             if is_open {

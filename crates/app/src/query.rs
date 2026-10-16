@@ -53,6 +53,14 @@ pub fn draw_query_view(
                 if let Some(err) = &q.error {
                     ui.label(RichText::new(icons::clip(err, 140)).size(12.0).color(theme::RED));
                 }
+                let has_grid = q
+                    .results
+                    .get(q.active_set)
+                    .map(|r| !r.columns.is_empty())
+                    .unwrap_or(false);
+                if has_grid && crate::theme::text_button(ui, "导出 CSV") {
+                    actions.push(TabAction::ExportQueryCsv { tab_id: tab_id.to_string() });
+                }
             });
             crate::theme::hairline_bottom(ui);
         });

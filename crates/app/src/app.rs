@@ -47,6 +47,10 @@ pub struct TableTab {
     pub active_filter: Option<String>,
     /// 最近一次查询耗时
     pub last_elapsed_ms: Option<u64>,
+    /// 查看完整内容弹窗 (列名, 全文)
+    pub view_cell: Option<(String, String)>,
+    /// 新增行表单 (列名, 输入)
+    pub insert_form: Option<Vec<(String, String)>>,
 }
 
 impl TableTab {
@@ -72,6 +76,8 @@ impl TableTab {
             filter: String::new(),
             active_filter: None,
             last_elapsed_ms: None,
+            view_cell: None,
+            insert_form: None,
         }
     }
 }
@@ -131,7 +137,8 @@ pub struct ConnTree {
     pub version: String,
     pub databases: Vec<String>,
     pub expanded_db: Option<String>,
-    pub tables: Vec<shujing_core::TableMeta>,
+    /// 各库的表缓存(此前共用一个 Vec,切库瞬间会显示上一个库的表)
+    pub tables_by_db: HashMap<String, Vec<shujing_core::TableMeta>>,
     pub loading: bool,
 }
 
@@ -201,6 +208,17 @@ pub struct ShujingApp {
     pub table_filter: String,
     /// 自截图模式(SHUJING_SCREENSHOT=<路径>)
     pub shot: Option<ShotState>,
+    /// 被未保存修改拦截、等待确认的动作
+    pub pending: Option<PendingAction>,
+    /// 确认丢弃后放行一次
+    pub dirty_override: bool,
+}
+
+pub enum PendingAction {
+    /// 继续执行的动作
+    Proceed(Box<crate::table_view::TabAction>),
+    /// 关闭标签
+    CloseTab(usize),
 }
 
 /// 自截图流程状态:数据就绪后请求视口截图,落盘后退出
@@ -234,6 +252,8 @@ impl ShujingApp {
             autoopen_done: false,
             query_seq: 0,
             table_filter: String::new(),
+            pending: None,
+            dirty_override: false,
             shot: std::env::var("SHUJING_SCREENSHOT")
                 .ok()
                 .map(|path| ShotState {
@@ -441,6 +461,14 @@ impl ShujingApp {
     }
 
     pub fn close_tab(&mut self, idx: usize) {
+        // 未保存修改的表标签:先弹确认
+        if !self.dirty_override && self.pending.is_none() {
+            let dirty = matches!(self.tabs.get(idx), Some(t) if matches!(&t.kind, TabKind::Table(tt) if !tt.changes.is_empty()));
+            if dirty {
+                self.pending = Some(PendingAction::CloseTab(idx));
+                return;
+            }
+        }
         if idx < self.tabs.len() {
             self.tabs.remove(idx);
             if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
@@ -514,7 +542,10 @@ impl ShujingApp {
             let result = service.run_sql(&conn_id, sql, Some(limit)).await;
             let result = result.map(|mut rs| rs.pop().unwrap_or_default());
             let _ = tx.send(BgEvent::RowsLoaded { tab_id: tab_id.clone(), result });
-            let cnt = format!("SELECT COUNT(*) FROM {full}");
+            let mut cnt = format!("SELECT COUNT(*) FROM {full}");
+            if let Some(w) = &where_clause {
+                cnt.push_str(&format!(" WHERE {w}"));
+            }
             let result = service.run_sql(&conn_id, cnt, Some(1)).await;
             let total = result.ok().and_then(|rs| {
                 rs.first()
@@ -653,8 +684,9 @@ impl ShujingApp {
                 BgEvent::TablesLoaded { conn_id, database, tables } => {
                     if let Some(tree) = self.trees.get_mut(&conn_id) {
                         tree.loading = false;
-                        tree.tables = tables;
-                        let _ = database;
+                        // 无库名(如 SQLite 单库)落到 "main" 槽
+                        let key = database.unwrap_or_else(|| "main".to_string());
+                        tree.tables_by_db.insert(key, tables);
                     }
                 }
                 BgEvent::RowsLoaded { tab_id, result } => {

@@ -11,6 +11,7 @@ use egui_extras::Column;
 use shujing_core::Service;
 
 /// 表格视图产生的用户动作
+#[derive(Clone)]
 pub enum TabAction {
     Reload { tab_id: String },
     SetPage { tab_id: String, page: usize },
@@ -18,6 +19,9 @@ pub enum TabAction {
     ExportSql { tab_id: String },
     SaveChanges { tab_id: String },
     RunQuery { tab_id: String },
+    ExportQueryCsv { tab_id: String },
+    DeleteRow { tab_id: String, ri: usize },
+    InsertRow { tab_id: String },
 }
 
 /// 连接弹窗产生的动作
@@ -139,6 +143,7 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str) -> (bool, bool) {
 pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut TableTab) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let tab_id = tab_id.to_string();
+    let mut close_detail = false;
 
     // 工具栏
     egui::TopBottomPanel::top("table_toolbar")
@@ -164,6 +169,14 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(theme::RED));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !tab.loading && theme::text_button(ui, "＋ 新行") {
+                        tab.insert_form = Some(
+                            tab.columns
+                                .iter()
+                                .map(|c| (c.clone(), String::new()))
+                                .collect(),
+                        );
+                    }
                     if !tab.loading && theme::text_button(ui, "刷新") {
                         actions.push(TabAction::Reload { tab_id: tab_id.clone() });
                     }
@@ -303,6 +316,65 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
             });
         });
 
+    // 行详情面板(选中某格后出现)
+    if let Some((sr, _sc)) = tab.selected {
+        if sr < tab.rows.len() {
+            let row_vals = tab.rows[sr].clone();
+            let cols = tab.columns.clone();
+            let row_no = (tab.page - 1) * tab.page_size + sr + 1;
+            egui::TopBottomPanel::bottom("row_detail")
+                .frame(
+                    egui::Frame::new()
+                        .fill(theme::BG)
+                        .inner_margin(egui::Margin::symmetric(10, 6)),
+                )
+                .default_height(150.0)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    theme::hairline_top(ui);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("行 #{row_no}")).size(13.0).strong());
+                        ui.label(RichText::new("详情").size(12.0).color(theme::MUTED));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if theme::text_button(ui, "关闭") {
+                                close_detail = true;
+                            }
+                        });
+                    });
+                    ui.add_space(2.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("detail-scroll")
+                        .show(ui, |ui| {
+                            egui::Grid::new("detail-grid")
+                                .num_columns(2)
+                                .spacing([16.0, 5.0])
+                                .show(ui, |ui| {
+                                    for (c, v) in cols.iter().zip(row_vals.iter()) {
+                                        ui.label(
+                                            RichText::new(c)
+                                                .size(12.0)
+                                                .monospace()
+                                                .color(theme::MUTED),
+                                        );
+                                        let text = v.as_deref().unwrap_or("null");
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(text)
+                                                    .size(12.0)
+                                                    .monospace()
+                                                    .color(icons::cell_text_color(v, false)),
+                                            )
+                                            .wrap()
+                                            .selectable(true),
+                                        );
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                });
+        }
+    }
+
     // 主内容
     egui::CentralPanel::default().show(ctx, |ui| {
         if tab.columns.is_empty() {
@@ -328,6 +400,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
             page,
             page_size,
             selected,
+            view_cell,
             ..
         } = tab;
 
@@ -349,9 +422,11 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width().max(desired_w));
+                    let mut menu_action: Option<TabAction> = None;
                     draw_data_table(
                         ui,
                         pointer,
+                        &tab_id,
                         rows,
                         columns,
                         editing,
@@ -366,7 +441,12 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                         cr,
                         &mut new_selection,
                         &mut copy_text,
+                        &mut menu_action,
+                        view_cell,
                     );
+                    if let Some(a) = menu_action {
+                        actions.push(a);
+                    }
                 });
         }
 
@@ -438,6 +518,7 @@ pub(crate) fn suggested_widths(
 fn draw_data_table(
     ui: &mut egui::Ui,
     pointer: Option<egui::Pos2>,
+    tab_id: &str,
     rows: &[Vec<Option<String>>],
     columns: &[String],
     editing: &mut Option<(usize, usize)>,
@@ -452,6 +533,8 @@ fn draw_data_table(
     cr: &mut Option<(usize, usize, String)>,
     new_selection: &mut Option<Option<(usize, usize)>>,
     copy_text: &mut Option<String>,
+    menu_action: &mut Option<TabAction>,
+    view_cell: &mut Option<(String, String)>,
 ) {
     let srt = &*sort;
     let col_widths = suggested_widths(rows, columns);
@@ -584,6 +667,9 @@ fn draw_data_table(
                                 copy_text,
                                 columns,
                                 rowdata,
+                                menu_action,
+                                tab_id,
+                                view_cell,
                             );
                         });
                     }
@@ -619,6 +705,9 @@ fn draw_data_cell(
     copy_text: &mut Option<String>,
     columns: &[String],
     rowdata: &[Option<String>],
+    menu_action: &mut Option<TabAction>,
+    tab_id: &str,
+    view_cell: &mut Option<(String, String)>,
 ) {
     let text = icons::cell_text(v, 2000);
     let color = icons::cell_text_color(v, changed);
@@ -657,6 +746,12 @@ fn draw_data_cell(
     }
     resp.context_menu(|ui| {
         *selected = Some((ri, ci));
+        if ui.button("查看完整内容…").clicked() {
+            let text = v.as_deref().unwrap_or("").to_string();
+            let col = columns.get(ci).cloned().unwrap_or_default();
+            *view_cell = Some((col, text));
+            ui.close_menu();
+        }
         if ui.button("复制单元格").clicked() {
             *copy_text = v.clone();
             ui.close_menu();
@@ -679,6 +774,13 @@ fn draw_data_cell(
             *draft = v.as_deref().unwrap_or("").to_string();
             ui.close_menu();
         }
+        if ui
+            .add_enabled(has_pk, egui::Button::new("删除此行…"))
+            .clicked()
+        {
+            *menu_action = Some(TabAction::DeleteRow { tab_id: tab_id.to_string(), ri });
+            ui.close_menu();
+        }
         ui.label(
             egui::RichText::new(format!("{} · 行 {}", columns.get(ci).map(|s| s.as_str()).unwrap_or("?"), ri + 1))
                 .size(12.0)
@@ -689,6 +791,21 @@ fn draw_data_cell(
 
 
 fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
+    // 未保存修改防护:会重载数据的动作先拦截
+    let tab_id_for_gate = match &action {
+        TabAction::Reload { tab_id } | TabAction::SetPage { tab_id, .. } => Some(tab_id.clone()),
+        _ => None,
+    };
+    if let Some(tid) = tab_id_for_gate {
+        let dirty = app
+            .table_tab(&tid)
+            .map(|t| !t.changes.is_empty())
+            .unwrap_or(false);
+        if dirty && app.pending.is_none() && !app.dirty_override {
+            app.pending = Some(crate::app::PendingAction::Proceed(Box::new(action)));
+            return;
+        }
+    }
     match action {
         TabAction::Reload { tab_id } => {
             let is_struct = app
@@ -789,15 +906,84 @@ fn execute_tab_action(app: &mut ShujingApp, action: TabAction) {
             });
         }
         TabAction::RunQuery { tab_id } => app.run_query(&tab_id),
+        TabAction::ExportQueryCsv { tab_id } => {
+            let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else { return };
+            let crate::app::TabKind::Query(q) = &tab.kind else { return };
+            let Some(r) = q.results.get(q.active_set) else { return };
+            if r.columns.is_empty() {
+                return;
+            }
+            match export_rows_csv(&r.columns, &r.rows) {
+                Ok(path) => app.toast_error(format!("已导出到 {path}")),
+                Err(e) => app.toast_error(e),
+            }
+        }
+        TabAction::DeleteRow { tab_id, ri } => {
+            let Some(t) = app.table_tab_mut(&tab_id) else { return };
+            if t.pk_cols.is_empty() {
+                app.toast_error("该表没有主键,无法删除行".to_string());
+                return;
+            }
+            let pk_idxs: Vec<usize> = t
+                .pk_cols
+                .iter()
+                .filter_map(|p| t.columns.iter().position(|c| c == p))
+                .collect();
+            let Some(row) = t.rows.get(ri) else { return };
+            let pk: Vec<(String, String)> = pk_idxs
+                .iter()
+                .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
+                .collect();
+            if pk.iter().any(|(_, v)| v.is_empty()) {
+                app.toast_error("主键值为空,无法定位行".to_string());
+                return;
+            }
+            let conn_id = t.conn_id.clone();
+            let table = t.table.clone();
+            t.loading = true;
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            net::spawn(async move {
+                let result = service.apply_changes(&conn_id, &table, &[], &[pk], &[]).await;
+                let _ = tx.send(BgEvent::ChangesSaved {
+                    tab_id: tab_id.clone(),
+                    result: result.map(|r| r.affected),
+                });
+            });
+        }
+        TabAction::InsertRow { tab_id } => {
+            let Some(t) = app.table_tab(&tab_id) else { return };
+            let Some(form) = &t.insert_form else { return };
+            let values: Vec<(String, String)> = form
+                .iter()
+                .filter(|(_, v)| !v.trim().is_empty())
+                .map(|(c, v)| (c.clone(), v.trim().to_string()))
+                .collect();
+            if values.is_empty() {
+                app.toast_error("请至少填写一个字段".to_string());
+                return;
+            }
+            let conn_id = t.conn_id.clone();
+            let table = t.table.clone();
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            net::spawn(async move {
+                let result = service.apply_changes(&conn_id, &table, &[], &[], &[values]).await;
+                let _ = tx.send(BgEvent::ChangesSaved {
+                    tab_id: tab_id.clone(),
+                    result: result.map(|r| r.affected),
+                });
+            });
+        }
     }
 }
 
-/// 导出当前页为 CSV,返回目标路径或错误
-pub fn export_csv_to_file(tab: &TableTab) -> Result<String, String> {
+/// 导出任意结果集为 CSV,返回目标路径或错误
+pub fn export_rows_csv(columns: &[String], rows: &[Vec<Option<String>>]) -> Result<String, String> {
     let mut out = String::from("\u{FEFF}");
-    out.push_str(&tab.columns.join(","));
+    out.push_str(&columns.join(","));
     out.push('\n');
-    for row in &tab.rows {
+    for row in rows {
         let cells: Vec<String> = row
             .iter()
             .map(|v| {
@@ -821,6 +1007,11 @@ pub fn export_csv_to_file(tab: &TableTab) -> Result<String, String> {
     ));
     std::fs::write(&path, out).map_err(|e| format!("导出失败: {e}"))?;
     Ok(path.display().to_string())
+}
+
+/// 导出表页当前结果
+pub fn export_csv_to_file(tab: &TableTab) -> Result<String, String> {
+    export_rows_csv(&tab.columns, &tab.rows)
 }
 
 pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAction> {
@@ -1019,6 +1210,58 @@ impl eframe::App for ShujingApp {
                 }
                 Some(ConnAction::Cancel) => self.conn_modal = None,
                 None => self.conn_modal = Some(modal),
+            }
+        }
+
+        // 未保存修改确认弹窗
+        if self.pending.is_some() {
+            let pending = self.pending.take();
+            let mut resolved: Option<bool> = None; // true=丢弃并继续
+            let desc = match &pending {
+                Some(crate::app::PendingAction::CloseTab(_)) => "关闭该标签".to_string(),
+                Some(crate::app::PendingAction::Proceed(a)) => match &**a {
+                    TabAction::SetPage { .. } => "翻页/刷新".to_string(),
+                    _ => "刷新数据".to_string(),
+                },
+                None => unreachable!(),
+            };
+            egui::Window::new(RichText::new("未保存的修改").size(14.0).strong())
+                .collapsible(false)
+                .resizable(false)
+                .min_width(320.0)
+                .show(ctx, |ui| {
+                    ui.label(RichText::new(format!("有未保存的单元格修改,继续{desc}将丢弃它们。")).size(13.0));
+                    ui.add_space(8.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new("丢弃修改并继续").color(theme::BG).strong())
+                                    .fill(theme::RED)
+                                    .corner_radius(egui::CornerRadius::same(9)),
+                            )
+                            .clicked()
+                        {
+                            resolved = Some(true);
+                        }
+                        if theme::text_button(ui, "取消") {
+                            resolved = Some(false);
+                        }
+                    });
+                });
+            match resolved {
+                Some(true) => {
+                    self.dirty_override = true;
+                    match pending {
+                        Some(crate::app::PendingAction::CloseTab(idx)) => self.close_tab(idx),
+                        Some(crate::app::PendingAction::Proceed(a)) => execute_tab_action(self, *a),
+                        None => {}
+                    }
+                    self.dirty_override = false;
+                }
+                Some(false) => {}
+                None => {
+                    self.pending = pending;
+                }
             }
         }
 

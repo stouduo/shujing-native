@@ -38,7 +38,7 @@ fn main() {
 #[cfg(target_os = "macos")]
 fn force_dark_appearance() {
     use objc2::msg_send;
-    use objc2::runtime::{AnyObject, Class};
+    use objc2::runtime::{AnyClass as Class, AnyObject};
     unsafe {
         let app_name = c"NSApplication";
         let Some(cls) = Class::get(app_name) else { return };

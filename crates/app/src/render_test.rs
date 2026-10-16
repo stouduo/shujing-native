@@ -166,7 +166,7 @@ fn render_sidebar_tabs_empty_state() {
             "drama_book_stat".into(),
         ],
         expanded_db: Some("dramato".into()),
-        tables,
+        tables_by_db: HashMap::from([("dramato".to_string(), tables)]),
         loading: false,
     };
     let mut qtab = QueryTab {
@@ -195,6 +195,9 @@ fn render_sidebar_tabs_empty_state() {
         autoopen_done: true,
         query_seq: 1,
         table_filter: String::new(),
+        pending: None,
+        dirty_override: false,
+        shot: None,
     };
     let cell = std::cell::RefCell::new(Some(app));
     render("sidebar_tabs", 1280.0, 780.0, move |ctx| {
