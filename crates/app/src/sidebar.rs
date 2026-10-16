@@ -120,7 +120,10 @@ impl ShujingApp {
         });
         let cid = c.id.clone();
         self.draw_tree(ui, &cid);
-        ui.add_space(5.0);
+        // 连接块之间发丝分组线(最后一块不画)
+        ui.add_space(4.0);
+        theme::hairline_bottom(ui);
+        ui.add_space(4.0);
     }
 
     fn draw_tree(&mut self, ui: &mut egui::Ui, conn_id: &str) {

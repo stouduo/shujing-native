@@ -42,7 +42,7 @@ pub fn apply(ctx: &egui::Context) {
     let v = &mut style.visuals;
     v.dark_mode = true;
     v.panel_fill = BG;
-    v.faint_bg_color = Color32::from_rgb(0x18, 0x18, 0x1a);
+    v.faint_bg_color = Color32::from_rgb(0x1a, 0x1a, 0x1e);
     v.extreme_bg_color = Color32::from_rgb(0x00, 0x00, 0x00);
     v.window_fill = ELEVATED;
     v.override_text_color = Some(TEXT);

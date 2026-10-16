@@ -154,86 +154,101 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&tab.table).strong().size(15.0));
+                // 左:表名(弱化,标签已表达主体)+ 状态
+                ui.label(RichText::new(&tab.table).size(13.5).strong());
                 if let Some(db) = &tab.database {
-                    ui.label(RichText::new(db).size(12.0).color(theme::MUTED));
+                    ui.label(RichText::new(db).size(11.0).color(theme::MUTED));
                 }
                 if tab.loading {
                     ui.spinner();
-                }
-                if !tab.pk_cols.is_empty() || tab.pk_loaded {
-                    let hint = if tab.pk_cols.is_empty() { "无主键 · 只读" } else { "双击单元格编辑" };
-                    ui.label(RichText::new(hint).size(12.0).color(theme::MUTED));
+                } else if tab.pk_loaded && tab.pk_cols.is_empty() {
+                    ui.label(RichText::new("只读").size(11.0).color(theme::MUTED));
                 }
                 if let Some(err) = &tab.error {
-                    ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(theme::RED));
+                    ui.label(RichText::new(icons::clip(err, 80)).size(11.0).color(theme::RED));
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !tab.loading && theme::text_button(ui, "＋ 新行") {
-                        tab.insert_form = Some(
-                            tab.columns
-                                .iter()
-                                .map(|c| (c.clone(), String::new()))
-                                .collect(),
-                        );
+                ui.add_space(8.0);
+                // 筛选框归左组(贴表名)
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut tab.filter)
+                        .id(egui::Id::new("table-filter"))
+                        .hint_text(RichText::new("筛选 ⌘F").color(theme::MUTED))
+                        .desired_width(140.0)
+                        .font(egui::TextStyle::Body)
+                        .background_color(theme::PANEL),
+                );
+                let apply_filter = resp.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    || (tab.active_filter.is_some()
+                        && ui
+                            .button(RichText::new("✕").color(theme::MUTED))
+                            .on_hover_text("清除筛选")
+                            .clicked());
+                if apply_filter {
+                    if tab.active_filter.is_some() && tab.filter.trim().is_empty() {
+                        tab.active_filter = None;
+                    } else {
+                        tab.active_filter =
+                            (!tab.filter.trim().is_empty()).then(|| tab.filter.trim().to_string());
                     }
-                    if !tab.loading && theme::text_button(ui, "刷新") {
-                        actions.push(TabAction::Reload { tab_id: tab_id.clone() });
+                    tab.page = 1;
+                    actions.push(TabAction::Reload { tab_id: tab_id.clone() });
+                }
+                resp.on_hover_text("回车应用筛选(全列模糊匹配)");
+
+                // 右:保存(有修改时) / 刷新图标钮 / ··· 菜单
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button(
+                        RichText::new("···").size(14.0).color(theme::TEXT2),
+                        |ui| {
+                            if ui.button("＋ 新增行…").clicked() {
+                                tab.insert_form = Some(
+                                    tab.columns
+                                        .iter()
+                                        .map(|c| (c.clone(), String::new()))
+                                        .collect(),
+                                );
+                                ui.close_menu();
+                            }
+                            if ui.button("导出 CSV").clicked() {
+                                actions.push(TabAction::ExportCsv { tab_id: tab_id.clone() });
+                                ui.close_menu();
+                            }
+                            if ui.button("导出 SQL").clicked() {
+                                actions.push(TabAction::ExportSql { tab_id: tab_id.clone() });
+                                ui.close_menu();
+                            }
+                        },
+                    )
+                    .response
+                    .on_hover_text("更多操作");
+                    if !tab.loading {
+                        icons::refresh(ui, theme::TEXT2)
+                            .on_hover_text("刷新 (⌘R)")
+                            .clicked()
+                            && {
+                                actions.push(TabAction::Reload { tab_id: tab_id.clone() });
+                                true
+                            };
                     }
                     if !tab.changes.is_empty() {
                         let n = tab.changes.len();
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new(format!("保存修改 ({n})"))
+                                    RichText::new(format!("保存 {n} ⌘S"))
                                         .color(theme::BG)
-                                        .strong(),
+                                        .strong()
+                                        .size(12.5),
                                 )
                                 .fill(theme::GREEN)
                                 .corner_radius(egui::CornerRadius::same(9)),
                             )
+                            .on_hover_text("保存全部未保存修改")
                             .clicked()
                         {
                             actions.push(TabAction::SaveChanges { tab_id: tab_id.clone() });
                         }
-                    }
-                    if theme::text_button(ui, "导出 CSV") {
-                        actions.push(TabAction::ExportCsv { tab_id: tab_id.clone() });
-                    }
-                    if theme::text_button(ui, "导出 SQL") {
-                        actions.push(TabAction::ExportSql { tab_id: tab_id.clone() });
-                    }
-                    // 筛选:回车应用(全列 LIKE),✕ 清除
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut tab.filter)
-                            .id(egui::Id::new("table-filter"))
-                            .hint_text(RichText::new("筛选 ⌘F").color(theme::MUTED))
-                            .desired_width(150.0)
-                            .font(egui::TextStyle::Body)
-                            .background_color(theme::PANEL),
-                    );
-                    if resp.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                    {
-                        tab.active_filter =
-                            (!tab.filter.trim().is_empty()).then(|| tab.filter.trim().to_string());
-                        tab.page = 1;
-                        actions.push(TabAction::Reload { tab_id: tab_id.clone() });
-                    }
-                    resp.on_hover_text("回车应用筛选(全列模糊匹配)");
-                    if tab.active_filter.is_some()
-                        && ui
-                            .button(RichText::new("✕").color(theme::MUTED))
-                            .on_hover_text("清除筛选")
-                            .clicked()
-                    {
-                        tab.filter.clear();
-                        tab.active_filter = None;
-                        tab.page = 1;
-                        actions.push(TabAction::Reload { tab_id: tab_id.clone() });
                     }
                 });
             });
@@ -284,8 +299,8 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut ps = tab.page_size;
                     egui::ComboBox::from_id_salt("page-size")
-                        .selected_text(format!("{ps} 行/页"))
-                        .width(88.0)
+                        .selected_text(RichText::new(format!("{ps} 行/页")).size(12.0))
+                        .width(92.0)
                         .show_ui(ui, |ui| {
                             for v in [50usize, 100, 200, 500] {
                                 ui.selectable_value(&mut ps, v, format!("{v} 行/页"));
@@ -303,20 +318,29 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                         None => tab.rows.len() < tab.page_size,
                     };
                     if ui
-                        .add_enabled(!at_last && !tab.loading, egui::Button::new("下一页 ›"))
+                        .add_enabled(
+                            !at_last && !tab.loading,
+                            egui::Button::new(RichText::new("›").size(15.0)).small(),
+                        )
+                        .on_hover_text("下一页")
                         .clicked()
                     {
                         actions.push(TabAction::SetPage { tab_id: tab_id.clone(), page: tab.page + 1 });
                     }
                     ui.label(
                         RichText::new(match total_pages {
-                            Some(n) => format!("第 {} / {n} 页", tab.page),
-                            None => format!("第 {} 页", tab.page),
+                            Some(n) => format!("{} / {n}", tab.page),
+                            None => format!("{}", tab.page),
                         })
-                        .size(12.0),
+                        .size(12.0)
+                        .color(theme::TEXT2),
                     );
                     if ui
-                        .add_enabled(!at_first && !tab.loading, egui::Button::new("‹ 上一页"))
+                        .add_enabled(
+                            !at_first && !tab.loading,
+                            egui::Button::new(RichText::new("‹").size(15.0)).small(),
+                        )
+                        .on_hover_text("上一页")
                         .clicked()
                     {
                         actions.push(TabAction::SetPage { tab_id: tab_id.clone(), page: tab.page - 1 });
@@ -575,8 +599,10 @@ fn draw_data_table(
                 .clip(true)
         });
     }
-    tb.header(30.0, |mut header| {
+    tb.header(34.0, |mut header| {
         header.col(|ui| {
+            let r = ui.max_rect();
+            ui.painter().rect_filled(r, 0, theme::PANEL);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(RichText::new("#").size(12.0).color(theme::MUTED));
             });
@@ -589,6 +615,7 @@ fn draw_data_table(
                 label_text.push_str("   ");
             }
             header.col(|ui| {
+                ui.painter().rect_filled(ui.max_rect(), 0, theme::PANEL);
                 let resp = ui.selectable_label(
                     active_sort.is_some(),
                     RichText::new(&label_text).size(12.5).strong(),
@@ -627,7 +654,7 @@ fn draw_data_table(
         let mut row_band: Option<(f32, f32)> = None;
         for (ri, rowdata) in rows.iter().enumerate() {
             let is_editing_row = matches!(*editing, Some((er, _)) if er == ri);
-            let h = if is_editing_row { 32.0 } else { 28.0 };
+            let h = if is_editing_row { 34.0 } else { 32.0 };
             let row_no = (*page - 1) * *page_size + ri + 1;
             body.row(h, |mut row| {
                 row.col(|ui| {

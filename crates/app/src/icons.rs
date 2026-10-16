@@ -30,6 +30,57 @@ pub fn dot(ui: &mut Ui, online: bool) {
 const GREEN_DOT: Color32 = Color32::from_rgb(0x3f, 0xc7, 0x84);
 const MUTED_DOT: Color32 = Color32::from_rgb(0x55, 0x56, 0x5c);
 
+/// 刷新:圆弧箭头
+pub fn refresh(ui: &mut Ui, color: egui::Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::click());
+    let c = rect.center() - egui::vec2(0.0, 0.5);
+    let r = 5.0;
+    let st = Stroke::new(1.5, color);
+    let p = ui.painter();
+    // 300° 弧,起点右上留缺口
+    let mut prev = None;
+    for i in 0..=10 {
+        let a = (-90.0 + i as f32 * 30.0).to_radians();
+        let pt = egui::pos2(c.x + r * a.cos(), c.y + r * a.sin());
+        if let Some(pr) = prev {
+            p.line_segment([pr, pt], st);
+        }
+        prev = Some(pt);
+    }
+    // 缺口处箭头(右上)
+    let tip = egui::pos2(c.x + r * (-60f32).to_radians().cos() - 1.0, c.y + r * (-60f32).to_radians().sin() - 2.5);
+    p.line_segment([tip, tip + egui::vec2(-4.0, 1.0)], st);
+    p.line_segment([tip, tip + egui::vec2(1.5, 4.0)], st);
+    resp
+}
+
+/// 更多 ⋯
+pub fn dots(ui: &mut Ui, color: egui::Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::click());
+    let p = ui.painter();
+    let y = rect.center().y;
+    for dx in [-4.0, 0.0, 4.0] {
+        p.circle_filled(egui::pos2(rect.center().x + dx, y), 1.4, color);
+    }
+    resp
+}
+
+/// ‹ / ›
+pub fn chevron(ui: &mut Ui, left: bool, color: egui::Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::click());
+    let p = ui.painter();
+    let st = Stroke::new(1.6, color);
+    let (c, d) = (rect.center(), 3.0);
+    if left {
+        p.line_segment([egui::pos2(c.x + d * 0.6, c.y - d), egui::pos2(c.x - d * 0.6, c.y)], st);
+        p.line_segment([egui::pos2(c.x - d * 0.6, c.y), egui::pos2(c.x + d * 0.6, c.y + d)], st);
+    } else {
+        p.line_segment([egui::pos2(c.x - d * 0.6, c.y - d), egui::pos2(c.x + d * 0.6, c.y)], st);
+        p.line_segment([egui::pos2(c.x + d * 0.6, c.y), egui::pos2(c.x - d * 0.6, c.y + d)], st);
+    }
+    resp
+}
+
 /// 表图标:小网格
 pub fn table(ui: &mut Ui, active: bool) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
