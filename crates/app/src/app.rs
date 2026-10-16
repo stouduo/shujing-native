@@ -270,9 +270,18 @@ impl ShujingApp {
                 fonts
                     .font_data
                     .insert("cjk".to_owned(), std::sync::Arc::new(data));
-                for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                    fonts.families.entry(family).or_default().push("cjk".to_owned());
-                }
+                // Proportional:cjk 放首位(拉丁也用 PingFang,混排 metrics 统一,
+                // 即 iOS 的字体策略);Monospace:追加末尾仅作中文回落(保等宽拉丁)
+                let _ = fonts
+                    .families
+                    .entry(egui::FontFamily::Proportional)
+                    .or_default()
+                    .insert(0, "cjk".to_owned());
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Monospace)
+                    .or_default()
+                    .push("cjk".to_owned());
                 break;
             }
         }

@@ -82,7 +82,9 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
 fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str) -> (bool, bool) {
     let h = 30.0;
     let font = egui::FontId::proportional(13.0);
-    let measure = ui.painter().layout_no_wrap(title.to_string(), font.clone(), theme::TEXT2);
+    let measure = ui
+        .painter()
+        .layout_no_wrap(title.to_string(), font.clone(), theme::TEXT2);
     let w = (measure.size().x + 48.0).clamp(96.0, 230.0);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
     let mut activated = resp.clicked();
@@ -98,9 +100,13 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str) -> (bool, bool) {
     let p = ui.painter().clone();
     p.rect_filled(rect, egui::CornerRadius::same(8), fill);
     let tcol = if active { theme::TEXT } else { theme::TEXT2 };
-    let galley = p.layout_no_wrap(title.to_string(), font, tcol);
-    let tpos = egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0);
-    p.galley(tpos, galley, tcol);
+    p.text(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        title,
+        font,
+        tcol,
+    );
 
     let crect = egui::Rect::from_center_size(
         egui::pos2(rect.right() - 14.0, rect.center().y),
@@ -629,13 +635,18 @@ fn draw_data_cell(
     } else if hover_row {
         painter.rect_filled(rect, 2, theme::ROW_HOVER);
     }
-    let mut font = egui::FontId::monospace(12.0);
-    if is_null {
-        font.size = 11.5;
-    }
-    let galley = painter.layout_no_wrap(text, font, color);
-    let pos = egui::pos2(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0);
-    painter.galley(pos, galley, color);
+    let font = if is_null {
+        egui::FontId::monospace(11.5)
+    } else {
+        egui::FontId::monospace(12.0)
+    };
+    painter.text(
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        font,
+        color,
+    );
 
     if resp.clicked() {
         *new_selection = Some(Some((ri, ci)));

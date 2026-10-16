@@ -1,6 +1,6 @@
 //! painter 直绘的小图标:系统中文字体缺 ▤/▸ 等字形(显示成方框),符号一律不依赖字体。
 
-use crate::theme::{ACCENT, MUTED, TEXT, TEXT2};
+use crate::theme::{ACCENT, TEXT, TEXT2};
 use egui::{Color32, Pos2, Sense, Shape, Stroke, Ui, Vec2};
 
 /// 展开/收起三角,可点击
@@ -8,7 +8,8 @@ pub fn triangle(ui: &mut Ui, open: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::click());
     let color = if resp.hovered() { TEXT } else { TEXT2 };
     let s = 3.2;
-    let (x, y) = (rect.center().x, rect.center().y);
+    // PingFang 行框 metrics 使文字墨迹中心高于几何中心,图标随之上移对齐
+    let (x, y) = (rect.center().x, rect.center().y - 1.5);
     let pts = if open {
         // ▼
         vec![Pos2::new(x - s, y - s / 2.0), Pos2::new(x + s, y - s / 2.0), Pos2::new(x, y + s)]
@@ -23,7 +24,7 @@ pub fn triangle(ui: &mut Ui, open: bool) -> egui::Response {
 /// 连接状态圆点
 pub fn dot(ui: &mut Ui, online: bool) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
-    ui.painter().circle_filled(rect.center(), 4.0, if online { GREEN_DOT } else { MUTED_DOT });
+    ui.painter().circle_filled(rect.center() - egui::vec2(0.0, 1.5), 4.0, if online { GREEN_DOT } else { MUTED_DOT });
 }
 
 const GREEN_DOT: Color32 = Color32::from_rgb(0x3f, 0xc7, 0x84);
@@ -35,8 +36,8 @@ pub fn table(ui: &mut Ui, active: bool) {
     let color = if active { ACCENT } else { TEXT2 };
     let p = ui.painter();
     let st = Stroke::new(1.0, color);
-    p.rect_stroke(rect.shrink(1.5), egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
-    let mid_y = rect.center().y;
+    p.rect_stroke(rect.shrink(1.5).translate(egui::vec2(0.0, -1.5)), egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
+    let mid_y = rect.center().y - 1.5;
     p.line_segment([Pos2::new(rect.left() + 1.5, mid_y), Pos2::new(rect.right() - 1.5, mid_y)], st);
     let vx = rect.left() + 1.5 + (rect.width() - 3.0) * 0.42;
     p.line_segment([Pos2::new(vx, rect.top() + 1.5), Pos2::new(vx, mid_y)], st);
@@ -49,7 +50,7 @@ pub fn structure(ui: &mut Ui) -> egui::Response {
     let p = ui.painter();
     let st = Stroke::new(1.2, color);
     for dy in [-3.5, 0.0, 3.5] {
-        let y = rect.center().y + dy;
+        let y = rect.center().y - 1.5 + dy;
         let shrink = if dy == 0.0 { 0.0 } else { 1.5 };
         p.line_segment(
             [Pos2::new(rect.left() + 1.0 + shrink, y), Pos2::new(rect.right() - 1.0 - shrink, y)],

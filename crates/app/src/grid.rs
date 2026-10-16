@@ -98,7 +98,11 @@ fn draw_readonly_cell(ui: &mut egui::Ui, v: &Option<String>) {
     } else {
         egui::FontId::monospace(12.0)
     };
-    let galley = painter.layout_no_wrap(text, font, color);
-    let pos = egui::pos2(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0);
-    painter.galley(pos, galley, color);
+    painter.text(
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        font,
+        color,
+    );
 }
