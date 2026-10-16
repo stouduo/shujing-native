@@ -42,7 +42,7 @@ pub fn result_rows(
             }
             tb.header(34.0, |mut header| {
                 header.col(|ui| {
-                    ui.painter().rect_filled(ui.max_rect(), 0, theme::PANEL);
+                    ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 0.0)), 0, theme::PANEL);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(egui::RichText::new("#").size(11.5).color(theme::MUTED));
                     });
@@ -50,7 +50,7 @@ pub fn result_rows(
                 });
                 for c in columns {
                     header.col(|ui| {
-                        ui.painter().rect_filled(ui.max_rect(), 0, theme::PANEL);
+                        ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 0.0)), 0, theme::PANEL);
                         ui.label(egui::RichText::new(c).size(12.5).strong());
                         hairline(ui, theme::BORDER);
                     });

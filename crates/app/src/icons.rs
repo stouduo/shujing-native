@@ -30,6 +30,92 @@ pub fn dot(ui: &mut Ui, online: bool) {
 const GREEN_DOT: Color32 = Color32::from_rgb(0x3f, 0xc7, 0x84);
 const MUTED_DOT: Color32 = Color32::from_rgb(0x55, 0x56, 0x5c);
 
+/// 标签页类型 glyph:表(网格)/查询(播放)/结构(横线);绝对位置绘制
+pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_y: f32) {
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(left, center_y - 6.0),
+        Vec2::splat(12.0),
+    );
+    let p = ui.painter();
+    let st = Stroke::new(1.1, color);
+    match kind {
+        0 => {
+            // 表:圆角矩形 + 中横 + 半竖
+            p.rect_stroke(rect.shrink(1.0), egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
+            let mid_y = rect.center().y;
+            p.line_segment([egui::pos2(rect.left() + 1.0, mid_y), egui::pos2(rect.right() - 1.0, mid_y)], st);
+            let vx = rect.left() + 1.0 + (rect.width() - 2.0) * 0.45;
+            p.line_segment([egui::pos2(vx, rect.top() + 1.0), egui::pos2(vx, mid_y)], st);
+        }
+        1 => {
+            // 查询:小三角
+            let c = rect.center();
+            let s = 3.2;
+            p.add(Shape::convex_polygon(
+                vec![egui::pos2(c.x - s / 2.0, c.y - s), egui::pos2(c.x - s / 2.0, c.y + s), egui::pos2(c.x + s, c.y)],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        _ => {
+            // 结构:三横线
+            let c = rect.center();
+            for dy in [-3.0, 0.0, 3.0] {
+                let y = c.y + dy;
+                let shrink = if dy == 0.0 { 0.0 } else { 1.5 };
+                p.line_segment(
+                    [egui::pos2(rect.left() + 1.0 + shrink, y), egui::pos2(rect.right() - 1.0 - shrink, y)],
+                    st,
+                );
+            }
+        }
+    }
+}
+
+/// 放大镜 glyph(搜索框内)
+pub fn magnifier(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    let st = Stroke::new(1.3, color);
+    p.circle_stroke(egui::pos2(center.x - 1.0, center.y - 1.0), 3.4, st);
+    p.line_segment(
+        [egui::pos2(center.x + 1.8, center.y + 1.8), egui::pos2(center.x + 5.0, center.y + 5.0)],
+        st,
+    );
+}
+
+/// iOS 式搜索框:圆角底 + 内嵌放大镜 + 无框输入
+pub fn search_box(
+    ui: &mut Ui,
+    id_salt: &str,
+    text: &mut String,
+    placeholder: &str,
+    width: f32,
+) -> egui::Response {
+    let h = 26.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 8, crate::theme::BG);
+    magnifier(ui.painter(), egui::pos2(rect.left() + 12.0, rect.center().y), crate::theme::MUTED);
+    let inner = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 24.0, rect.top()),
+        egui::Vec2::new(width - 30.0, h),
+    );
+    let resp = ui
+        .allocate_new_ui(
+            egui::UiBuilder::new().max_rect(inner),
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(text)
+                        .id(egui::Id::new(id_salt))
+                        .hint_text(egui::RichText::new(placeholder).color(crate::theme::MUTED))
+                        .desired_width(inner.width())
+                        .frame(false)
+                        .font(egui::TextStyle::Body),
+                )
+            },
+        )
+        .inner;
+    resp
+}
+
 /// 刷新:圆弧箭头
 pub fn refresh(ui: &mut Ui, color: egui::Color32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::click());

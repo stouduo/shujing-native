@@ -49,7 +49,12 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for i in 0..app.tabs.len() {
                     let title = app.tabs[i].title.clone();
-                    let (a, c) = draw_one_tab(ui, i == app.active_tab, &title);
+                    let glyph = match &app.tabs[i].kind {
+                        TabKind::Table(_) => 0u8,
+                        TabKind::Query(_) => 1,
+                        TabKind::Structure(_) => 2,
+                    };
+                    let (a, c) = draw_one_tab(ui, i == app.active_tab, &title, glyph);
                     if a {
                         activate = Some(i);
                     }
@@ -87,13 +92,13 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
 }
 
 /// 自绘单个标签:激活态浅底+底部强调线,悬停显关闭钮;返回 (激活, 关闭)
-fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str) -> (bool, bool) {
+fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (bool, bool) {
     let h = 30.0;
     let font = egui::FontId::proportional(13.0);
     let measure = ui
         .painter()
         .layout_no_wrap(title.to_string(), font.clone(), theme::TEXT2);
-    let w = (measure.size().x + 48.0).clamp(96.0, 230.0);
+    let w = (measure.size().x + 60.0).clamp(104.0, 230.0);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
     let mut activated = resp.clicked();
     let mut closed = resp.middle_clicked();
@@ -118,8 +123,15 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str) -> (bool, bool) {
         p.rect_filled(rect, egui::CornerRadius::same(8), fill);
     }
     let tcol = if active { theme::TEXT } else { theme::TEXT2 };
+    icons::tab_glyph(
+        ui,
+        glyph,
+        if active { theme::ACCENT } else { theme::MUTED },
+        rect.left() + 8.0,
+        rect.center().y,
+    );
     p.text(
-        egui::pos2(rect.left() + 10.0, rect.center().y),
+        egui::pos2(rect.left() + 24.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         title,
         font,
@@ -171,7 +183,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 // 左:表名(弱化,标签已表达主体)+ 状态
                 ui.label(RichText::new(&tab.table).size(13.5).strong());
                 if let Some(db) = &tab.database {
-                    ui.label(RichText::new(db).size(11.0).color(theme::MUTED));
+                    icons::chip(ui, db, theme::TEXT2);
                 }
                 if tab.loading {
                     ui.spinner();
@@ -182,15 +194,8 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     ui.label(RichText::new(icons::clip(err, 80)).size(11.0).color(theme::RED));
                 }
                 ui.add_space(8.0);
-                // 筛选框归左组(贴表名)
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut tab.filter)
-                        .id(egui::Id::new("table-filter"))
-                        .hint_text(RichText::new("筛选 ⌘F").color(theme::MUTED))
-                        .desired_width(140.0)
-                        .font(egui::TextStyle::Body)
-                        .background_color(theme::PANEL),
-                );
+                // 筛选框(iOS 搜索框:圆角底 + 内嵌放大镜)
+                let resp = icons::search_box(ui, "table-filter", &mut tab.filter, "筛选 ⌘F", 150.0);
                 let apply_filter = resp.lost_focus()
                     && ui.input(|i| i.key_pressed(egui::Key::Enter))
                     || (tab.active_filter.is_some()
@@ -615,7 +620,7 @@ fn draw_data_table(
     }
     tb.header(34.0, |mut header| {
         header.col(|ui| {
-            let r = ui.max_rect();
+            let r = ui.max_rect().expand2(egui::vec2(4.0, 0.0));
             ui.painter().rect_filled(r, 0, theme::PANEL);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(RichText::new("#").size(12.0).color(theme::MUTED));
@@ -629,7 +634,7 @@ fn draw_data_table(
                 label_text.push_str("   ");
             }
             header.col(|ui| {
-                ui.painter().rect_filled(ui.max_rect(), 0, theme::PANEL);
+                ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 0.0)), 0, theme::PANEL);
                 let resp = ui.selectable_label(
                     active_sort.is_some(),
                     RichText::new(&label_text).size(12.5).strong(),

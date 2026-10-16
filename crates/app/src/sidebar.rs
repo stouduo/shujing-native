@@ -61,12 +61,7 @@ impl ShujingApp {
             .values()
             .any(|t| t.online && !t.tables_by_db.values().all(|v| v.is_empty()));
         if has_tables {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.table_filter)
-                    .hint_text(RichText::new("搜索表…").color(theme::MUTED))
-                    .desired_width(f32::INFINITY)
-                    .background_color(theme::PANEL),
-            );
+            icons::search_box(ui, "side-table-search", &mut self.table_filter, "搜索表", ui.available_width());
             ui.add_space(4.0);
         }
 
@@ -91,6 +86,17 @@ impl ShujingApp {
                     .strong()
                     .color(if online { theme::TEXT } else { theme::TEXT2}),
             );
+            let ver = self
+                .trees
+                .get(&c.id)
+                .filter(|t| t.online)
+                .map(|t| t.version.clone())
+                .unwrap_or_default();
+            if !ver.is_empty() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(&ver).size(10.0).monospace().color(theme::MUTED));
+                });
+            }
             let tip = if online { "点击断开" } else { "点击连接" };
             let hovered = resp.hovered();
             if resp.clicked() {
