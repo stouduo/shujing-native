@@ -15,6 +15,7 @@ fn render(name: &str, w: f32, h: f32, mut draw: impl FnMut(&egui::Context) + 'st
     let setup_done = std::cell::Cell::new(false);
     let mut harness = Harness::builder()
         .with_size(egui::vec2(w, h))
+        .with_pixels_per_point(2.0)
         .build(move |ctx| {
             if !setup_done.get() {
                 setup_done.set(true);
@@ -59,8 +60,31 @@ fn fake_table_tab() -> TableTab {
         "access_urls".into(),
         "status".into(),
         "created".into(),
+        "updated".into(),
+        "creator".into(),
+        "department".into(),
+        "level".into(),
+        "remark".into(),
+        "ext_config".into(),
     ];
-    tab.rows = fake_rows(40);
+    tab.rows = (0..24)
+        .map(|i| {
+            vec![
+                Some((i + 1).to_string()),
+                Some(format!("role_{i}")),
+                if i % 4 == 0 { None } else { Some(format!("内容审核员 {i} 组")) },
+                Some("/admin/backend/menu_v2,/admin/backend/user_role_list,/admin/resource_assess,/admin/series_resource/search,/admin/episode_series/detail".into()),
+                Some(if i % 3 == 0 { "1" } else { "2" }.to_string()),
+                Some("1731383330".into()),
+                Some("1731470000".into()),
+                if i % 5 == 0 { None } else { Some(format!("zhangwei{i}@corp.io")) },
+                Some("内容运营部".into()),
+                Some(format!("L{}", i % 6)),
+                None,
+                Some(r#"{"auto_review":true,"threshold":0.85,"tags":["首推","热搜"]}"#.into()),
+            ]
+        })
+        .collect();
     tab.pk_cols = vec!["id".into()];
     tab.total = Some(312);
     tab.page = 1;

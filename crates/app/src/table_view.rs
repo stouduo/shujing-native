@@ -157,43 +157,9 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 if let Some(err) = &tab.error {
                     ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(theme::RED));
                 }
-                ui.add_space(6.0);
-                // 筛选:回车应用(全列 LIKE),⌫ 清除
-                let filter_w = 180.0;
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut tab.filter)
-                        .id(egui::Id::new("table-filter"))
-                        .hint_text(RichText::new("筛选行… (⌘F)").color(theme::MUTED))
-                        .desired_width(filter_w)
-                        .font(egui::TextStyle::Body),
-                );
-                if resp.lost_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                {
-                    tab.active_filter = (!tab.filter.trim().is_empty()).then(|| tab.filter.trim().to_string());
-                    tab.page = 1;
-                    actions.push(TabAction::Reload { tab_id: tab_id.clone() });
-                }
-                if tab.active_filter.is_some() {
-                    if ui
-                        .button(RichText::new("✕").color(theme::MUTED))
-                        .on_hover_text("清除筛选")
-                        .clicked()
-                    {
-                        tab.filter.clear();
-                        tab.active_filter = None;
-                        tab.page = 1;
-                        actions.push(TabAction::Reload { tab_id: tab_id.clone() });
-                    }
-                } else if !tab.filter.is_empty() {
-                    ui.label(RichText::new("回车筛选").size(12.0).color(theme::MUTED));
-                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if theme::text_button(ui, "导出 SQL") {
-                        actions.push(TabAction::ExportSql { tab_id: tab_id.clone() });
-                    }
-                    if theme::text_button(ui, "导出 CSV") {
-                        actions.push(TabAction::ExportCsv { tab_id: tab_id.clone() });
+                    if !tab.loading && theme::text_button(ui, "刷新") {
+                        actions.push(TabAction::Reload { tab_id: tab_id.clone() });
                     }
                     if !tab.changes.is_empty() {
                         let n = tab.changes.len();
@@ -212,7 +178,42 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                             actions.push(TabAction::SaveChanges { tab_id: tab_id.clone() });
                         }
                     }
-                    if !tab.loading && theme::text_button(ui, "刷新") {
+                    if theme::text_button(ui, "导出 CSV") {
+                        actions.push(TabAction::ExportCsv { tab_id: tab_id.clone() });
+                    }
+                    if theme::text_button(ui, "导出 SQL") {
+                        actions.push(TabAction::ExportSql { tab_id: tab_id.clone() });
+                    }
+                    // 筛选:回车应用(全列 LIKE),✕ 清除
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut tab.filter)
+                            .id(egui::Id::new("table-filter"))
+                            .hint_text(RichText::new("筛选 ⌘F").color(theme::MUTED))
+                            .desired_width(150.0)
+                            .font(egui::TextStyle::Body)
+                            .background_color(theme::PANEL),
+                    );
+                    if resp.lost_focus()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    {
+                        tab.active_filter =
+                            (!tab.filter.trim().is_empty()).then(|| tab.filter.trim().to_string());
+                        tab.page = 1;
+                        actions.push(TabAction::Reload { tab_id: tab_id.clone() });
+                    }
+                    resp.on_hover_text("回车应用筛选(全列模糊匹配)");
+                    if tab.active_filter.is_some()
+                        && ui
+                            .button(RichText::new("✕").color(theme::MUTED))
+                            .on_hover_text("清除筛选")
+                            .clicked()
+                    {
+                        tab.filter.clear();
+                        tab.active_filter = None;
+                        tab.page = 1;
                         actions.push(TabAction::Reload { tab_id: tab_id.clone() });
                     }
                 });
@@ -331,143 +332,36 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
         {
             let sc = &mut sort_click;
             let cr = &mut commit;
-            let srt = &*sort;
-
             let pointer = ui.input(|i| i.pointer.latest_pos());
-            let mut tb = egui_extras::TableBuilder::new(ui)
-                .id_salt("data-table")
-                .striped(true)
-                .sense(egui::Sense::click())
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .vscroll(true)
-                .column(Column::exact(52.0));
-            for (i, _c) in columns.iter().enumerate() {
-                tb = tb.column(if i + 1 == columns.len() {
-                    Column::remainder().clip(true)
-                } else {
-                    Column::initial(170.0)
-                        .resizable(true)
-                        .clip(true)
-                        .at_least(56.0)
+            // egui_extras 0.31 表格自身不支持横向滚动(硬编码 hscroll=false),
+            // 宽表会被压扁 → 外层包水平滚动;滚动条隐藏(iOS 式,触控板/滚轮滚动)
+            let col_widths = suggested_widths(rows, columns);
+            let desired_w = 52.0 + col_widths.iter().sum::<f32>() + 200.0;
+            egui::ScrollArea::horizontal()
+                .id_salt("data-hscroll")
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width().max(desired_w));
+                    draw_data_table(
+                        ui,
+                        pointer,
+                        rows,
+                        columns,
+                        editing,
+                        draft,
+                        changes,
+                        pk_cols,
+                        selected,
+                        page,
+                        page_size,
+                        sort,
+                        sc,
+                        cr,
+                        &mut new_selection,
+                        &mut copy_text,
+                    );
                 });
-            }
-            tb.header(28.0, |mut header| {
-                header.col(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("#").size(12.0).color(theme::MUTED));
-                    });
-                });
-                for c in columns.iter() {
-                    let active_sort =
-                        srt.as_ref().and_then(|(scn, asc)| (*scn == *c).then_some(*asc));
-                    let mut label_text = c.clone();
-                    if active_sort.is_some() {
-                        label_text.push_str("   ");
-                    }
-                    header.col(|ui| {
-                        let resp = ui.selectable_label(
-                            active_sort.is_some(),
-                            RichText::new(&label_text).size(13.0).strong(),
-                        );
-                        if resp.clicked() {
-                            *sc = Some(c.clone());
-                        }
-                        if let Some(asc) = active_sort {
-                            let p = ui.painter();
-                            let c0 = resp.rect.right_center() - egui::vec2(9.0, 0.0);
-                            let s = 3.2;
-                            let pts = if asc {
-                                vec![
-                                    egui::pos2(c0.x - s, c0.y + s / 2.0),
-                                    egui::pos2(c0.x + s, c0.y + s / 2.0),
-                                    egui::pos2(c0.x, c0.y - s),
-                                ]
-                            } else {
-                                vec![
-                                    egui::pos2(c0.x - s, c0.y - s / 2.0),
-                                    egui::pos2(c0.x + s, c0.y - s / 2.0),
-                                    egui::pos2(c0.x, c0.y + s),
-                                ]
-                            };
-                            p.add(egui::Shape::convex_polygon(pts, theme::ACCENT, egui::Stroke::NONE));
-                        }
-                    });
-                }
-            })
-            .body(|mut body| {
-                // 行悬停:由行号列的 y 波段判定,整行单元格共享
-                let mut row_band: Option<(f32, f32)> = None;
-                for (ri, rowdata) in rows.iter().enumerate() {
-                    let is_editing_row = matches!(*editing, Some((er, _)) if er == ri);
-                    let h = if is_editing_row { 32.0 } else { 26.0 };
-                    let row_no = (*page - 1) * *page_size + ri + 1;
-                    body.row(h, |mut row| {
-                        row.col(|ui| {
-                            let band = row_band.get_or_insert((ui.max_rect().top(), ui.max_rect().bottom()));
-                            band.0 = band.0.min(ui.max_rect().top());
-                            band.1 = band.1.max(ui.max_rect().bottom());
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(
-                                    RichText::new(format!("{row_no}"))
-                                        .size(12.0)
-                                        .color(theme::MUTED),
-                                );
-                            });
-                        });
-                        let hover_row = row_band
-                            .zip(pointer)
-                            .map(|((top, bot), p)| p.y >= top && p.y < bot)
-                            .unwrap_or(false);
-                        for (ci, col_name) in columns.iter().enumerate() {
-                            let cell_editing =
-                                matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
-                            let changed = changes
-                                .iter()
-                                .any(|(r, cn, _)| *r == ri && cn == col_name);
-                            if cell_editing {
-                                row.col(|ui| {
-                                    let resp = ui.add(
-                                        egui::TextEdit::singleline(draft)
-                                            .font(egui::TextStyle::Monospace)
-                                            .desired_width(ui.available_width().max(120.0)),
-                                    );
-                                    resp.request_focus();
-                                    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                    if esc {
-                                        *editing = None;
-                                    } else if resp.lost_focus() || enter {
-                                        *cr = Some((ri, ci, draft.clone()));
-                                        *editing = None;
-                                    }
-                                });
-                            } else {
-                                let v = &rowdata[ci];
-                                let is_sel = matches!(*selected, Some((sr, sc)) if sr == ri && sc == ci);
-                                row.col(|ui| {
-                                    draw_data_cell(
-                                        ui,
-                                        v,
-                                        changed,
-                                        !pk_cols.is_empty(),
-                                        ri,
-                                        ci,
-                                        is_sel,
-                                        hover_row,
-                                        editing,
-                                        draft,
-                                        selected,
-                                        &mut new_selection,
-                                        &mut copy_text,
-                                        columns,
-                                        rowdata,
-                                    );
-                                });
-                            }
-                        }
-                    });
-                }
-            });
         }
 
         // 单击选中 / ⌘C 复制选中格
@@ -510,6 +404,197 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
     actions
 }
 
+
+
+/// 启发式列宽:表头与数据采样(前 60 行最长值)的字符宽,等宽字体 ~7.5px/字符
+pub(crate) fn suggested_widths(
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+) -> Vec<f32> {
+    let sample = rows.iter().take(60);
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let head = c.chars().count() as f32;
+            let data = sample
+                .clone()
+                .filter_map(|r| r.get(i).and_then(|v| v.as_deref()))
+                .map(|v| v.chars().count() as f32)
+                .fold(0.0_f32, f32::max);
+            (head.max(data) * 7.5 + 34.0).clamp(64.0, 360.0)
+        })
+        .collect()
+}
+
+/// 数据表(TableBuilder):表头粘顶 + 行发丝线(iOS 列表式);由水平 ScrollArea 包裹
+#[allow(clippy::too_many_arguments)]
+fn draw_data_table(
+    ui: &mut egui::Ui,
+    pointer: Option<egui::Pos2>,
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+    editing: &mut Option<(usize, usize)>,
+    draft: &mut String,
+    changes: &mut Vec<(usize, String, Option<String>)>,
+    pk_cols: &[String],
+    selected: &mut Option<(usize, usize)>,
+    page: &usize,
+    page_size: &usize,
+    sort: &mut Option<(String, bool)>,
+    sc: &mut Option<String>,
+    cr: &mut Option<(usize, usize, String)>,
+    new_selection: &mut Option<Option<(usize, usize)>>,
+    copy_text: &mut Option<String>,
+) {
+    let srt = &*sort;
+    let col_widths = suggested_widths(rows, columns);
+    let mut tb = egui_extras::TableBuilder::new(ui)
+        .id_salt("data-table")
+        .striped(true)
+        .sense(egui::Sense::click())
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .vscroll(true)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .column(Column::exact(52.0));
+    for (i, _c) in columns.iter().enumerate() {
+        tb = tb.column(if i + 1 == columns.len() {
+            Column::remainder().clip(true)
+        } else {
+            Column::auto_with_initial_suggestion(col_widths[i])
+                .at_least(56.0)
+                .at_most(360.0)
+                .resizable(true)
+                .clip(true)
+        });
+    }
+    tb.header(30.0, |mut header| {
+        header.col(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new("#").size(12.0).color(theme::MUTED));
+            });
+            hairline_cell_bottom(ui, theme::BORDER);
+        });
+        for c in columns.iter() {
+            let active_sort = srt.as_ref().and_then(|(scn, asc)| (*scn == *c).then_some(*asc));
+            let mut label_text = c.clone();
+            if active_sort.is_some() {
+                label_text.push_str("   ");
+            }
+            header.col(|ui| {
+                let resp = ui.selectable_label(
+                    active_sort.is_some(),
+                    RichText::new(&label_text).size(12.5).strong(),
+                );
+                if resp.clicked() {
+                    *sc = Some(c.clone());
+                }
+                if let Some(asc) = active_sort {
+                    let p = ui.painter();
+                    let c0 = resp.rect.right_center() - egui::vec2(9.0, 0.0);
+                    let s = 3.2;
+                    let pts = if asc {
+                        vec![
+                            egui::pos2(c0.x - s, c0.y + s / 2.0),
+                            egui::pos2(c0.x + s, c0.y + s / 2.0),
+                            egui::pos2(c0.x, c0.y - s),
+                        ]
+                    } else {
+                        vec![
+                            egui::pos2(c0.x - s, c0.y - s / 2.0),
+                            egui::pos2(c0.x + s, c0.y - s / 2.0),
+                            egui::pos2(c0.x, c0.y + s),
+                        ]
+                    };
+                    p.add(egui::Shape::convex_polygon(pts, theme::ACCENT, egui::Stroke::NONE));
+                }
+                hairline_cell_bottom(ui, theme::BORDER);
+            });
+        }
+    })
+    .body(|mut body| {
+        // 行悬停:由行号列的 y 波段判定,整行单元格共享
+        let mut row_band: Option<(f32, f32)> = None;
+        for (ri, rowdata) in rows.iter().enumerate() {
+            let is_editing_row = matches!(*editing, Some((er, _)) if er == ri);
+            let h = if is_editing_row { 32.0 } else { 28.0 };
+            let row_no = (*page - 1) * *page_size + ri + 1;
+            body.row(h, |mut row| {
+                row.col(|ui| {
+                    let band = row_band.get_or_insert((ui.max_rect().top(), ui.max_rect().bottom()));
+                    band.0 = band.0.min(ui.max_rect().top());
+                    band.1 = band.1.max(ui.max_rect().bottom());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(format!("{row_no}"))
+                                .size(12.0)
+                                .color(theme::MUTED),
+                        );
+                    });
+                    hairline_cell_bottom(ui, theme::ROW_LINE);
+                });
+                let hover_row = row_band
+                    .zip(pointer)
+                    .map(|((top, bot), p)| p.y >= top && p.y < bot)
+                    .unwrap_or(false);
+                for (ci, col_name) in columns.iter().enumerate() {
+                    let cell_editing =
+                        matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
+                    let changed = changes.iter().any(|(r, cn, _)| *r == ri && cn == col_name);
+                    if cell_editing {
+                        row.col(|ui| {
+                            let resp = ui.add(
+                                egui::TextEdit::singleline(draft)
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(ui.available_width().max(120.0)),
+                            );
+                            resp.request_focus();
+                            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if esc {
+                                *editing = None;
+                            } else if resp.lost_focus() || enter {
+                                *cr = Some((ri, ci, draft.clone()));
+                                *editing = None;
+                            }
+                        });
+                    } else {
+                        let v = &rowdata[ci];
+                        let is_sel = matches!(*selected, Some((sr, sc)) if sr == ri && sc == ci);
+                        row.col(|ui| {
+                            draw_data_cell(
+                                ui,
+                                v,
+                                changed,
+                                !pk_cols.is_empty(),
+                                ri,
+                                ci,
+                                is_sel,
+                                hover_row,
+                                editing,
+                                draft,
+                                selected,
+                                new_selection,
+                                copy_text,
+                                columns,
+                                rowdata,
+                            );
+                        });
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// 单元格底部发丝线(每格画自己的一段,拼成整行分隔)
+fn hairline_cell_bottom(ui: &egui::Ui, color: egui::Color32) {
+    let r = ui.max_rect();
+    let y = r.bottom() - 0.5;
+    ui.painter()
+        .line_segment([egui::pos2(r.left(), y), egui::pos2(r.right(), y)], egui::Stroke::new(1.0, color));
+}
+
 /// 普通数据格:满格绘制;单击选中,双击编辑(有主键),右键菜单
 #[allow(clippy::too_many_arguments)]
 fn draw_data_cell(
@@ -531,6 +616,7 @@ fn draw_data_cell(
 ) {
     let text = icons::cell_text(v, 2000);
     let color = icons::cell_text_color(v, changed);
+    let is_null = v.is_none();
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
     let painter = ui.painter().with_clip_rect(rect);
     if changed {
@@ -543,7 +629,11 @@ fn draw_data_cell(
     } else if hover_row {
         painter.rect_filled(rect, 2, theme::ROW_HOVER);
     }
-    let galley = painter.layout_no_wrap(text, egui::FontId::monospace(12.0), color);
+    let mut font = egui::FontId::monospace(12.0);
+    if is_null {
+        font.size = 11.5;
+    }
+    let galley = painter.layout_no_wrap(text, font, color);
     let pos = egui::pos2(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0);
     painter.galley(pos, galley, color);
 

@@ -101,7 +101,7 @@ pub fn cell_text_color(v: &Option<String>, changed: bool) -> Color32 {
     if changed {
         crate::theme::CHANGE_FG
     } else if v.is_none() {
-        MUTED
+        Color32::from_rgb(0x55, 0x55, 0x5a)
     } else {
         TEXT2
     }
@@ -110,6 +110,6 @@ pub fn cell_text_color(v: &Option<String>, changed: bool) -> Color32 {
 pub fn cell_text(v: &Option<String>, max_chars: usize) -> String {
     match v {
         Some(s) => clip(s, max_chars),
-        None => "NULL".into(),
+        None => "null".into(),
     }
 }

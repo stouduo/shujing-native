@@ -66,7 +66,8 @@ impl ShujingApp {
             ui.add(
                 egui::TextEdit::singleline(&mut self.table_filter)
                     .hint_text(RichText::new("搜索表…").color(theme::MUTED))
-                    .desired_width(f32::INFINITY),
+                    .desired_width(f32::INFINITY)
+                    .background_color(theme::PANEL),
             );
             ui.add_space(4.0);
         }

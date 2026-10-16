@@ -21,9 +21,12 @@ pub const CHANGE_BG: Color32 = Color32::from_rgb(0x0f, 0x2a, 0x1b);
 pub const CHANGE_FG: Color32 = Color32::from_rgb(0x7c, 0xe0, 0xa8);
 
 /// 行悬停/格悬停/选中格(预乘,白/系统蓝低透明度)
-pub const ROW_HOVER: Color32 = Color32::from_rgba_premultiplied(8, 8, 8, 10);
+pub const ROW_HOVER: Color32 = Color32::from_rgba_premultiplied(16, 16, 18, 22);
 pub const CELL_HOVER: Color32 = Color32::from_rgba_premultiplied(22, 22, 22, 24);
 pub const CELL_SELECT: Color32 = Color32::from_rgba_premultiplied(2, 29, 56, 64);
+
+/// 数据行发丝线(比 separator 更轻,密集行场景不抢视觉)
+pub const ROW_LINE: Color32 = Color32::from_rgb(0x22, 0x22, 0x24);
 
 /// 侧栏当前表选中行(系统蓝浸染)
 pub const ACTIVE_ROW: Color32 = Color32::from_rgba_premultiplied(2, 29, 56, 56);
@@ -39,7 +42,7 @@ pub fn apply(ctx: &egui::Context) {
     let v = &mut style.visuals;
     v.dark_mode = true;
     v.panel_fill = BG;
-    v.faint_bg_color = Color32::from_rgb(0x14, 0x14, 0x16);
+    v.faint_bg_color = Color32::from_rgb(0x18, 0x18, 0x1a);
     v.extreme_bg_color = Color32::from_rgb(0x00, 0x00, 0x00);
     v.window_fill = ELEVATED;
     v.override_text_color = Some(TEXT);
