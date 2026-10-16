@@ -199,6 +199,16 @@ pub struct ShujingApp {
     pub query_seq: usize,
     /// 侧栏表名搜索
     pub table_filter: String,
+    /// 自截图模式(SHUJING_SCREENSHOT=<路径>)
+    pub shot: Option<ShotState>,
+}
+
+/// 自截图流程状态:数据就绪后请求视口截图,落盘后退出
+pub struct ShotState {
+    pub path: std::path::PathBuf,
+    pub frames: u32,
+    pub ready_at: Option<u32>,
+    pub sent: bool,
 }
 
 impl ShujingApp {
@@ -224,6 +234,14 @@ impl ShujingApp {
             autoopen_done: false,
             query_seq: 0,
             table_filter: String::new(),
+            shot: std::env::var("SHUJING_SCREENSHOT")
+                .ok()
+                .map(|path| ShotState {
+                    path: path.into(),
+                    frames: 0,
+                    ready_at: None,
+                    sent: false,
+                }),
         }
     }
 
@@ -267,6 +285,46 @@ impl ShujingApp {
         let mmap = unsafe { memmap2::Mmap::map(&file).ok()? };
         let leaked = Box::leak(Box::new(mmap));
         Some(unsafe { std::slice::from_raw_parts(leaked.as_ptr(), leaked.len()) })
+    }
+
+    /// 自截图:每帧驱动重绘;表数据就绪后延时 20 帧(字体/布局稳定)请求截图,
+    /// Event::Screenshot 回来后写 TGA 并关窗。10 秒兜底强制截。
+    pub fn screenshot_tick(&mut self, ctx: &egui::Context) {
+        let Some(shot) = &mut self.shot else { return };
+        ctx.request_repaint();
+        let mut image: Option<std::sync::Arc<egui::ColorImage>> = None;
+        ctx.input(|i| {
+            for e in &i.events {
+                if let egui::Event::Screenshot { image: img, .. } = e {
+                    image = Some(img.clone());
+                }
+            }
+        });
+        if let Some(img) = image {
+            match write_tga(&img, &shot.path) {
+                Ok(()) => eprintln!("screenshot -> {}", shot.path.display()),
+                Err(e) => eprintln!("screenshot write failed: {e}"),
+            }
+            self.shot = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        shot.frames += 1;
+        let data_ready = self
+            .tabs
+            .iter()
+            .any(|t| matches!(&t.kind, TabKind::Table(tt) if !tt.rows.is_empty()));
+        if data_ready && shot.ready_at.is_none() {
+            shot.ready_at = Some(shot.frames);
+        }
+        let should_send = match shot.ready_at {
+            Some(r) => shot.frames > r + 20,
+            None => shot.frames > 600,
+        };
+        if should_send && !shot.sent {
+            shot.sent = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+        }
     }
 
     pub fn toast_error(&mut self, msg: impl Into<String>) {
@@ -729,4 +787,27 @@ mod tests {
         let pg = build_like_filter(&pg_cols, "x", false);
         assert!(pg.contains("\"na\"\"me\" LIKE '%x%'"), "{pg}");
     }
+}
+
+/// 写未压缩 TGA(32bit BGRA,顶左原点)
+fn write_tga(img: &egui::ColorImage, path: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    let (w, h) = (img.width() as u16, img.height() as u16);
+    let mut header = [0u8; 18];
+    header[2] = 2; // 未压缩真彩
+    header[12] = (w & 0xff) as u8;
+    header[13] = (w >> 8) as u8;
+    header[14] = (h & 0xff) as u8;
+    header[15] = (h >> 8) as u8;
+    header[16] = 32; // bpp
+    header[17] = 0x28; // 8bit alpha + 顶左原点
+    f.write_all(&header)?;
+    let mut buf = Vec::with_capacity(img.pixels.len() * 4);
+    for p in &img.pixels {
+        let [r, g, b, a] = p.to_array();
+        buf.extend_from_slice(&[b, g, r, a]);
+    }
+    f.write_all(&buf)?;
+    Ok(())
 }

@@ -3648,6 +3648,7 @@ dependencies = [
  "egui_extras",
  "egui_kittest",
  "memmap2",
+ "objc2 0.6.5",
  "rfd",
  "serde",
  "serde_json",

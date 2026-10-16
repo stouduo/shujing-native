@@ -42,7 +42,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().item_spacing.x = 6.0;
                 for i in 0..app.tabs.len() {
                     let title = app.tabs[i].title.clone();
                     let (a, c) = draw_one_tab(ui, i == app.active_tab, &title);
@@ -925,6 +925,7 @@ impl eframe::App for ShujingApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events(ctx);
         self.autoopen();
+        self.screenshot_tick(ctx);
 
         if ui_input_new_query(ctx) {
             self.open_query_tab(None);
