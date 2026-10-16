@@ -80,17 +80,17 @@ fn next_token(s: &str) -> (&str, &str) {
 
 fn token_color(tok: &str) -> egui::Color32 {
     if tok.starts_with("--") || tok.starts_with("/*") {
-        theme::SQL_COMMENT
+        theme::c().sql_comment
     } else if tok.starts_with('\'') {
-        theme::SQL_STRING
+        theme::c().sql_string
     } else if tok.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-        theme::SQL_NUMBER
+        theme::c().sql_number
     } else {
         let upper: String = tok.to_ascii_uppercase();
         if upper.split_whitespace().all(|w| KEYWORDS.contains(&w)) && !upper.is_empty() {
-            theme::SQL_KEYWORD
+            theme::c().sql_keyword
         } else {
-            theme::TEXT2
+            theme::c().text2
         }
     }
 }

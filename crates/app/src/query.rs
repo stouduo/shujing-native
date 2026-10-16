@@ -17,12 +17,12 @@ pub fn draw_query_view(
     egui::TopBottomPanel::top("query_toolbar")
         .frame(
             egui::Frame::new()
-                .fill(theme::PANEL)
+                .fill(theme::c().panel)
                 .inner_margin(egui::Margin::symmetric(10, 7)),
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("连接").size(12.0).color(theme::MUTED));
+                ui.label(RichText::new("连接").size(12.0).color(theme::c().muted));
                 let selected = conns
                     .iter()
                     .find(|c| c.id == q.conn_id)
@@ -42,8 +42,8 @@ pub fn draw_query_view(
                 if ui
                     .add_enabled(
                         !q.running && !q.sql.trim().is_empty() && !q.conn_id.is_empty(),
-                        egui::Button::new(RichText::new("运行 ⌘↵").color(theme::BG).strong())
-                            .fill(theme::ACCENT)
+                        egui::Button::new(RichText::new("运行 ⌘↵").color(theme::c().bg).strong())
+                            .fill(theme::c().accent)
                             .corner_radius(egui::CornerRadius::same(9)),
                     )
                     .clicked()
@@ -51,7 +51,7 @@ pub fn draw_query_view(
                     actions.push(TabAction::RunQuery { tab_id: tab_id.to_string() });
                 }
                 if let Some(err) = &q.error {
-                    ui.label(RichText::new(icons::clip(err, 140)).size(12.0).color(theme::RED));
+                    ui.label(RichText::new(icons::clip(err, 140)).size(12.0).color(theme::c().red));
                 }
                 let has_grid = q
                     .results
@@ -62,9 +62,9 @@ pub fn draw_query_view(
                     actions.push(TabAction::ExportQueryCsv { tab_id: tab_id.to_string() });
                 }
                 let history = q.history.clone();
-                ui.menu_button(RichText::new("历史 ▾").size(13.0).color(theme::ACCENT), |ui| {
+                ui.menu_button(RichText::new("历史 ▾").size(13.0).color(theme::c().accent), |ui| {
                     if history.is_empty() {
-                        ui.label(RichText::new("暂无记录").size(12.0).color(theme::MUTED));
+                        ui.label(RichText::new("暂无记录").size(12.0).color(theme::c().muted));
                     }
                     for (i, h) in history.iter().enumerate() {
                         let preview: String = h.chars().take(48).collect();
@@ -123,7 +123,7 @@ pub fn draw_query_view(
                             q.results.len()
                         ))
                         .size(12.0)
-                        .color(theme::MUTED),
+                        .color(theme::c().muted),
                     );
                     if ui.button("‹").clicked() && q.active_set > 0 {
                         q.active_set -= 1;
@@ -137,7 +137,7 @@ pub fn draw_query_view(
                     ui.label(
                         RichText::new(format!("OK(影响 {} 行)", r.affected))
                             .size(12.0)
-                            .color(theme::GREEN),
+                            .color(theme::c().green),
                     );
                 } else {
                     ui.label(
@@ -147,7 +147,7 @@ pub fn draw_query_view(
                             if r.truncated { "(已截断)" } else { "" }
                         ))
                         .size(12.0)
-                        .color(theme::MUTED),
+                        .color(theme::c().muted),
                     );
                 }
             });

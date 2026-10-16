@@ -18,7 +18,7 @@ use app::ShujingApp;
 
 fn main() {
     #[cfg(target_os = "macos")]
-    force_dark_appearance();
+    force_appearance(true);
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1360.0, 880.0])
@@ -34,9 +34,9 @@ fn main() {
     .expect("eframe 启动失败");
 }
 
-/// macOS:强制 NSApp 深色外观(标题栏/红绿灯区随内容变黑,eframe 未暴露该能力)
+/// macOS:强制 NSApp 外观随应用主题(标题栏/红绿灯区同色,eframe 未暴露该能力)
 #[cfg(target_os = "macos")]
-fn force_dark_appearance() {
+pub fn force_appearance(dark: bool) {
     use objc2::msg_send;
     use objc2::runtime::{AnyClass as Class, AnyObject};
     unsafe {
@@ -50,7 +50,7 @@ fn force_dark_appearance() {
         let Some(nsstring) = Class::get(ns_name) else { return };
         let name: *mut AnyObject = {
             let alloc: *mut AnyObject = msg_send![nsstring, alloc];
-            msg_send![alloc, initWithUTF8String: c"NSAppearanceNameVibrantDark".as_ptr()]
+            msg_send![alloc, initWithUTF8String: if dark { c"NSAppearanceNameVibrantDark".as_ptr() } else { c"NSAppearanceNameAqua".as_ptr() }]
         };
         let ap_name = c"NSAppearance";
         let Some(appearance_cls) = Class::get(ap_name) else { return };

@@ -42,17 +42,17 @@ pub fn result_rows(
             }
             tb.header(34.0, |mut header| {
                 header.col(|ui| {
-                    ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 0.0)), 0, theme::PANEL);
+                    ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 0.0)), 0, theme::c().panel);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("#").size(11.5).color(theme::MUTED));
+                        ui.label(egui::RichText::new("#").size(11.5).color(theme::c().muted));
                     });
-                    hairline(ui, theme::BORDER);
+                    hairline(ui, theme::c().border);
                 });
                 for c in columns {
                     header.col(|ui| {
-                        ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 0.0)), 0, theme::PANEL);
+                        ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 0.0)), 0, theme::c().panel);
                         ui.label(egui::RichText::new(c).size(12.5).strong());
-                        hairline(ui, theme::BORDER);
+                        hairline(ui, theme::c().border);
                     });
                 }
             })
@@ -64,7 +64,7 @@ pub fn result_rows(
                                 ui.label(
                                     egui::RichText::new(format!("{}", ri + 1))
                                         .size(11.0)
-                                        .color(theme::MUTED),
+                                        .color(theme::c().muted),
                                 );
                             });
                         });

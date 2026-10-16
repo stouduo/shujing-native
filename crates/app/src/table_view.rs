@@ -41,7 +41,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
     egui::TopBottomPanel::top("tabbar")
         .frame(
             egui::Frame::new()
-                .fill(theme::BG)
+                .fill(theme::c().bg)
                 .inner_margin(egui::Margin { left: 10, right: 10, top: 4, bottom: 5 }),
         )
         .show(ctx, |ui| {
@@ -76,7 +76,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             let r = ui.max_rect();
             ui.painter().line_segment(
                 [egui::pos2(r.left() - 12.0, r.bottom()), egui::pos2(r.right() + 12.0, r.bottom())],
-                egui::Stroke::new(1.0, theme::BORDER),
+                egui::Stroke::new(1.0, theme::c().border),
             );
         });
 
@@ -97,16 +97,16 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (boo
     let font = egui::FontId::proportional(13.0);
     let measure = ui
         .painter()
-        .layout_no_wrap(title.to_string(), font.clone(), theme::TEXT2);
+        .layout_no_wrap(title.to_string(), font.clone(), theme::c().text2);
     let w = (measure.size().x + 60.0).clamp(104.0, 230.0);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
     let mut activated = resp.clicked();
     let mut closed = resp.middle_clicked();
 
     let fill = if active {
-        theme::ELEVATED
+        theme::c().elevated
     } else if resp.hovered() {
-        theme::HOVER
+        theme::c().hover
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -117,16 +117,16 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (boo
         p.rect_filled(
             connected,
             egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 },
-            theme::PANEL,
+            theme::c().panel,
         );
     } else {
         p.rect_filled(rect, egui::CornerRadius::same(8), fill);
     }
-    let tcol = if active { theme::TEXT } else { theme::TEXT2 };
+    let tcol = if active { theme::c().text } else { theme::c().text2 };
     icons::tab_glyph(
         ui,
         glyph,
-        if active { theme::ACCENT } else { theme::MUTED },
+        if active { theme::c().accent } else { theme::c().muted },
         rect.left() + 8.0,
         rect.center().y,
     );
@@ -148,9 +148,9 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (boo
         activated = false;
     }
     let xcol = if cresp.hovered() {
-        theme::TEXT
+        theme::c().text
     } else if resp.hovered() || active {
-        theme::TEXT2
+        theme::c().text2
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -175,7 +175,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
     egui::TopBottomPanel::top("table_toolbar")
         .frame(
             egui::Frame::new()
-                .fill(theme::PANEL)
+                .fill(theme::c().panel)
                 .inner_margin(egui::Margin::symmetric(10, 7)),
         )
         .show(ctx, |ui| {
@@ -183,15 +183,15 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 // 左:表名(弱化,标签已表达主体)+ 状态
                 ui.label(RichText::new(&tab.table).size(13.5).strong());
                 if let Some(db) = &tab.database {
-                    icons::chip(ui, db, theme::TEXT2);
+                    icons::chip(ui, db, theme::c().text2);
                 }
                 if tab.loading {
                     ui.spinner();
                 } else if tab.pk_loaded && tab.pk_cols.is_empty() {
-                    ui.label(RichText::new("只读").size(11.0).color(theme::MUTED));
+                    ui.label(RichText::new("只读").size(11.0).color(theme::c().muted));
                 }
                 if let Some(err) = &tab.error {
-                    ui.label(RichText::new(icons::clip(err, 80)).size(11.0).color(theme::RED));
+                    ui.label(RichText::new(icons::clip(err, 80)).size(11.0).color(theme::c().red));
                 }
                 ui.add_space(8.0);
                 // 筛选框(iOS 搜索框:圆角底 + 内嵌放大镜)
@@ -200,7 +200,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     && ui.input(|i| i.key_pressed(egui::Key::Enter))
                     || (tab.active_filter.is_some()
                         && ui
-                            .button(RichText::new("✕").color(theme::MUTED))
+                            .button(RichText::new("✕").color(theme::c().muted))
                             .on_hover_text("清除筛选")
                             .clicked());
                 if apply_filter {
@@ -218,7 +218,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 // 右:保存(有修改时) / 刷新图标钮 / ··· 菜单
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.menu_button(
-                        RichText::new("···").size(14.0).color(theme::TEXT2),
+                        RichText::new("···").size(14.0).color(theme::c().text2),
                         |ui| {
                             if ui.button("＋ 新增行…").clicked() {
                                 tab.insert_form = Some(
@@ -242,7 +242,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     .response
                     .on_hover_text("更多操作");
                     if !tab.loading {
-                        icons::refresh(ui, theme::TEXT2)
+                        icons::refresh(ui, theme::c().text2)
                             .on_hover_text("刷新 (⌘R)")
                             .clicked()
                             && {
@@ -256,11 +256,11 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                             .add(
                                 egui::Button::new(
                                     RichText::new(format!("保存 {n} ⌘S"))
-                                        .color(theme::BG)
+                                        .color(theme::c().bg)
                                         .strong()
                                         .size(12.5),
                                 )
-                                .fill(theme::GREEN)
+                                .fill(theme::c().green)
                                 .corner_radius(egui::CornerRadius::same(9)),
                             )
                             .on_hover_text("保存全部未保存修改")
@@ -278,7 +278,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
     egui::TopBottomPanel::bottom("table_pager")
         .frame(
             egui::Frame::new()
-                .fill(theme::BG)
+                .fill(theme::c().bg)
                 .inner_margin(egui::Margin::symmetric(10, 6)),
         )
         .show(ctx, |ui| {
@@ -288,16 +288,16 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     Some(t) => format!("共 {t} 行"),
                     None => "行数未知".to_string(),
                 };
-                ui.label(RichText::new(total_text).size(12.0).color(theme::MUTED));
+                ui.label(RichText::new(total_text).size(12.0).color(theme::c().muted));
                 if tab.active_filter.is_some() {
                     ui.label(
                         RichText::new(format!("· 已筛选「{}」", icons::clip(tab.active_filter.as_deref().unwrap_or(""), 20)))
                             .size(12.0)
-                            .color(theme::ACCENT),
+                            .color(theme::c().accent),
                     );
                 }
                 if let Some(ms) = tab.last_elapsed_ms {
-                    ui.label(RichText::new(format!("· {ms} ms")).size(12.0).color(theme::MUTED));
+                    ui.label(RichText::new(format!("· {ms} ms")).size(12.0).color(theme::c().muted));
                 }
                 if let Some((sr, sc)) = tab.selected {
                     let col = tab.columns.get(sc).cloned().unwrap_or_default();
@@ -305,14 +305,14 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     ui.label(
                         RichText::new(format!("· 行 {no} · {col}"))
                             .size(12.0)
-                            .color(theme::TEXT2),
+                            .color(theme::c().text2),
                     );
                 }
                 if !tab.changes.is_empty() {
                     ui.label(
                         RichText::new(format!("· {} 处未保存", tab.changes.len()))
                             .size(12.0)
-                            .color(theme::GREEN),
+                            .color(theme::c().green),
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -352,7 +352,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                             None => format!("{}", tab.page),
                         })
                         .size(12.0)
-                        .color(theme::TEXT2),
+                        .color(theme::c().text2),
                     );
                     if ui
                         .add_enabled(
@@ -377,7 +377,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
             egui::TopBottomPanel::bottom("row_detail")
                 .frame(
                     egui::Frame::new()
-                        .fill(theme::BG)
+                        .fill(theme::c().bg)
                         .inner_margin(egui::Margin::symmetric(10, 6)),
                 )
                 .default_height(150.0)
@@ -386,7 +386,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     theme::hairline_top(ui);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("行 #{row_no}")).size(13.0).strong());
-                        ui.label(RichText::new("详情").size(12.0).color(theme::MUTED));
+                        ui.label(RichText::new("详情").size(12.0).color(theme::c().muted));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if theme::text_button(ui, "关闭") {
                                 close_detail = true;
@@ -406,7 +406,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                                             RichText::new(c)
                                                 .size(12.0)
                                                 .monospace()
-                                                .color(theme::MUTED),
+                                                .color(theme::c().muted),
                                         );
                                         let text = v.as_deref().unwrap_or("null");
                                         ui.add(
@@ -436,7 +436,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 } else {
                     tab.error.clone().unwrap_or_else(|| "无数据".into())
                 };
-                ui.label(RichText::new(msg).color(theme::MUTED));
+                ui.label(RichText::new(msg).color(theme::c().muted));
             });
             return;
         }
@@ -621,11 +621,11 @@ fn draw_data_table(
     tb.header(34.0, |mut header| {
         header.col(|ui| {
             let r = ui.max_rect().expand2(egui::vec2(4.0, 0.0));
-            ui.painter().rect_filled(r, 0, theme::PANEL);
+            ui.painter().rect_filled(r, 0, theme::c().panel);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new("#").size(12.0).color(theme::MUTED));
+                ui.label(RichText::new("#").size(12.0).color(theme::c().muted));
             });
-            hairline_cell_bottom(ui, theme::BORDER);
+            hairline_cell_bottom(ui, theme::c().border);
         });
         for c in columns.iter() {
             let active_sort = srt.as_ref().and_then(|(scn, asc)| (*scn == *c).then_some(*asc));
@@ -634,7 +634,7 @@ fn draw_data_table(
                 label_text.push_str("   ");
             }
             header.col(|ui| {
-                ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 0.0)), 0, theme::PANEL);
+                ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 0.0)), 0, theme::c().panel);
                 let resp = ui.selectable_label(
                     active_sort.is_some(),
                     RichText::new(&label_text).size(12.5).strong(),
@@ -662,9 +662,9 @@ fn draw_data_table(
                             egui::pos2(c0.x, c0.y + s),
                         ]
                     };
-                    p.add(egui::Shape::convex_polygon(pts, theme::ACCENT, egui::Stroke::NONE));
+                    p.add(egui::Shape::convex_polygon(pts, theme::c().accent, egui::Stroke::NONE));
                 }
-                hairline_cell_bottom(ui, theme::BORDER);
+                hairline_cell_bottom(ui, theme::c().border);
             });
         }
     })
@@ -684,10 +684,10 @@ fn draw_data_table(
                         ui.label(
                             RichText::new(format!("{row_no}"))
                                 .size(12.0)
-                                .color(theme::MUTED),
+                                .color(theme::c().muted),
                         );
                     });
-                    hairline_cell_bottom(ui, theme::ROW_LINE);
+                    hairline_cell_bottom(ui, theme::c().row_line);
                 });
                 let hover_row = row_band
                     .zip(pointer)
@@ -784,14 +784,14 @@ fn draw_data_cell(
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
     let painter = ui.painter().with_clip_rect(rect);
     if changed {
-        painter.rect_filled(rect.expand2(egui::vec2(1.0, 2.0)), 2, theme::CHANGE_BG);
+        painter.rect_filled(rect.expand2(egui::vec2(1.0, 2.0)), 2, theme::c().change_bg);
     }
     if is_sel {
-        painter.rect_filled(rect, 2, theme::CELL_SELECT);
+        painter.rect_filled(rect, 2, theme::c().cell_select);
     } else if resp.hovered() {
-        painter.rect_filled(rect, 2, theme::CELL_HOVER);
+        painter.rect_filled(rect, 2, theme::c().cell_hover);
     } else if hover_row {
-        painter.rect_filled(rect, 2, theme::ROW_HOVER);
+        painter.rect_filled(rect, 2, theme::c().row_hover);
     }
     let font = if is_null {
         egui::FontId::monospace(11.5)
@@ -860,7 +860,7 @@ fn draw_data_cell(
         ui.label(
             egui::RichText::new(format!("{} · 行 {}", columns.get(ci).map(|s| s.as_str()).unwrap_or("?"), ri + 1))
                 .size(12.0)
-                .color(theme::MUTED),
+                .color(theme::c().muted),
         );
     });
 }
@@ -1145,8 +1145,8 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                 }
                 if let Some(r) = &m.test_result {
                     match r {
-                        Ok(msg) => ui.label(RichText::new(msg).size(12.0).color(theme::GREEN)),
-                        Err(e) => ui.label(RichText::new(icons::clip(e, 60)).size(12.0).color(theme::RED)),
+                        Ok(msg) => ui.label(RichText::new(msg).size(12.0).color(theme::c().green)),
+                        Err(e) => ui.label(RichText::new(icons::clip(e, 60)).size(12.0).color(theme::c().red)),
                     };
                 }
             });
@@ -1154,8 +1154,8 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("保存").color(theme::BG).strong())
-                            .fill(theme::ACCENT),
+                        egui::Button::new(RichText::new("保存").color(theme::c().bg).strong())
+                            .fill(theme::c().accent),
                     )
                     .clicked()
                 {
@@ -1325,8 +1325,8 @@ impl eframe::App for ShujingApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add(
-                                egui::Button::new(RichText::new("丢弃修改并继续").color(theme::BG).strong())
-                                    .fill(theme::RED)
+                                egui::Button::new(RichText::new("丢弃修改并继续").color(theme::c().bg).strong())
+                                    .fill(theme::c().red)
                                     .corner_radius(egui::CornerRadius::same(9)),
                             )
                             .clicked()
@@ -1370,7 +1370,7 @@ fn draw_empty_state(ui: &mut egui::Ui) {
     let c = rect.center();
     let (rw, rh) = (22.0, 7.0);
     let top = egui::pos2(c.x, c.y - 18.0);
-    let st = egui::Stroke::new(1.6, theme::MUTED);
+    let st = egui::Stroke::new(1.6, theme::c().muted);
     p.add(egui::Shape::ellipse_stroke(top, egui::vec2(rw, rh), st));
     p.line_segment([top - egui::vec2(rw, 0.0), top + egui::vec2(rw, 20.0)], st);
     p.line_segment([top + egui::vec2(rw, 0.0), top + egui::vec2(-rw, 20.0)], st);
@@ -1385,7 +1385,7 @@ fn draw_empty_state(ui: &mut egui::Ui) {
     ui.label(
         RichText::new("在左侧连接一个数据库,点击表名浏览数据\n⌘T 新建查询标签")
             .size(12.0)
-            .color(theme::MUTED),
+            .color(theme::c().muted),
     );
 }
 

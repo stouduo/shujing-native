@@ -181,6 +181,7 @@ fn render_sidebar_tabs_empty_state() {
     let _ = &mut qtab;
     let app = ShujingApp {
         service: Arc::new(shujing_core::Service::new(&dir)),
+        config_dir: dir.clone(),
         conns: vec![conn, conn2],
         trees: HashMap::from([("c1".to_string(), tree)]),
         tabs: vec![Tab {
@@ -199,6 +200,7 @@ fn render_sidebar_tabs_empty_state() {
         pending: None,
         dirty_override: false,
         shot: None,
+        dark_mode: true,
     };
     let cell = std::cell::RefCell::new(Some(app));
     render("sidebar_tabs", 1280.0, 780.0, move |ctx| {
@@ -208,7 +210,7 @@ fn render_sidebar_tabs_empty_state() {
         table_view::draw_tabs(app, ctx);
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.centered_and_justified(|ui| {
-                ui.label(egui::RichText::new("点击左侧连接,展开库/表后点击表名开始").color(crate::theme::MUTED));
+                ui.label(egui::RichText::new("点击左侧连接,展开库/表后点击表名开始").color(crate::theme::c().muted));
             });
         });
     });

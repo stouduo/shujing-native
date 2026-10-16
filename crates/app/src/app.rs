@@ -196,6 +196,7 @@ impl ConnModal {
 
 pub struct ShujingApp {
     pub service: Arc<Service>,
+    pub config_dir: std::path::PathBuf,
     pub conns: Vec<ConnInfo>,
     pub trees: HashMap<String, ConnTree>,
     pub tabs: Vec<Tab>,
@@ -214,6 +215,8 @@ pub struct ShujingApp {
     pub pending: Option<PendingAction>,
     /// 确认丢弃后放行一次
     pub dirty_override: bool,
+    /// 深色主题(持久化到 settings.json)
+    pub dark_mode: bool,
 }
 
 pub enum PendingAction {
@@ -240,9 +243,12 @@ impl ShujingApp {
         let service = Arc::new(Service::new(&config_dir));
         let conns = service.list_saved_connections();
         let (event_tx, events) = std::sync::mpsc::channel();
+        let dark = Self::load_dark_pref(&config_dir);
+        crate::theme::set_dark(dark);
         crate::theme::apply(&cc.egui_ctx);
         Self {
             service,
+            config_dir,
             conns,
             trees: HashMap::new(),
             tabs: vec![],
@@ -256,6 +262,7 @@ impl ShujingApp {
             table_filter: String::new(),
             pending: None,
             dirty_override: false,
+            dark_mode: dark,
             shot: std::env::var("SHUJING_SCREENSHOT")
                 .ok()
                 .map(|path| ShotState {
@@ -316,6 +323,35 @@ impl ShujingApp {
         let mmap = unsafe { memmap2::Mmap::map(&file).ok()? };
         let leaked = Box::leak(Box::new(mmap));
         Some(unsafe { std::slice::from_raw_parts(leaked.as_ptr(), leaked.len()) })
+    }
+
+    fn load_dark_pref(config_dir: &std::path::Path) -> bool {
+        // 优先级:环境变量 > 配置文件 > 默认深色
+        if let Ok(t) = std::env::var("SHUJING_THEME") {
+            if t.eq_ignore_ascii_case("light") {
+                return false;
+            }
+            if t.eq_ignore_ascii_case("dark") {
+                return true;
+            }
+        }
+        let path = config_dir.join("settings.json");
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("dark").and_then(|d| d.as_bool()))
+            .unwrap_or(true)
+    }
+
+    pub fn set_theme_dark(&mut self, ctx: &egui::Context, dark: bool) {
+        self.dark_mode = dark;
+        crate::theme::set_dark(dark);
+        crate::theme::apply(ctx);
+        let path = self.config_dir.join("settings.json");
+        let json = serde_json::json!({ "dark": dark }).to_string();
+        let _ = std::fs::write(path, json);
+        #[cfg(target_os = "macos")]
+        crate::force_appearance(dark);
     }
 
     /// 自截图:每帧驱动重绘;表数据就绪后延时 20 帧(字体/布局稳定)请求截图,

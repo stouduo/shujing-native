@@ -1,12 +1,12 @@
 //! painter 直绘的小图标:系统中文字体缺 ▤/▸ 等字形(显示成方框),符号一律不依赖字体。
 
-use crate::theme::{ACCENT, TEXT, TEXT2};
+use crate::theme;
 use egui::{Color32, Pos2, Sense, Shape, Stroke, Ui, Vec2};
 
 /// 展开/收起三角,可点击
 pub fn triangle(ui: &mut Ui, open: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::click());
-    let color = if resp.hovered() { TEXT } else { TEXT2 };
+    let color = if resp.hovered() { theme::c().text } else { theme::c().text2 };
     let s = 3.2;
     // PingFang 行框 metrics 使文字墨迹中心高于几何中心,图标随之上移对齐
     let (x, y) = (rect.center().x, rect.center().y - 1.5);
@@ -24,11 +24,10 @@ pub fn triangle(ui: &mut Ui, open: bool) -> egui::Response {
 /// 连接状态圆点
 pub fn dot(ui: &mut Ui, online: bool) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
-    ui.painter().circle_filled(rect.center() - egui::vec2(0.0, 1.5), 4.0, if online { GREEN_DOT } else { MUTED_DOT });
+    let (on_c, off_c) = (theme::c().green, theme::c().dot_off);
+    ui.painter().circle_filled(rect.center() - egui::vec2(0.0, 1.5), 4.0, if online { on_c } else { off_c });
 }
 
-const GREEN_DOT: Color32 = Color32::from_rgb(0x3f, 0xc7, 0x84);
-const MUTED_DOT: Color32 = Color32::from_rgb(0x55, 0x56, 0x5c);
 
 /// 标签页类型 glyph:表(网格)/查询(播放)/结构(横线);绝对位置绘制
 pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_y: f32) {
@@ -72,6 +71,32 @@ pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_
     }
 }
 
+/// 主题切换钮:深色显示太阳,浅色显示月亮
+pub fn theme_toggle(ui: &mut Ui, dark: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
+    let color = if resp.hovered() { theme::c().text } else { theme::c().accent };
+    let p = ui.painter();
+    let c = rect.center();
+    if dark {
+        // 太阳:圆 + 8 条射线
+        p.circle_stroke(c, 3.4, Stroke::new(1.3, color));
+        for i in 0..8 {
+            let a = i as f32 * std::f32::consts::TAU / 8.0;
+            let d0 = 5.2;
+            let d1 = 7.0;
+            p.line_segment(
+                [egui::pos2(c.x + d0 * a.cos(), c.y + d0 * a.sin()), egui::pos2(c.x + d1 * a.cos(), c.y + d1 * a.sin())],
+                Stroke::new(1.2, color),
+            );
+        }
+    } else {
+        // 月亮:大圆填充 + 背景色圆错位遮出月牙
+        p.circle_filled(c, 5.4, color);
+        p.circle_filled(c + egui::vec2(2.6, -1.6), 4.6, theme::c().bg);
+    }
+    resp
+}
+
 /// 放大镜 glyph(搜索框内)
 pub fn magnifier(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
     let st = Stroke::new(1.3, color);
@@ -92,8 +117,8 @@ pub fn search_box(
 ) -> egui::Response {
     let h = 26.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 8, crate::theme::BG);
-    magnifier(ui.painter(), egui::pos2(rect.left() + 12.0, rect.center().y), crate::theme::MUTED);
+    ui.painter().rect_filled(rect, 8, crate::theme::c().bg);
+    magnifier(ui.painter(), egui::pos2(rect.left() + 12.0, rect.center().y), crate::theme::c().muted);
     let inner = egui::Rect::from_min_size(
         egui::pos2(rect.left() + 24.0, rect.top()),
         egui::Vec2::new(width - 30.0, h),
@@ -105,7 +130,7 @@ pub fn search_box(
                 ui.add(
                     egui::TextEdit::singleline(text)
                         .id(egui::Id::new(id_salt))
-                        .hint_text(egui::RichText::new(placeholder).color(crate::theme::MUTED))
+                        .hint_text(egui::RichText::new(placeholder).color(crate::theme::c().muted))
                         .desired_width(inner.width())
                         .frame(false)
                         .font(egui::TextStyle::Body),
@@ -170,7 +195,7 @@ pub fn chevron(ui: &mut Ui, left: bool, color: egui::Color32) -> egui::Response 
 /// 表图标:小网格
 pub fn table(ui: &mut Ui, active: bool) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
-    let color = if active { ACCENT } else { TEXT2 };
+    let color = if active { theme::c().accent } else { theme::c().text2 };
     let p = ui.painter();
     let st = Stroke::new(1.0, color);
     p.rect_stroke(rect.shrink(1.5).translate(egui::vec2(0.0, -1.5)), egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
@@ -183,7 +208,7 @@ pub fn table(ui: &mut Ui, active: bool) {
 /// 结构图标:三条横线
 pub fn structure(ui: &mut Ui) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::click());
-    let color = if resp.hovered() { TEXT } else { TEXT2 };
+    let color = if resp.hovered() { theme::c().text } else { theme::c().text2 };
     let p = ui.painter();
     let st = Stroke::new(1.2, color);
     for dy in [-3.5, 0.0, 3.5] {
@@ -203,14 +228,14 @@ pub fn key_badge(ui: &mut Ui) {
     ui.painter().rect_filled(
         rect,
         egui::CornerRadius::same(3),
-        ACCENT.gamma_multiply(0.18),
+        theme::c().accent.gamma_multiply(0.18),
     );
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         "PK",
         egui::FontId::proportional(9.5),
-        ACCENT,
+        theme::c().accent,
     );
 }
 
@@ -237,11 +262,11 @@ pub fn clip(s: &str, max_chars: usize) -> String {
 /// 单元格文本颜色:NULL 弱、修改中绿
 pub fn cell_text_color(v: &Option<String>, changed: bool) -> Color32 {
     if changed {
-        crate::theme::CHANGE_FG
+        crate::theme::c().change_fg
     } else if v.is_none() {
         Color32::from_rgb(0x55, 0x55, 0x5a)
     } else {
-        TEXT2
+        theme::c().text2
     }
 }
 

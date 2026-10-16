@@ -13,12 +13,12 @@ impl ShujingApp {
             .resizable(true)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::BG)
-                    .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                    .fill(theme::c().bg)
+                    .stroke(egui::Stroke::new(1.0, theme::c().border))
                     .inner_margin(egui::Margin { left: 12, right: 10, top: 10, bottom: 8 }),
             )
             .show(ctx, |ui| {
-                self.draw_sidebar(ui);
+                self.draw_sidebar(ctx, ui);
             });
     }
 
@@ -35,21 +35,25 @@ impl ShujingApp {
         egui::TopBottomPanel::bottom("toast")
             .frame(
                 egui::Frame::new()
-                    .fill(theme::ELEVATED)
+                    .fill(theme::c().elevated)
                     .inner_margin(egui::Margin::symmetric(12, 6)),
             )
             .show(ctx, |ui| {
-                ui.label(RichText::new(icons::clip(msg, 160)).size(12.0).color(theme::TEXT2));
+                ui.label(RichText::new(icons::clip(msg, 160)).size(12.0).color(theme::c().text2));
             });
     }
 
-    pub fn draw_sidebar(&mut self, ui: &mut egui::Ui) {
+    pub fn draw_sidebar(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("数镜").size(14.0).strong());
-            ui.label(RichText::new("Native").size(11.0).color(theme::MUTED));
+            ui.label(RichText::new("Native").size(11.0).color(theme::c().muted));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if theme::text_button(ui, "＋ 连接") {
                     self.conn_modal = Some(ConnModal::new());
+                }
+                let dark = theme::is_dark();
+                if icons::theme_toggle(ui, dark).on_hover_text(if dark { "切换浅色" } else { "切换深色" }).clicked() {
+                    self.set_theme_dark(ctx, !dark);
                 }
             });
         });
@@ -84,7 +88,7 @@ impl ShujingApp {
                 RichText::new(&c.name)
                     .size(13.0)
                     .strong()
-                    .color(if online { theme::TEXT } else { theme::TEXT2}),
+                    .color(if online { theme::c().text } else { theme::c().text2}),
             );
             let ver = self
                 .trees
@@ -94,7 +98,7 @@ impl ShujingApp {
                 .unwrap_or_default();
             if !ver.is_empty() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(&ver).size(10.0).monospace().color(theme::MUTED));
+                    ui.label(RichText::new(&ver).size(10.0).monospace().color(theme::c().muted));
                 });
             }
             let tip = if online { "点击断开" } else { "点击连接" };
@@ -164,7 +168,7 @@ impl ShujingApp {
                     RichText::new(&db)
                         .size(12.5)
                         .strong()
-                        .color(if is_open { theme::TEXT } else { theme::TEXT2 }),
+                        .color(if is_open { theme::c().text } else { theme::c().text2 }),
                 );
                 if lbl.clicked() {
                     self.toggle_database(conn_id, &db);
@@ -173,7 +177,7 @@ impl ShujingApp {
                     if loading {
                         ui.spinner();
                     } else {
-                        ui.label(RichText::new(format!("{}", tables.len())).size(12.0).color(theme::MUTED));
+                        ui.label(RichText::new(format!("{}", tables.len())).size(12.0).color(theme::c().muted));
                     }
                 }
             });
@@ -188,7 +192,7 @@ impl ShujingApp {
                         self.draw_table_row(ui, conn_id, &db, &t.name);
                     }
                     if !filter.is_empty() && shown == 0 {
-                        ui.label(RichText::new("无匹配表").size(12.0).color(theme::MUTED));
+                        ui.label(RichText::new("无匹配表").size(12.0).color(theme::c().muted));
                     }
                 });
             }
@@ -203,7 +207,7 @@ impl ShujingApp {
         // iOS 列表:选中行 = 系统蓝浸染 + 圆角;普通行透明
         let frame = if active {
             egui::Frame::new()
-                .fill(theme::ACTIVE_ROW)
+                .fill(theme::c().active_row)
                 .corner_radius(egui::CornerRadius::same(7))
                 .inner_margin(egui::Margin::symmetric(6, 3))
         } else {
@@ -217,7 +221,7 @@ impl ShujingApp {
                     active,
                     RichText::new(name)
                         .size(13.0)
-                        .color(if active { theme::TEXT } else { theme::TEXT2 }),
+                        .color(if active { theme::c().text } else { theme::c().text2 }),
                 );
                 let hovered = lbl.hovered();
                 if lbl.clicked() {
