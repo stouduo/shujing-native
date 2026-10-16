@@ -172,6 +172,7 @@ fn render_sidebar_tabs_empty_state() {
     let mut qtab = QueryTab {
         conn_id: "c1".into(),
         sql: "SELECT * FROM users WHERE status = 1 LIMIT 50".into(),
+        history: vec![],
         results: vec![],
         active_set: 0,
         running: false,
@@ -253,6 +254,7 @@ fn render_query_view() {
     let mut q = QueryTab {
         conn_id: "c1".into(),
         sql: "SELECT id, role, role_name, status\nFROM backend_role_privilege\nWHERE status = 1\nORDER BY created DESC\nLIMIT 50;".into(),
+        history: vec!["SELECT * FROM backend_role_privilege LIMIT 10;".into()],
         results: vec![],
         active_set: 0,
         running: false,

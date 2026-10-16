@@ -213,12 +213,24 @@ impl ShujingApp {
                         .size(13.0)
                         .color(if active { theme::TEXT } else { theme::TEXT2 }),
                 );
-                let tip = if active { "当前标签" } else { "打开表数据" };
                 let hovered = lbl.hovered();
                 if lbl.clicked() {
                     self.open_table(conn_id, name, Some(db.to_string()));
                 }
-                lbl.on_hover_text(tip);
+                let table = name.to_string();
+                if let Some(resp) = lbl.context_menu(move |ui| {
+                    if ui.button("复制表名").clicked() {
+                        ui.ctx().copy_text(table.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button("复制 SELECT *").clicked() {
+                        let ident = crate::app::quote_ident_by(&table, true);
+                        ui.ctx().copy_text(format!("SELECT * FROM {ident} LIMIT 100;"));
+                        ui.close_menu();
+                    }
+                }) {
+                    let _ = &resp;
+                }
                 if hovered && icons::structure(ui).clicked() {
                     self.open_structure(conn_id, name, Some(db.to_string()));
                 }
@@ -229,6 +241,29 @@ impl ShujingApp {
     fn toggle_connect(&mut self, c: &shujing_core::ConnInfo) {
         if self.trees.get(&c.id).map(|t| t.online).unwrap_or(false) {
             self.trees.remove(&c.id);
+            // 断开的连接:相关标签一并关闭,避免残留标签对失效连接报错
+            let cid = &c.id;
+            let mut removed_before_active = 0usize;
+            let mut i = 0usize;
+            while i < self.tabs.len() {
+                let belongs = match &self.tabs[i].kind {
+                    crate::app::TabKind::Table(t) => &t.conn_id == cid,
+                    crate::app::TabKind::Structure(t) => &t.conn_id == cid,
+                    crate::app::TabKind::Query(q) => &q.conn_id == cid,
+                };
+                if belongs {
+                    if i < self.active_tab {
+                        removed_before_active += 1;
+                    }
+                    self.tabs.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+            self.active_tab = self
+                .active_tab
+                .saturating_sub(removed_before_active)
+                .min(self.tabs.len().saturating_sub(1));
             return;
         }
         self.trees.insert(c.id.clone(), crate::app::ConnTree::default());

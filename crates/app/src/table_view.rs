@@ -265,6 +265,15 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 if let Some(ms) = tab.last_elapsed_ms {
                     ui.label(RichText::new(format!("· {ms} ms")).size(12.0).color(theme::MUTED));
                 }
+                if let Some((sr, sc)) = tab.selected {
+                    let col = tab.columns.get(sc).cloned().unwrap_or_default();
+                    let no = (tab.page - 1) * tab.page_size + sr + 1;
+                    ui.label(
+                        RichText::new(format!("· 行 {no} · {col}"))
+                            .size(12.0)
+                            .color(theme::TEXT2),
+                    );
+                }
                 if !tab.changes.is_empty() {
                     ui.label(
                         RichText::new(format!("· {} 处未保存", tab.changes.len()))
@@ -408,6 +417,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
         let mut commit: Option<(usize, usize, String)> = None;
         let mut new_selection: Option<Option<(usize, usize)>> = None;
         let mut copy_text: Option<String> = None;
+        let mut set_null: Option<(usize, usize)> = None;
         {
             let sc = &mut sort_click;
             let cr = &mut commit;
@@ -443,6 +453,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                         &mut copy_text,
                         &mut menu_action,
                         view_cell,
+                        &mut set_null,
                     );
                     if let Some(a) = menu_action {
                         actions.push(a);
@@ -454,7 +465,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
         if let Some(sel) = new_selection {
             *selected = sel;
         }
-        if copy_text.is_none() {
+        if copy_text.is_none() && editing.is_none() {
             if let Some((sr, sc)) = *selected {
                 if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) {
                     if let Some(r) = rows.get(sr) {
@@ -484,6 +495,12 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
             rows[ri][ci] = new_val.clone();
             changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
             changes.push((ri, col_name, new_val));
+        }
+        if let Some((ri, ci)) = set_null {
+            let col_name = columns[ci].clone();
+            rows[ri][ci] = None;
+            changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
+            changes.push((ri, col_name, None));
         }
     });
 
@@ -535,6 +552,7 @@ fn draw_data_table(
     copy_text: &mut Option<String>,
     menu_action: &mut Option<TabAction>,
     view_cell: &mut Option<(String, String)>,
+    set_null: &mut Option<(usize, usize)>,
 ) {
     let srt = &*sort;
     let col_widths = suggested_widths(rows, columns);
@@ -575,12 +593,15 @@ fn draw_data_table(
                     active_sort.is_some(),
                     RichText::new(&label_text).size(12.5).strong(),
                 );
-                if resp.clicked() {
+                let clicked = resp.clicked();
+                let sort_rect = resp.rect;
+                resp.on_hover_text("点击排序:升序 → 降序 → 取消;双击列边缘自动列宽");
+                if clicked {
                     *sc = Some(c.clone());
                 }
                 if let Some(asc) = active_sort {
                     let p = ui.painter();
-                    let c0 = resp.rect.right_center() - egui::vec2(9.0, 0.0);
+                    let c0 = sort_rect.right_center() - egui::vec2(9.0, 0.0);
                     let s = 3.2;
                     let pts = if asc {
                         vec![
@@ -670,6 +691,7 @@ fn draw_data_table(
                                 menu_action,
                                 tab_id,
                                 view_cell,
+                                set_null,
                             );
                         });
                     }
@@ -708,6 +730,7 @@ fn draw_data_cell(
     menu_action: &mut Option<TabAction>,
     tab_id: &str,
     view_cell: &mut Option<(String, String)>,
+    set_null: &mut Option<(usize, usize)>,
 ) {
     let text = icons::cell_text(v, 2000);
     let color = icons::cell_text_color(v, changed);
@@ -779,6 +802,13 @@ fn draw_data_cell(
             .clicked()
         {
             *menu_action = Some(TabAction::DeleteRow { tab_id: tab_id.to_string(), ri });
+            ui.close_menu();
+        }
+        if ui
+            .add_enabled(has_pk && v.is_some(), egui::Button::new("设为 NULL"))
+            .clicked()
+        {
+            *set_null = Some((ri, ci));
             ui.close_menu();
         }
         ui.label(
@@ -1151,6 +1181,17 @@ impl eframe::App for ShujingApp {
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command) {
             ctx.memory_mut(|m| m.request_focus(egui::Id::new("table-filter")));
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command) && !self.tabs.is_empty()
+        {
+            let id = self.tabs[self.active_tab].id.clone();
+            let dirty = self
+                .table_tab(&id)
+                .map(|t| !t.changes.is_empty())
+                .unwrap_or(false);
+            if dirty {
+                execute_tab_action(self, TabAction::SaveChanges { tab_id: id });
+            }
         }
 
         // 面板按占用顺序:侧栏 → 标签栏 → toast → 工具/分页/内容

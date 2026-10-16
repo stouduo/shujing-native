@@ -61,6 +61,23 @@ pub fn draw_query_view(
                 if has_grid && crate::theme::text_button(ui, "导出 CSV") {
                     actions.push(TabAction::ExportQueryCsv { tab_id: tab_id.to_string() });
                 }
+                let history = q.history.clone();
+                ui.menu_button(RichText::new("历史 ▾").size(13.0).color(theme::ACCENT), |ui| {
+                    if history.is_empty() {
+                        ui.label(RichText::new("暂无记录").size(12.0).color(theme::MUTED));
+                    }
+                    for (i, h) in history.iter().enumerate() {
+                        let preview: String = h.chars().take(48).collect();
+                        if ui
+                            .button(RichText::new(format!("{}. {}", i + 1, preview)).size(12.0))
+                            .on_hover_text(h)
+                            .clicked()
+                        {
+                            q.sql = h.clone();
+                            ui.close_menu();
+                        }
+                    }
+                });
             });
             crate::theme::hairline_bottom(ui);
         });

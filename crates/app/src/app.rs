@@ -96,6 +96,8 @@ pub struct StructureTab {
 pub struct QueryTab {
     pub conn_id: String,
     pub sql: String,
+    /// 执行历史(新→旧,去重,上限 20)
+    pub history: Vec<String>,
     pub results: Vec<shujing_core::ExecResult>,
     pub active_set: usize,
     pub running: bool,
@@ -451,6 +453,7 @@ impl ShujingApp {
             kind: TabKind::Query(QueryTab {
                 conn_id: inherit.unwrap_or_default(),
                 sql: String::new(),
+                history: vec![],
                 results: vec![],
                 active_set: 0,
                 running: false,
@@ -595,6 +598,9 @@ impl ShujingApp {
         }
         q.running = true;
         q.error = None;
+        q.history.retain(|h| h != &sql);
+        q.history.insert(0, sql.clone());
+        q.history.truncate(20);
         let conn_id = q.conn_id.clone();
         net::spawn(async move {
             let result = service.run_sql(&conn_id, sql, None).await;
@@ -692,6 +698,7 @@ impl ShujingApp {
                 BgEvent::RowsLoaded { tab_id, result } => {
                     if let Some(t) = self.table_tab_mut(&tab_id) {
                         t.loading = false;
+                        t.selected = None; // 数据翻页后旧选中会指错行
                         match result {
                             Ok(r) => {
                                 t.last_elapsed_ms = Some(r.elapsed_ms);
