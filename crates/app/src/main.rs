@@ -23,7 +23,7 @@ fn main() {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1360.0, 880.0])
             .with_min_inner_size([980.0, 620.0])
-            .with_title("数镜 Native"),
+            .with_title("数镜 Native v0.2.0"),
         ..Default::default()
     };
     eframe::run_native(
