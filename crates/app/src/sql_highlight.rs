@@ -4,13 +4,77 @@ use crate::theme;
 use egui::text::LayoutJob;
 
 const KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "NULL", "INSERT", "INTO", "VALUES", "UPDATE",
-    "SET", "DELETE", "CREATE", "TABLE", "DROP", "ALTER", "ADD", "INDEX", "VIEW", "JOIN", "LEFT",
-    "RIGHT", "INNER", "OUTER", "ON", "AS", "ORDER", "BY", "GROUP", "HAVING", "LIMIT", "OFFSET",
-    "DISTINCT", "COUNT", "SUM", "AVG", "MIN", "MAX", "CASE", "WHEN", "THEN", "ELSE", "END",
-    "UNION", "ALL", "EXISTS", "IN", "LIKE", "BETWEEN", "IS", "ASC", "DESC", "PRIMARY", "KEY",
-    "FOREIGN", "REFERENCES", "UNIQUE", "DEFAULT", "AUTO_INCREMENT", "IF", "WITH", "REPLACE",
-    "TRUNCATE", "SHOW", "DATABASES", "TABLES", "DESCRIBE", "EXPLAIN", "USING", "CROSS",
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "AND",
+    "OR",
+    "NOT",
+    "NULL",
+    "INSERT",
+    "INTO",
+    "VALUES",
+    "UPDATE",
+    "SET",
+    "DELETE",
+    "CREATE",
+    "TABLE",
+    "DROP",
+    "ALTER",
+    "ADD",
+    "INDEX",
+    "VIEW",
+    "JOIN",
+    "LEFT",
+    "RIGHT",
+    "INNER",
+    "OUTER",
+    "ON",
+    "AS",
+    "ORDER",
+    "BY",
+    "GROUP",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "DISTINCT",
+    "COUNT",
+    "SUM",
+    "AVG",
+    "MIN",
+    "MAX",
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "END",
+    "UNION",
+    "ALL",
+    "EXISTS",
+    "IN",
+    "LIKE",
+    "BETWEEN",
+    "IS",
+    "ASC",
+    "DESC",
+    "PRIMARY",
+    "KEY",
+    "FOREIGN",
+    "REFERENCES",
+    "UNIQUE",
+    "DEFAULT",
+    "AUTO_INCREMENT",
+    "IF",
+    "WITH",
+    "REPLACE",
+    "TRUNCATE",
+    "SHOW",
+    "DATABASES",
+    "TABLES",
+    "DESCRIBE",
+    "EXPLAIN",
+    "USING",
+    "CROSS",
 ];
 
 /// 生成 SQL 高亮 LayoutJob(供 TextEdit::layouter 使用)
@@ -83,7 +147,12 @@ fn token_color(tok: &str) -> egui::Color32 {
         theme::c().sql_comment
     } else if tok.starts_with('\'') {
         theme::c().sql_string
-    } else if tok.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    } else if tok
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         theme::c().sql_number
     } else {
         let upper: String = tok.to_ascii_uppercase();

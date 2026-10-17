@@ -7,21 +7,63 @@ use std::sync::Arc;
 
 /// 一次异步操作的完成事件(由 tokio 后台任务投递,帧循环消费)
 pub enum BgEvent {
-    ConnectDone { conn_id: String, result: Result<String, String> },
-    TablesLoaded { conn_id: String, database: Option<String>, tables: Vec<shujing_core::TableMeta> },
-    DatabasesLoaded { conn_id: String, databases: Vec<String> },
-    RowsLoaded { tab_id: String, result: Result<shujing_core::ExecResult, String> },
-    CountLoaded { tab_id: String, total: Option<u64> },
-    PkLoaded { tab_id: String, cols: Vec<String> },
-    ChangesSaved { tab_id: String, result: Result<u64, String> },
-    StructureLoaded { tab_id: String, result: Result<shujing_core::TableStructure, String> },
-    QueryDone { tab_id: String, result: Result<Vec<shujing_core::ExecResult>, String> },
-    AutoTables { conn_id: String, tables: Vec<shujing_core::TableMeta> },
-    TestDone { result: Result<String, String> },
-    ExportDone { result: Result<String, String> },
-    StatsLoaded { key: String, result: Result<(u64, Option<u64>, Option<u64>), String> },
-    ImportDone { result: Result<usize, String> },
-    DdlDone { result: Result<(), String> },
+    ConnectDone {
+        conn_id: String,
+        result: Result<String, String>,
+    },
+    TablesLoaded {
+        conn_id: String,
+        database: Option<String>,
+        tables: Vec<shujing_core::TableMeta>,
+    },
+    DatabasesLoaded {
+        conn_id: String,
+        databases: Vec<String>,
+    },
+    RowsLoaded {
+        tab_id: String,
+        result: Result<shujing_core::ExecResult, String>,
+    },
+    CountLoaded {
+        tab_id: String,
+        total: Option<u64>,
+    },
+    PkLoaded {
+        tab_id: String,
+        cols: Vec<String>,
+    },
+    ChangesSaved {
+        tab_id: String,
+        result: Result<u64, String>,
+    },
+    StructureLoaded {
+        tab_id: String,
+        result: Result<shujing_core::TableStructure, String>,
+    },
+    QueryDone {
+        tab_id: String,
+        result: Result<Vec<shujing_core::ExecResult>, String>,
+    },
+    AutoTables {
+        conn_id: String,
+        tables: Vec<shujing_core::TableMeta>,
+    },
+    TestDone {
+        result: Result<String, String>,
+    },
+    ExportDone {
+        result: Result<String, String>,
+    },
+    StatsLoaded {
+        key: String,
+        result: Result<(u64, Option<u64>, Option<u64>), String>,
+    },
+    ImportDone {
+        result: Result<usize, String>,
+    },
+    DdlDone {
+        result: Result<(), String>,
+    },
 }
 
 /// ⌘P 快速打开
@@ -42,7 +84,6 @@ pub struct ImportState {
     pub table: String,
     pub path: String,
     pub headers: Vec<String>,
-    pub rows: Vec<Vec<String>>,
     /// 源列 -> 目标表列索引(None=跳过)
     pub col_map: Vec<Option<usize>>,
     pub batch_errors: Option<String>,
@@ -50,10 +91,12 @@ pub struct ImportState {
     pub target_cols: Vec<String>,
 }
 
-impl ImportState {
-    pub fn headers_target(&self) -> Vec<String> {
-        self.target_cols.clone()
-    }
+/// 新建表弹窗状态(名称/SQL 需要跨帧保存)
+pub struct NewTableState {
+    pub conn_id: String,
+    pub database: Option<String>,
+    pub name: String,
+    pub sql: String,
 }
 
 /// 表数据标签
@@ -86,6 +129,8 @@ pub struct TableTab {
     pub view_cell: Option<(String, String)>,
     /// 新增行表单 (列名, 输入)
     pub insert_form: Option<Vec<(String, String)>>,
+    /// 行详情面板(原型默认不显示,右键"查看整行"打开)
+    pub detail: bool,
 }
 
 impl TableTab {
@@ -113,6 +158,7 @@ impl TableTab {
             last_elapsed_ms: None,
             view_cell: None,
             insert_form: None,
+            detail: false,
         }
     }
 }
@@ -254,9 +300,13 @@ pub struct ShujingApp {
     pub dark_mode: bool,
     pub auto_connect_done: bool,
     pub quick_open: Option<QuickOpen>,
-    pub stats: Option<(String, Option<(u64, Option<u64>, Option<u64>)>, Option<String>)>,
+    pub stats: Option<(
+        String,
+        Option<(u64, Option<u64>, Option<u64>)>,
+        Option<String>,
+    )>,
     pub import: Option<ImportState>,
-    pub new_table: Option<(String, Option<String>, String)>, // conn, db, sql
+    pub new_table: Option<NewTableState>,
 }
 
 pub enum PendingAction {
@@ -282,11 +332,17 @@ impl ShujingApp {
         let _ = std::fs::create_dir_all(&config_dir);
         let service = Arc::new(Service::new(&config_dir));
         let conns = service.list_saved_connections();
-        eprintln!("[startup] config_dir={:?} conns={}", config_dir.display(), conns.len());
+        eprintln!(
+            "[startup] config_dir={:?} conns={}",
+            config_dir.display(),
+            conns.len()
+        );
         let (event_tx, events) = std::sync::mpsc::channel();
         let dark = Self::load_dark_pref(&config_dir);
         crate::theme::set_dark(dark);
         crate::theme::apply(&cc.egui_ctx);
+        #[cfg(target_os = "macos")]
+        crate::force_appearance(dark);
         Self {
             service,
             config_dir,
@@ -325,59 +381,172 @@ impl ShujingApp {
         Self::apply_fonts(&cc.egui_ctx);
     }
 
-    /// 字体配置(供启动与无头渲染测试共用)
+    /// 字体配置(供启动与无头渲染测试共用):
+    /// 拉丁 SF Pro(Helvetica Neue 兜底)、粗体 Helvetica Neue Bold、
+    /// 中文冬青黑体 W3/W6、数据格 Menlo、符号 Apple Symbols。
     pub fn apply_fonts(ctx: &egui::Context) {
-        // mmap 系统字体:字节保持文件页(可回收/可共享),不占匿名脏堆。
-        // PingFang 是 iOS/macOS 界面中文字体;ttc 需选 SC face(索引)。
-        let candidates: &[(&str, u32)] = &[
-            ("/System/Library/Fonts/PingFang.ttc", 2),
-            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
-            ("/System/Library/Fonts/STHeiti Light.ttc", 0),
-        ];
         let mut fonts = egui::FontDefinitions::default();
-        for (path, index) in candidates {
+        let mut add = |name: &str, path: &str, index: u32, tweak: egui::FontTweak| -> bool {
             if let Some(bytes) = Self::mmap_static(path) {
-                let data = egui::FontData {
-                    font: std::borrow::Cow::Borrowed(bytes),
-                    index: *index,
-                    tweak: Default::default(),
-                };
-                fonts
-                    .font_data
-                    .insert("cjk".to_owned(), std::sync::Arc::new(data));
-                // Proportional:cjk 放首位(拉丁也用 PingFang,混排 metrics 统一,
-                // 即 iOS 的字体策略);Monospace:追加末尾仅作中文回落(保等宽拉丁)
-                let _ = fonts
-                    .families
-                    .entry(egui::FontFamily::Proportional)
-                    .or_default()
-                    .insert(0, "cjk".to_owned());
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Monospace)
-                    .or_default()
-                    .push("cjk".to_owned());
-                break;
+                fonts.font_data.insert(
+                    name.to_owned(),
+                    std::sync::Arc::new(egui::FontData {
+                        font: std::borrow::Cow::Borrowed(bytes),
+                        index,
+                        tweak,
+                    }),
+                );
+                true
+            } else {
+                false
+            }
+        };
+        let sf_ok = add(
+            "sf",
+            "/System/Library/Fonts/SFNS.ttf",
+            0,
+            Default::default(),
+        );
+        let sf_ok = sf_ok
+            || add(
+                "sf",
+                "/System/Library/Fonts/HelveticaNeue.ttc",
+                0,
+                Default::default(),
+            );
+        let bold_ok = add(
+            "bold",
+            "/System/Library/Fonts/HelveticaNeue.ttc",
+            1,
+            Default::default(),
+        );
+        let cjk_tweak = egui::FontTweak {
+            y_offset_factor: crate::theme::CJK_BASELINE_FACTOR,
+            ..Default::default()
+        };
+        let cjk_ok = add(
+            "cjk",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            0,
+            cjk_tweak,
+        );
+        let cjk_bold_ok = add(
+            "cjk_bold",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            2,
+            cjk_tweak,
+        );
+        let mono_ok = add(
+            "mono",
+            "/System/Library/Fonts/Menlo.ttc",
+            0,
+            Default::default(),
+        );
+        let mono_bold_ok = add(
+            "mono_bold",
+            "/System/Library/Fonts/Menlo.ttc",
+            1,
+            Default::default(),
+        );
+        let symbols_ok = add(
+            "symbols",
+            "/System/Library/Fonts/Apple Symbols.ttf",
+            0,
+            egui::FontTweak {
+                y_offset: -2.5,
+                ..Default::default()
+            },
+        );
+
+        // 比例字体:拉丁 SF Pro 优先,中文冬青黑体,最后符号回落
+        {
+            let fam = fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default();
+            if sf_ok {
+                fam.insert(0, "sf".to_owned());
+            }
+            if cjk_ok {
+                fam.push("cjk".to_owned());
+            }
+            if symbols_ok {
+                fam.push("symbols".to_owned());
             }
         }
-        // 符号回落:系统字库 Apple Symbols(↵ ▾ ✕ ☀ ☾ ⌘ ↻ …),
-        // 挂两个家族末尾——缺字形一律回落到这里,不再有豆腐块
-        if let Some(bytes) = Self::mmap_static("/System/Library/Fonts/Apple Symbols.ttf") {
-            fonts.font_data.insert(
-                "symbols".to_owned(),
-                std::sync::Arc::new(egui::FontData {
-                    font: std::borrow::Cow::Borrowed(bytes),
-                    index: 0,
-                    // Apple Symbols 行内基线低于 PingFang:上移对齐(否则按钮里 ↵▾☀ 比文字低)
-                    tweak: egui::FontTweak {
-                        y_offset: -2.5,
-                        ..Default::default()
-                    },
-                }),
-            );
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts.families.entry(family).or_default().push("symbols".to_owned());
+        // 等宽字体:Menlo(数据格),中文仅作回落(等宽拉丁保持)
+        {
+            let fam = fonts
+                .families
+                .entry(egui::FontFamily::Monospace)
+                .or_default();
+            if mono_ok {
+                fam.insert(0, "mono".to_owned());
             }
+            if cjk_ok {
+                fam.push("cjk".to_owned());
+            }
+            if symbols_ok {
+                fam.push("symbols".to_owned());
+            }
+        }
+        // 粗体家族:Helvetica Neue Bold + 冬青 W6(中文),缺失时回落常规字族
+        {
+            let mut list: Vec<String> = Vec::new();
+            if bold_ok {
+                list.push("bold".to_owned());
+            }
+            if cjk_bold_ok {
+                list.push("cjk_bold".to_owned());
+            }
+            if sf_ok {
+                list.push("sf".to_owned());
+            }
+            if cjk_ok {
+                list.push("cjk".to_owned());
+            }
+            if symbols_ok {
+                list.push("symbols".to_owned());
+            }
+            if list.is_empty() {
+                list = fonts
+                    .families
+                    .get(&egui::FontFamily::Proportional)
+                    .cloned()
+                    .unwrap_or_default();
+            }
+            fonts
+                .families
+                .insert(egui::FontFamily::Name(crate::theme::BOLD.into()), list);
+        }
+        // 等宽粗体:Menlo Bold + 冬青 W6
+        {
+            let mut list: Vec<String> = Vec::new();
+            if mono_bold_ok {
+                list.push("mono_bold".to_owned());
+            }
+            if cjk_bold_ok {
+                list.push("cjk_bold".to_owned());
+            }
+            if mono_ok {
+                list.push("mono".to_owned());
+            }
+            if cjk_ok {
+                list.push("cjk".to_owned());
+            }
+            if symbols_ok {
+                list.push("symbols".to_owned());
+            }
+            if list.is_empty() {
+                list = fonts
+                    .families
+                    .get(&egui::FontFamily::Monospace)
+                    .cloned()
+                    .unwrap_or_default();
+            }
+            fonts
+                .families
+                .insert(egui::FontFamily::Name(crate::theme::MONO_BOLD.into()), list);
         }
         ctx.set_fonts(fonts);
     }
@@ -457,7 +626,10 @@ impl ShujingApp {
             shot.sent = true;
             eprintln!(
                 "[shot] tabs={:?} active={}",
-                self.tabs.iter().map(|t| t.title.clone()).collect::<Vec<_>>(),
+                self.tabs
+                    .iter()
+                    .map(|t| t.title.clone())
+                    .collect::<Vec<_>>(),
                 self.active_tab
             );
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -593,18 +765,21 @@ impl ShujingApp {
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         let mysql = mysql_quote(&self.conns, &tab_id);
-        let Some(tab) = self.table_tab_mut(&tab_id) else { return };
+        let Some(tab) = self.table_tab_mut(&tab_id) else {
+            return;
+        };
         let conn_id = tab.conn_id.clone();
         let database = tab.database.clone();
         let table = tab.table.clone();
         let (limit, offset) = (tab.page_size, (tab.page - 1) * tab.page_size);
         let cols_snapshot = tab.columns.clone();
-        let order = tab
-            .sort
-            .as_ref()
-            .map(|(c, asc)| {
-                format!("{} {}", quote_ident_by(c, mysql), if *asc { "ASC" } else { "DESC" })
-            });
+        let order = tab.sort.as_ref().map(|(c, asc)| {
+            format!(
+                "{} {}",
+                quote_ident_by(c, mysql),
+                if *asc { "ASC" } else { "DESC" }
+            )
+        });
         let where_clause = tab
             .active_filter
             .as_ref()
@@ -638,7 +813,11 @@ impl ShujingApp {
         }
         net::spawn(async move {
             let full = match &database {
-                Some(db) => format!("{}.{}", quote_ident_by(db, mysql), quote_ident_by(&table, mysql)),
+                Some(db) => format!(
+                    "{}.{}",
+                    quote_ident_by(db, mysql),
+                    quote_ident_by(&table, mysql)
+                ),
                 None => quote_ident_by(&table, mysql),
             };
             let mut sql = format!("SELECT * FROM {full}");
@@ -651,7 +830,10 @@ impl ShujingApp {
             sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
             let result = service.run_sql(&conn_id, sql, Some(limit)).await;
             let result = result.map(|mut rs| rs.pop().unwrap_or_default());
-            let _ = tx.send(BgEvent::RowsLoaded { tab_id: tab_id.clone(), result });
+            let _ = tx.send(BgEvent::RowsLoaded {
+                tab_id: tab_id.clone(),
+                result,
+            });
             let mut cnt = format!("SELECT COUNT(*) FROM {full}");
             if let Some(w) = &where_clause {
                 cnt.push_str(&format!(" WHERE {w}"));
@@ -672,14 +854,20 @@ impl ShujingApp {
         let tab_id = tab_id.to_string();
         let tx = self.event_tx.clone();
         let service = self.service.clone();
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else { return };
-        let TabKind::Structure(st) = &mut tab.kind else { return };
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Structure(st) = &mut tab.kind else {
+            return;
+        };
         let conn_id = st.conn_id.clone();
         let table = st.table.clone();
         let database = st.database.clone();
         st.loading = true;
         net::spawn(async move {
-            let result = service.get_table_structure(&conn_id, &table, database).await;
+            let result = service
+                .get_table_structure(&conn_id, &table, database)
+                .await;
             let _ = tx.send(BgEvent::StructureLoaded { tab_id, result });
         });
     }
@@ -689,8 +877,12 @@ impl ShujingApp {
         let tab_id = tab_id.to_string();
         let tx = self.event_tx.clone();
         let service = self.service.clone();
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else { return };
-        let TabKind::Query(q) = &mut tab.kind else { return };
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Query(q) = &mut tab.kind else {
+            return;
+        };
         if q.running {
             return;
         }
@@ -728,23 +920,33 @@ impl ShujingApp {
         self.autoopen_done = true;
         let tx = self.event_tx.clone();
         let service = self.service.clone();
+        let info = ConnInfo {
+            id: "auto".into(),
+            name: "本地".into(),
+            db_type: shujing_core::DbType::Sqlite,
+            host: None,
+            port: None,
+            user: None,
+            password: None,
+            database: None,
+            file_path: Some(db),
+            color: None,
+            read_only: false,
+        };
+        // 让压测/演示入口也出现在侧栏(否则只有标签页,看不到连接树)
+        if !self.conns.iter().any(|c| c.id == info.id) {
+            self.conns.push(info.clone());
+        }
         net::spawn(async move {
-            let info = ConnInfo {
-                id: "auto".into(),
-                name: "auto".into(),
-                db_type: shujing_core::DbType::Sqlite,
-                host: None,
-                port: None,
-                user: None,
-                password: None,
-                database: None,
-                file_path: Some(db),
-                color: None,
-                read_only: false,
-            };
             let _ = service.connect(info.clone()).await;
-            let tables = service.list_tables(&info.id, None).await.unwrap_or_default();
-            let _ = tx.send(BgEvent::AutoTables { conn_id: info.id, tables });
+            let tables = service
+                .list_tables(&info.id, None)
+                .await
+                .unwrap_or_default();
+            let _ = tx.send(BgEvent::AutoTables {
+                conn_id: info.id,
+                tables,
+            });
         });
     }
 
@@ -775,7 +977,10 @@ impl ShujingApp {
                         self.toast_error(format!("连接失败: {e}"));
                     }
                 },
-                BgEvent::DatabasesLoaded { conn_id, mut databases } => {
+                BgEvent::DatabasesLoaded {
+                    conn_id,
+                    mut databases,
+                } => {
                     if let Some(tree) = self.trees.get_mut(&conn_id) {
                         tree.loading = false;
                         // SQLite 无库概念:合成 main 节点,让侧栏树/表搜索可用
@@ -800,7 +1005,11 @@ impl ShujingApp {
                         }
                     }
                 }
-                BgEvent::TablesLoaded { conn_id, database, tables } => {
+                BgEvent::TablesLoaded {
+                    conn_id,
+                    database,
+                    tables,
+                } => {
                     if let Some(tree) = self.trees.get_mut(&conn_id) {
                         tree.loading = false;
                         // 无库名(如 SQLite 单库)落到 "main" 槽
@@ -873,6 +1082,12 @@ impl ShujingApp {
                 BgEvent::AutoTables { conn_id, tables } => {
                     let tree = self.trees.entry(conn_id.clone()).or_default();
                     tree.online = true;
+                    if tree.databases.is_empty() {
+                        tree.databases = vec!["main".to_string()];
+                    }
+                    if tree.expanded_db.is_none() {
+                        tree.expanded_db = Some("main".to_string());
+                    }
                     tree.tables_by_db.insert("main".to_string(), tables.clone());
                     let names: Vec<String> = tables
                         .iter()
@@ -883,10 +1098,10 @@ impl ShujingApp {
                         .ok()
                         .and_then(|_| names.first().cloned());
                     for name in names {
-                        self.open_table(&conn_id, &name, None);
+                        self.open_table(&conn_id, &name, Some("main".to_string()));
                     }
                     if let Some(first) = struct_first {
-                        self.open_structure(&conn_id, &first, None);
+                        self.open_structure(&conn_id, &first, Some("main".to_string()));
                     }
                 }
                 BgEvent::TestDone { result } => {
@@ -900,12 +1115,16 @@ impl ShujingApp {
                     Err(e) => self.toast_error(format!("导出失败: {e}")),
                 },
                 BgEvent::StatsLoaded { key, result } => {
-                    match &result {
-                        Ok(_) => self.stats = Some((key, result.ok(), None)),
-                        Err(e) => {
-                            let cur = self.stats.take();
-                            self.stats = Some((key, None, Some(e.clone())));
-                            let _ = cur;
+                    // 用户可能已关闭统计弹窗:只更新仍打开同一张表的统计,避免迟到结果重新弹窗
+                    let still_open = self
+                        .stats
+                        .as_ref()
+                        .map(|(k, _, _)| k == &key)
+                        .unwrap_or(false);
+                    if still_open {
+                        match &result {
+                            Ok(_) => self.stats = Some((key, result.ok(), None)),
+                            Err(e) => self.stats = Some((key, None, Some(e.clone()))),
                         }
                     }
                 }
@@ -913,16 +1132,6 @@ impl ShujingApp {
                     Ok(n) => {
                         self.import = None;
                         self.toast_error(format!("已导入 {n} 行"));
-                        if let Some(t) = self.tabs.first() {
-                            let id = self
-                                .tabs
-                                .iter()
-                                .find_map(|t| {
-                                    t.table_data().map(|tt| (tt.conn_id.clone(), tt.table.clone(), tt.database.clone(), t.id.clone()))
-                                });
-                            let _ = t;
-                            let _ = id;
-                        }
                         // 刷新当前表标签(若是导入目标)——简单起见全部刷新
                         let ids: Vec<String> = self
                             .tabs
@@ -946,23 +1155,23 @@ impl ShujingApp {
                     Ok(()) => {
                         self.new_table = None;
                         self.toast_error("创建成功".to_string());
-                        // 刷新该连接的表列表
-                        let conn = self.new_table.as_ref().map(|x| x.0.clone());
-                        let _ = conn;
                         // 重新载入所有在线树的表
                         let ids: Vec<String> = self.trees.keys().cloned().collect();
                         for cid in ids {
-                            let dbs = self.trees.get(&cid).map(|t| {
-                                (t.databases.clone(), t.expanded_db.clone())
-                            });
+                            let dbs = self
+                                .trees
+                                .get(&cid)
+                                .map(|t| (t.databases.clone(), t.expanded_db.clone()));
                             if let Some((dbs, exp)) = dbs {
                                 if let Some(db) = exp.or_else(|| dbs.first().cloned()) {
                                     let tx = self.event_tx.clone();
                                     let service = self.service.clone();
                                     let (c2, d2) = (cid.clone(), db.clone());
                                     net::spawn(async move {
-                                        let tables =
-                                            service.list_tables(&c2, Some(d2)).await.unwrap_or_default();
+                                        let tables = service
+                                            .list_tables(&c2, Some(d2))
+                                            .await
+                                            .unwrap_or_default();
                                         let _ = tx.send(BgEvent::TablesLoaded {
                                             conn_id: c2,
                                             database: Some(db),
@@ -1007,7 +1216,9 @@ pub fn quote_ident_by(name: &str, mysql: bool) -> String {
     let q = if mysql { '`' } else { '"' };
     format!(
         "{q}{}{q}",
-        name.split(q).collect::<Vec<_>>().join(&q.to_string().repeat(2))
+        name.split(q)
+            .collect::<Vec<_>>()
+            .join(&q.to_string().repeat(2))
     )
 }
 
@@ -1060,7 +1271,9 @@ fn write_tga(img: &egui::ColorImage, path: &std::path::Path) -> std::io::Result<
 impl ShujingApp {
     /// 启动 CSV 导入(按当前 col_map 拼 composite::CsvImport)
     pub fn start_import(&mut self) {
-        let Some(im) = self.import.as_ref() else { return };
+        let Some(im) = self.import.as_ref() else {
+            return;
+        };
         let col_map: Vec<(usize, String)> = im
             .col_map
             .iter()
@@ -1096,7 +1309,9 @@ impl ShujingApp {
     pub fn open_stats(&mut self, conn_id: &str, database: &str, table: &str) {
         let key = crate::app::stats_key(conn_id, table);
         self.stats = Some((key.clone(), None, None));
-        let Some(info) = self.conns.iter().find(|c| c.id == conn_id).cloned() else { return };
+        let Some(info) = self.conns.iter().find(|c| c.id == conn_id).cloned() else {
+            return;
+        };
         let service = self.service.clone();
         let tx = self.event_tx.clone();
         let db = database.to_string();
@@ -1104,7 +1319,10 @@ impl ShujingApp {
         let key2 = key.clone();
         crate::net::spawn(async move {
             let r = shujing_core::composite::table_stats(&service, &info, Some(db), &tbl).await;
-            let _ = tx.send(BgEvent::StatsLoaded { key: key2, result: r });
+            let _ = tx.send(BgEvent::StatsLoaded {
+                key: key2,
+                result: r,
+            });
         });
     }
 
@@ -1119,7 +1337,20 @@ impl ShujingApp {
         let target_cols = self
             .tabs
             .iter()
-            .find_map(|t| t.table_data().map(|tt| tt.columns.clone()))
+            .find_map(|t| {
+                t.table_data()
+                    .filter(|tt| {
+                        tt.conn_id == conn_id
+                            && tt.table == table
+                            && tt.database.as_deref() == Some(database)
+                    })
+                    .map(|tt| tt.columns.clone())
+            })
+            .or_else(|| {
+                self.tabs
+                    .iter()
+                    .find_map(|t| t.table_data().map(|tt| tt.columns.clone()))
+            })
             .unwrap_or_default();
         self.import = Some(ImportState {
             conn_id: conn_id.to_string(),
@@ -1127,7 +1358,6 @@ impl ShujingApp {
             table: table.to_string(),
             path: path.display().to_string(),
             headers: Vec::new(),
-            rows: Vec::new(),
             col_map: Vec::new(),
             batch_errors: None,
             target_cols,

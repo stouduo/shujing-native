@@ -1,69 +1,90 @@
-//! painter 直绘的小图标:系统中文字体缺 ▤/▸ 等字形(显示成方框),符号一律不依赖字体。
+//! painter 直绘的小图标:不依赖系统字形(缺字形时不会出现豆腐块),
+//! 全部按原型的 1px 线性风格绘制,并与 PingFang/Helvetica 文字基线对齐。
 
 use crate::theme;
 use egui::{Color32, Pos2, Sense, Shape, Stroke, Ui, Vec2};
 
-/// 展开/收起三角,可点击
-pub fn triangle(ui: &mut Ui, open: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::click());
-    let color = if resp.hovered() { theme::c().text } else { theme::c().text2 };
-    let s = 3.2;
-    // PingFang 行框 metrics 使文字墨迹中心高于几何中心,图标随之上移对齐
-    let (x, y) = (rect.center().x, rect.center().y - 1.5);
+/// 展开/收起三角(自绘;位置由调用方给定)
+pub fn paint_triangle(p: &egui::Painter, center: Pos2, open: bool, color: Color32) {
+    let s = 3.0;
+    let (x, y) = (center.x, center.y);
     let pts = if open {
-        // ▼
-        vec![Pos2::new(x - s, y - s / 2.0), Pos2::new(x + s, y - s / 2.0), Pos2::new(x, y + s)]
+        vec![
+            Pos2::new(x - s, y - s / 2.0),
+            Pos2::new(x + s, y - s / 2.0),
+            Pos2::new(x, y + s),
+        ]
     } else {
-        // ▸
-        vec![Pos2::new(x - s / 2.0, y - s), Pos2::new(x - s / 2.0, y + s), Pos2::new(x + s, y)]
+        vec![
+            Pos2::new(x - s / 2.0, y - s),
+            Pos2::new(x - s / 2.0, y + s),
+            Pos2::new(x + s, y),
+        ]
     };
-    ui.painter().add(Shape::convex_polygon(pts, color, Stroke::NONE));
-    resp
+    p.add(Shape::convex_polygon(pts, color, Stroke::NONE));
 }
 
-/// 连接状态圆点
-pub fn dot(ui: &mut Ui, online: bool) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
-    let (on_c, off_c) = (theme::c().green, theme::c().dot_off);
-    ui.painter().circle_filled(rect.center() - egui::vec2(0.0, 1.5), 4.0, if online { on_c } else { off_c });
+/// 表格 glyph(原型:圆角方框 + 竖线 + 横线,左上小格填充)
+pub fn paint_table(p: &egui::Painter, rect: egui::Rect, color: Color32) {
+    let r = rect.shrink(1.0);
+    let st = Stroke::new(1.1, color);
+    p.rect_stroke(r, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
+    let mid_y = r.top() + (r.height() * 0.5).round();
+    let vx = r.left() + (r.width() * 0.42).round();
+    p.line_segment(
+        [
+            Pos2::new(r.left() + 1.0, mid_y),
+            Pos2::new(r.right() - 1.0, mid_y),
+        ],
+        st,
+    );
+    p.line_segment(
+        [
+            Pos2::new(vx, r.top() + 1.0),
+            Pos2::new(vx, r.bottom() - 1.0),
+        ],
+        st,
+    );
+    p.rect_filled(
+        egui::Rect::from_min_max(
+            Pos2::new(r.left() + 1.0, r.top() + 1.0),
+            Pos2::new(vx - 1.0, mid_y - 1.0),
+        ),
+        egui::CornerRadius::same(1),
+        color.gamma_multiply(0.55),
+    );
 }
-
 
 /// 标签页类型 glyph:表(网格)/查询(播放)/结构(横线);绝对位置绘制
 pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_y: f32) {
-    let rect = egui::Rect::from_min_size(
-        egui::pos2(left, center_y - 6.0),
-        Vec2::splat(12.0),
-    );
+    let rect = egui::Rect::from_min_size(egui::pos2(left, center_y - 6.0), Vec2::splat(12.0));
     let p = ui.painter();
-    let st = Stroke::new(1.1, color);
     match kind {
-        0 => {
-            // 表:圆角矩形 + 中横 + 半竖
-            p.rect_stroke(rect.shrink(1.0), egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
-            let mid_y = rect.center().y;
-            p.line_segment([egui::pos2(rect.left() + 1.0, mid_y), egui::pos2(rect.right() - 1.0, mid_y)], st);
-            let vx = rect.left() + 1.0 + (rect.width() - 2.0) * 0.45;
-            p.line_segment([egui::pos2(vx, rect.top() + 1.0), egui::pos2(vx, mid_y)], st);
-        }
+        0 => paint_table(p, rect, color),
         1 => {
-            // 查询:小三角
             let c = rect.center();
             let s = 3.2;
             p.add(Shape::convex_polygon(
-                vec![egui::pos2(c.x - s / 2.0, c.y - s), egui::pos2(c.x - s / 2.0, c.y + s), egui::pos2(c.x + s, c.y)],
+                vec![
+                    egui::pos2(c.x - s / 2.0, c.y - s),
+                    egui::pos2(c.x - s / 2.0, c.y + s),
+                    egui::pos2(c.x + s, c.y),
+                ],
                 color,
                 Stroke::NONE,
             ));
         }
         _ => {
-            // 结构:三横线
             let c = rect.center();
+            let st = Stroke::new(1.1, color);
             for dy in [-3.0, 0.0, 3.0] {
                 let y = c.y + dy;
                 let shrink = if dy == 0.0 { 0.0 } else { 1.5 };
                 p.line_segment(
-                    [egui::pos2(rect.left() + 1.0 + shrink, y), egui::pos2(rect.right() - 1.0 - shrink, y)],
+                    [
+                        egui::pos2(rect.left() + 1.0 + shrink, y),
+                        egui::pos2(rect.right() - 1.0 - shrink, y),
+                    ],
                     st,
                 );
             }
@@ -71,200 +92,281 @@ pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_
     }
 }
 
-/// 主题切换钮:系统字形 ☀/☾(Apple Symbols,与文字同一 metrics)
-pub fn theme_toggle(ui: &mut Ui, dark: bool) -> egui::Response {
-    ui.add(
-        egui::Button::new(
-            egui::RichText::new(if dark { "☀" } else { "☾" })
-                .size(16.0)
-                .color(theme::c().accent),
-        )
-        .fill(egui::Color32::TRANSPARENT)
-        .stroke(Stroke::NONE)
-        .min_size(egui::vec2(26.0, 24.0)),
-    )
-}
-
-/// 漏斗 glyph(筛选语义)
+/// 漏斗 glyph(筛选语义),宽 12,高 12
 pub fn funnel_glyph(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
-    let st = Stroke::new(1.3, color);
-    let (x, y) = (center.x, center.y);
-    p.line_segment([egui::pos2(x - 4.0, y - 3.5), egui::pos2(x + 4.0, y - 3.5)], st);
-    p.line_segment([egui::pos2(x - 4.0, y - 3.5), egui::pos2(x - 1.0, y + 0.5)], st);
-    p.line_segment([egui::pos2(x + 4.0, y - 3.5), egui::pos2(x + 1.0, y + 0.5)], st);
-    p.line_segment([egui::pos2(x - 1.0, y + 0.5), egui::pos2(x - 1.0, y + 4.0)], st);
-    p.line_segment([egui::pos2(x + 1.0, y + 0.5), egui::pos2(x + 1.0, y + 2.5)], st);
-    p.line_segment([egui::pos2(x - 1.0, y + 4.0), egui::pos2(x + 1.0, y + 2.5)], st);
-}
-
-/// 状态徽章(0/1/2 类短值):绿=on 红=off
-pub fn status_badge(ui: &mut Ui, text: &str, on: bool) {
-    let p = theme::c();
-    let font = egui::FontId::proportional(10.5);
-    let galley = ui.painter().layout_no_wrap(text.to_string(), font.clone(), p.text);
-    let size = galley.size() + egui::vec2(10.0, 5.0);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let (bg, fg) = if on { (p.green, p.green) } else { (p.red, p.red) };
-    ui.painter().rect_filled(rect, 5, bg.gamma_multiply(0.16));
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, font, fg);
+    let st = Stroke::new(1.2, color);
+    let (x, y) = (center.x, center.y - 1.0);
+    p.line_segment(
+        [egui::pos2(x - 5.0, y - 3.5), egui::pos2(x + 5.0, y - 3.5)],
+        st,
+    );
+    p.line_segment(
+        [egui::pos2(x - 5.0, y - 3.5), egui::pos2(x - 1.6, y + 0.8)],
+        st,
+    );
+    p.line_segment(
+        [egui::pos2(x + 5.0, y - 3.5), egui::pos2(x + 1.6, y + 0.8)],
+        st,
+    );
+    p.line_segment(
+        [egui::pos2(x - 1.6, y + 0.8), egui::pos2(x - 1.6, y + 4.5)],
+        st,
+    );
+    p.line_segment(
+        [egui::pos2(x + 1.6, y + 0.8), egui::pos2(x + 1.6, y + 2.8)],
+        st,
+    );
+    p.line_segment(
+        [egui::pos2(x - 1.6, y + 4.5), egui::pos2(x + 1.6, y + 2.8)],
+        st,
+    );
 }
 
 /// 放大镜 glyph(搜索框内)
 pub fn magnifier(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
     let st = Stroke::new(1.3, color);
-    p.circle_stroke(egui::pos2(center.x - 1.0, center.y - 1.0), 3.4, st);
+    p.circle_stroke(egui::pos2(center.x - 1.0, center.y - 1.0), 3.6, st);
     p.line_segment(
-        [egui::pos2(center.x + 1.8, center.y + 1.8), egui::pos2(center.x + 5.0, center.y + 5.0)],
+        [
+            egui::pos2(center.x + 1.9, center.y + 1.9),
+            egui::pos2(center.x + 5.2, center.y + 5.2),
+        ],
         st,
     );
 }
 
-/// iOS 式搜索框:圆角底 + 内嵌放大镜 + 无框输入
-pub fn search_box(
-    ui: &mut Ui,
-    id_salt: &str,
-    text: &mut String,
-    placeholder: &str,
-    width: f32,
-) -> egui::Response {
-    search_box_icon(ui, id_salt, text, placeholder, width, false)
+/// 画一个关闭叉(位置/尺寸由调用方给定)
+pub fn paint_close(p: &egui::Painter, center: egui::Pos2, half: f32, color: Color32) {
+    let st = Stroke::new(1.2, color);
+    p.line_segment(
+        [
+            egui::pos2(center.x - half, center.y - half),
+            egui::pos2(center.x + half, center.y + half),
+        ],
+        st,
+    );
+    p.line_segment(
+        [
+            egui::pos2(center.x - half, center.y + half),
+            egui::pos2(center.x + half, center.y - half),
+        ],
+        st,
+    );
 }
 
-/// 同上,funnel=true 用漏斗图标(筛选语义)
-pub fn search_box_icon(
-    ui: &mut Ui,
-    id_salt: &str,
-    text: &mut String,
-    placeholder: &str,
-    width: f32,
-    funnel: bool,
-) -> egui::Response {
-    let h = 26.0;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 8, crate::theme::c().input_bg);
-    if funnel {
-        funnel_glyph(
-            ui.painter(),
-            egui::pos2(rect.left() + 12.0, rect.center().y),
-            crate::theme::c().muted,
+/// 画一个加号
+pub fn paint_plus(p: &egui::Painter, center: egui::Pos2, half: f32, color: Color32) {
+    let st = Stroke::new(1.4, color);
+    p.line_segment(
+        [
+            egui::pos2(center.x - half, center.y),
+            egui::pos2(center.x + half, center.y),
+        ],
+        st,
+    );
+    p.line_segment(
+        [
+            egui::pos2(center.x, center.y - half),
+            egui::pos2(center.x, center.y + half),
+        ],
+        st,
+    );
+}
+
+/// 刷新图标:3/4 圆弧 + 箭头(手绘,避免字形基线问题)
+pub fn refresh(ui: &mut Ui, color: egui::Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
+    let col = if resp.hovered() {
+        theme::c().text
+    } else {
+        color
+    };
+    let p = ui.painter();
+    let c = rect.center();
+    let r = 6.0;
+    let st = Stroke::new(1.4, col);
+    let start = -std::f32::consts::FRAC_PI_2 + 0.55;
+    let end = start + std::f32::consts::TAU * 0.78;
+    let mut pts = Vec::new();
+    let n = 28;
+    for i in 0..=n {
+        let a = start + (end - start) * i as f32 / n as f32;
+        pts.push(egui::pos2(c.x + a.cos() * r, c.y + a.sin() * r));
+    }
+    p.add(Shape::line(pts, st));
+    // 箭头(弧尾切线方向)
+    let a = end;
+    let tip = egui::pos2(c.x + a.cos() * (r + 1.6), c.y + a.sin() * (r + 1.6));
+    let s = 3.2;
+    let dx = -a.sin();
+    let dy = a.cos();
+    let nx = a.cos();
+    let ny = a.sin();
+    let base = egui::pos2(tip.x - dx * s * 0.6, tip.y - dy * s * 0.6);
+    p.add(Shape::convex_polygon(
+        vec![
+            tip,
+            egui::pos2(base.x + nx * s, base.y + ny * s),
+            egui::pos2(base.x - nx * s, base.y - ny * s),
+        ],
+        col,
+        Stroke::NONE,
+    ));
+    resp
+}
+
+/// ‹ / › 翻页箭头
+pub fn chevron(ui: &mut Ui, left: bool, color: egui::Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(22.0, 24.0), Sense::click());
+    let col = if resp.hovered() {
+        theme::c().text
+    } else {
+        color
+    };
+    let p = ui.painter();
+    let st = Stroke::new(1.5, col);
+    let (c, d) = (rect.center(), 3.4);
+    if left {
+        p.line_segment(
+            [
+                egui::pos2(c.x + d * 0.5, c.y - d),
+                egui::pos2(c.x - d * 0.5, c.y),
+            ],
+            st,
+        );
+        p.line_segment(
+            [
+                egui::pos2(c.x - d * 0.5, c.y),
+                egui::pos2(c.x + d * 0.5, c.y + d),
+            ],
+            st,
         );
     } else {
-        magnifier(ui.painter(), egui::pos2(rect.left() + 12.0, rect.center().y), crate::theme::c().muted);
-    }
-    let inner = egui::Rect::from_min_size(
-        egui::pos2(rect.left() + 24.0, rect.top()),
-        egui::Vec2::new(width - 30.0, h),
-    );
-    let resp = ui
-        .allocate_new_ui(
-            egui::UiBuilder::new().max_rect(inner),
-            |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(text)
-                        .id(egui::Id::new(id_salt))
-                        .hint_text(egui::RichText::new(placeholder).color(crate::theme::c().muted))
-                        .desired_width(inner.width())
-                        .frame(false)
-                        .font(egui::TextStyle::Body),
-                )
-            },
-        )
-        .inner;
-    resp
-}
-
-/// 刷新:系统字形 ↻(Apple Symbols)
-pub fn refresh(ui: &mut Ui, color: egui::Color32) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new("↻").size(15.0).color(color))
-            .fill(egui::Color32::TRANSPARENT)
-            .stroke(Stroke::NONE)
-            .min_size(egui::vec2(26.0, 24.0)),
-    )
-}
-
-/// 更多 ⋯
-pub fn dots(ui: &mut Ui, color: egui::Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::click());
-    let p = ui.painter();
-    let y = rect.center().y;
-    for dx in [-4.0, 0.0, 4.0] {
-        p.circle_filled(egui::pos2(rect.center().x + dx, y), 1.4, color);
-    }
-    resp
-}
-
-/// ‹ / ›
-pub fn chevron(ui: &mut Ui, left: bool, color: egui::Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::click());
-    let p = ui.painter();
-    let st = Stroke::new(1.6, color);
-    let (c, d) = (rect.center(), 3.0);
-    if left {
-        p.line_segment([egui::pos2(c.x + d * 0.6, c.y - d), egui::pos2(c.x - d * 0.6, c.y)], st);
-        p.line_segment([egui::pos2(c.x - d * 0.6, c.y), egui::pos2(c.x + d * 0.6, c.y + d)], st);
-    } else {
-        p.line_segment([egui::pos2(c.x - d * 0.6, c.y - d), egui::pos2(c.x + d * 0.6, c.y)], st);
-        p.line_segment([egui::pos2(c.x + d * 0.6, c.y), egui::pos2(c.x - d * 0.6, c.y + d)], st);
-    }
-    resp
-}
-
-/// 表图标:小网格
-pub fn table(ui: &mut Ui, active: bool) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
-    let color = if active { theme::c().accent } else { theme::c().text2 };
-    let p = ui.painter();
-    let st = Stroke::new(1.0, color);
-    p.rect_stroke(rect.shrink(1.5).translate(egui::vec2(0.0, -1.5)), egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
-    let mid_y = rect.center().y - 1.5;
-    p.line_segment([Pos2::new(rect.left() + 1.5, mid_y), Pos2::new(rect.right() - 1.5, mid_y)], st);
-    let vx = rect.left() + 1.5 + (rect.width() - 3.0) * 0.42;
-    p.line_segment([Pos2::new(vx, rect.top() + 1.5), Pos2::new(vx, mid_y)], st);
-}
-
-/// 结构图标:三条横线
-pub fn structure(ui: &mut Ui) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::click());
-    let color = if resp.hovered() { theme::c().text } else { theme::c().text2 };
-    let p = ui.painter();
-    let st = Stroke::new(1.2, color);
-    for dy in [-3.5, 0.0, 3.5] {
-        let y = rect.center().y - 1.5 + dy;
-        let shrink = if dy == 0.0 { 0.0 } else { 1.5 };
         p.line_segment(
-            [Pos2::new(rect.left() + 1.0 + shrink, y), Pos2::new(rect.right() - 1.0 - shrink, y)],
+            [
+                egui::pos2(c.x - d * 0.5, c.y - d),
+                egui::pos2(c.x + d * 0.5, c.y),
+            ],
+            st,
+        );
+        p.line_segment(
+            [
+                egui::pos2(c.x + d * 0.5, c.y),
+                egui::pos2(c.x - d * 0.5, c.y + d),
+            ],
             st,
         );
     }
     resp
 }
 
-/// 主键钥匙小标(字段行内)
-pub fn key_badge(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(22.0, 15.0), Sense::hover());
-    ui.painter().rect_filled(
-        rect,
-        egui::CornerRadius::same(3),
-        theme::c().accent.gamma_multiply(0.18),
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        "PK",
-        egui::FontId::proportional(9.5),
-        theme::c().accent,
+/// 是否中日韩表意文字/全角标点(用于修正回退字体的基线)
+pub fn is_cjk(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x2E80..=0x2FFF
+            | 0x3000..=0x303F
+            | 0x3040..=0x30FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0xFF00..=0xFFEF
+    )
+}
+
+/// 文本基线相对 galley 顶部的距离(含中文回退字体的视觉修正)
+pub fn baseline_top(g: &egui::Galley, size: f32) -> f32 {
+    let first = g
+        .rows
+        .first()
+        .and_then(|r| r.glyphs.iter().find(|gl| gl.chr != ' '));
+    match first {
+        Some(gl) => {
+            let mut base = gl.pos.y;
+            if is_cjk(gl.chr) {
+                base += size * crate::theme::CJK_BASELINE_FACTOR;
+            }
+            base
+        }
+        None => size * 0.8,
+    }
+}
+
+/// 单行文本排版:超宽用 … 省略(原型表格长 URL 的截断方式)
+pub fn text_galley(
+    p: &egui::Painter,
+    text: impl Into<String>,
+    font: egui::FontId,
+    color: Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.into(), font, color);
+    job.wrap.max_width = max_width.max(1.0);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    p.layout_job(job)
+}
+
+/// 在 32pt 行内按统一基线画文字(等宽/比例/中文混排时基线一致)
+pub fn paint_baseline_text(
+    p: &egui::Painter,
+    rect: egui::Rect,
+    text: impl Into<String>,
+    font: egui::FontId,
+    color: Color32,
+    pad_x: f32,
+    max_width: f32,
+) {
+    let size = font.size;
+    let g = text_galley(p, text, font, color, max_width);
+    let baseline = rect.center().y + 4.5;
+    p.galley(
+        egui::pos2(rect.left() + pad_x, baseline - baseline_top(&g, size)),
+        g,
+        color,
     );
 }
 
-/// 圆角小胶囊标签(如 UNIQUE)
-pub fn chip(ui: &mut Ui, text: &str, color: Color32) {
-    let font = egui::FontId::proportional(9.5);
-    let galley = ui.painter().layout_no_wrap(text.to_string(), font, color);
-    let size = galley.size() + Vec2::new(12.0, 6.0);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(7), color.gamma_multiply(0.16));
-    ui.painter().galley(rect.left_top() + Vec2::new(6.0, 3.0), galley, color);
+/// 在工具条/行内画一段与主标题共基线的文字(不参与垂直居中)
+pub fn label_at_baseline(
+    ui: &mut Ui,
+    text: impl Into<String>,
+    font: egui::FontId,
+    color: Color32,
+    baseline: f32,
+    max_width: f32,
+) -> egui::Response {
+    let size = font.size;
+    let g = text_galley(ui.painter(), text, font, Color32::PLACEHOLDER, max_width);
+    let (rect, resp) = ui.allocate_exact_size(g.size(), Sense::hover());
+    ui.painter().galley(
+        egui::pos2(rect.left(), baseline - baseline_top(&g, size)),
+        g,
+        color,
+    );
+    resp
+}
+
+/// 与主标题共基线的 chip(药丸底仍按文字视觉位置定,不随行高居中)
+pub fn chip_at_baseline(ui: &mut Ui, text: &str, color: Color32, baseline: f32) -> egui::Response {
+    let p = theme::c();
+    let font = egui::FontId::proportional(11.5);
+    let g = ui
+        .painter()
+        .layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
+    let size = g.size() + Vec2::new(16.0, 8.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+    let text_top = baseline - baseline_top(&g, 11.5);
+    let pill = egui::Rect::from_min_size(
+        egui::pos2(rect.left(), text_top - 4.0),
+        egui::vec2(size.x, g.size().y + 8.0),
+    );
+    ui.painter()
+        .rect_filled(pill, egui::CornerRadius::same(6), p.elevated);
+    ui.painter()
+        .galley(egui::pos2(pill.left() + 8.0, text_top), g, color);
+    resp
 }
 
 /// 文本截断(按字符,避免多字节 panic);None→NULL 由调用方决定
@@ -277,14 +379,28 @@ pub fn clip(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// 千分位(原型"共 86,241 行")
+pub fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
 /// 单元格文本颜色:NULL 弱、修改中绿
 pub fn cell_text_color(v: &Option<String>, changed: bool) -> Color32 {
     if changed {
-        crate::theme::c().change_fg
+        theme::c().change_fg
     } else if v.is_none() {
-        Color32::from_rgb(0x55, 0x55, 0x5a)
+        theme::c().null_text
     } else {
-        theme::c().text2
+        theme::c().cell_text
     }
 }
 

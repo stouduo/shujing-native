@@ -1,28 +1,35 @@
-//! 左侧栏:连接列表 + 库/表树 + 表搜索 + toast。
+//! 左侧栏:连接 + 库/表树 + 表搜索 + toast。
+//! 严格对齐原型:220pt 宽、顶部"数镜 Native + ＋"、搜索框、
+//! 连接行(绿点/粗体名/版本)、展开库标题、表行(34pt 行高、选中蓝色药丸)。
 
-use crate::app::{ConnModal, ShujingApp, BgEvent};
+use crate::app::{BgEvent, ConnModal, ShujingApp};
 use crate::net;
 use crate::{icons, theme};
-use egui::RichText;
+use egui::{Align, Color32, Layout, RichText, Sense, Vec2};
 
 impl ShujingApp {
     pub fn draw_sidebar_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("sidebar")
-            .default_width(238.0)
-            .min_width(190.0)
+            .default_width(220.0)
+            .min_width(196.0)
+            .max_width(340.0)
             .resizable(true)
             .frame(
                 egui::Frame::new()
                     .fill(theme::c().bg)
-                    .stroke(egui::Stroke::new(1.0, theme::c().border))
-                    .inner_margin(egui::Margin { left: 12, right: 10, top: 10, bottom: 8 }),
+                    .inner_margin(egui::Margin {
+                        left: 10,
+                        right: 10,
+                        top: 9,
+                        bottom: 8,
+                    }),
             )
             .show(ctx, |ui| {
                 self.draw_sidebar(ctx, ui);
             });
     }
 
-    /// 底部提示条(错误/导出结果),在标签栏之后、内容面板之前调用
+    /// 底部提示条(错误/导出结果),浮在内容区底部居中
     pub fn draw_toast(&mut self, ctx: &egui::Context) {
         if self.error_toast.is_none() {
             return;
@@ -32,257 +39,523 @@ impl ShujingApp {
             self.error_toast = None;
             return;
         }
-        egui::TopBottomPanel::bottom("toast")
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::c().elevated)
-                    .inner_margin(egui::Margin::symmetric(12, 6)),
-            )
+        let p = theme::c();
+        egui::Area::new(egui::Id::new("toast"))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -22.0))
+            .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                ui.label(RichText::new(icons::clip(msg, 160)).size(12.0).color(theme::c().text2));
+                egui::Frame::new()
+                    .fill(p.elevated)
+                    .stroke(egui::Stroke::new(1.0, p.border))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::symmetric(14, 8))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(icons::clip(msg, 160))
+                                .size(12.0)
+                                .color(p.text),
+                        );
+                    });
             });
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 
-    pub fn draw_sidebar(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        // 头部固定 30px 带:标题/主题钮/连接钮共用同一垂直中心线
-        ui.allocate_ui(egui::vec2(ui.available_width(), 30.0), |ui| {
-            ui.set_min_height(30.0);
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.label(RichText::new("数镜").size(14.0).strong());
-                ui.label(RichText::new("Native").size(11.0).color(theme::c().muted));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if theme::text_button(ui, "＋ 连接") {
+    pub fn draw_sidebar(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
+        let p = theme::c();
+        let w = ui.available_width();
+
+        // 头部:数镜 Native(15/12.5)+ 新建连接
+        ui.allocate_ui_with_layout(
+            egui::vec2(w, 30.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                let title_resp =
+                    ui.label(theme::strong("数镜", theme::FS_TABLE_TITLE).color(p.text));
+                let title_g = ui.painter().layout_no_wrap(
+                    "数镜".to_owned(),
+                    theme::bold(theme::FS_TABLE_TITLE),
+                    egui::Color32::PLACEHOLDER,
+                );
+                let title_baseline = title_resp.rect.center().y - title_g.size().y / 2.0
+                    + icons::baseline_top(&title_g, theme::FS_TABLE_TITLE);
+                ui.add_space(4.0);
+                icons::label_at_baseline(
+                    ui,
+                    "Native",
+                    egui::FontId::proportional(12.0),
+                    p.text2,
+                    title_baseline,
+                    80.0,
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
+                    icons::paint_plus(
+                        ui.painter(),
+                        rect.center(),
+                        6.0,
+                        if resp.hovered() { p.text } else { p.accent },
+                    );
+                    resp.clone().on_hover_text("新建连接");
+                    if resp.clicked() {
                         self.conn_modal = Some(ConnModal::new());
                     }
-                    let dark = theme::is_dark();
-                    if icons::theme_toggle(ui, dark)
-                        .on_hover_text(if dark { "切换浅色" } else { "切换深色" })
-                        .clicked()
-                    {
-                        let new_dark = !theme::is_dark();
-                        self.set_theme_dark(ctx, new_dark);
-                    }
                 });
-            });
-        });
-        theme::hairline_bottom(ui);
-        ui.add_space(8.0);
+            },
+        );
+        ui.add_space(10.0);
 
-        let has_tables = self
-            .trees
-            .values()
-            .any(|t| t.online && !t.tables_by_db.values().all(|v| v.is_empty()));
-        if has_tables {
-            icons::search_box(ui, "side-table-search", &mut self.table_filter, "搜索表", ui.available_width());
-            ui.add_space(4.0);
-        }
+        // 表搜索(原型常驻)
+        theme::search_box(ui, "side-table-search", &mut self.table_filter, "搜索表", w);
+        ui.add_space(14.0);
 
         egui::ScrollArea::vertical()
+            .id_salt("sidebar-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 let conns = self.conns.clone();
                 for c in conns {
                     self.draw_conn_block(ui, &c);
+                    ui.add_space(10.0);
+                }
+                if self.conns.is_empty() {
+                    ui.add_space(20.0);
+                    ui.label(
+                        RichText::new("还没有连接\n点击右上角 ＋ 添加数据库")
+                            .size(12.0)
+                            .color(p.muted),
+                    );
                 }
             });
     }
 
     fn draw_conn_block(&mut self, ui: &mut egui::Ui, c: &shujing_core::ConnInfo) {
+        let p = theme::c();
         let online = self.trees.get(&c.id).map(|t| t.online).unwrap_or(false);
-        let row_top = ui.cursor().top();
-        ui.horizontal(|ui| {
-            icons::dot(ui, online);
-            let resp = ui.add(
-                egui::Label::new(
-                    RichText::new(&c.name)
-                        .size(13.0)
-                        .strong()
-                        .color(if online { theme::c().text } else { theme::c().text2 }),
-                )
-                .sense(egui::Sense::click()),
+        let w = ui.available_width();
+        let (rect, row_resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::hover());
+        let painter = ui.painter().clone();
+        painter.circle_filled(
+            egui::pos2(rect.left() + 5.0, rect.center().y),
+            4.0,
+            if online { p.green } else { p.dot_off },
+        );
+        // 同一行里不同字号的文字统一按基线排,而不是各自垂直居中
+        let baseline = rect.center().y + 5.0;
+        let name_font = theme::bold(theme::FS_CONN);
+        let name_galley = icons::text_galley(
+            &painter,
+            c.name.clone(),
+            name_font,
+            Color32::PLACEHOLDER,
+            rect.width() - 110.0,
+        );
+        painter.galley(
+            egui::pos2(
+                rect.left() + 17.0,
+                baseline - icons::baseline_top(&name_galley, theme::FS_CONN),
+            ),
+            name_galley.clone(),
+            if online { p.text } else { p.text2 },
+        );
+        if c.db_type == shujing_core::DbType::Sqlite {
+            let sg = painter.layout_no_wrap(
+                "SQLite".to_owned(),
+                egui::FontId::proportional(11.5),
+                Color32::PLACEHOLDER,
             );
+            painter.galley(
+                egui::pos2(
+                    rect.left() + 17.0 + name_galley.size().x + 6.0,
+                    baseline - icons::baseline_top(&sg, 11.5),
+                ),
+                sg,
+                p.muted,
+            );
+        }
+        let name_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 12.0, rect.top()),
+            egui::vec2(name_galley.size().x + 12.0, rect.height()),
+        );
+        let name_resp = ui.allocate_rect(name_rect, Sense::click());
+        let tip = if online {
+            "已连接 · 点击断开"
+        } else {
+            "点击连接"
+        };
+        name_resp.clone().on_hover_text(tip);
+        if name_resp.clicked() {
+            self.toggle_connect(c);
+        }
+
+        if row_resp.hovered() {
+            // 悬停:右侧动作替换版本号
+            let area =
+                egui::Rect::from_min_max(egui::pos2(rect.right() - 92.0, rect.top()), rect.max);
+            ui.allocate_new_ui(
+                egui::UiBuilder::new()
+                    .max_rect(area)
+                    .layout(Layout::right_to_left(Align::Center)),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if theme::mini_text_button(ui, "删除", p.red).0 {
+                        self.delete_connection(&c.id);
+                    }
+                    if theme::mini_text_button(ui, "编辑", p.text2).0 {
+                        self.conn_modal = Some(ConnModal::from_conn(c));
+                    }
+                },
+            );
+        } else if online && c.db_type != shujing_core::DbType::Sqlite {
             let ver = self
                 .trees
                 .get(&c.id)
-                .filter(|t| t.online)
                 .map(|t| t.version.clone())
                 .unwrap_or_default();
             if !ver.is_empty() {
-                ui.label(RichText::new(&ver).size(10.0).monospace().color(theme::c().muted));
+                let vg = painter.layout_no_wrap(ver, theme::mono(10.5), Color32::PLACEHOLDER);
+                painter.galley(
+                    egui::pos2(
+                        rect.right() - vg.size().x - 2.0,
+                        baseline - icons::baseline_top(&vg, 10.5),
+                    ),
+                    vg,
+                    p.muted,
+                );
             }
-            let tip = if online { "点击断开" } else { "点击连接" };
-            if resp.clicked() {
-                self.toggle_connect(c);
-            }
-            resp.on_hover_text(tip);
-            // 行级悬停:整行区域都算,移向按钮不会消失
-            let row_rect = egui::Rect::from_min_max(
-                egui::pos2(ui.min_rect().left(), row_top),
-                egui::pos2(ui.max_rect().right(), ui.min_rect().bottom() + 2.0),
-            );
-            if ui.rect_contains_pointer(row_rect) {
-                ui.add_space(6.0);
-                let (edit_click, edit_resp) =
-                    theme::mini_text_button(ui, "编辑", theme::c().text2);
-                edit_resp.on_hover_text("编辑连接");
-                if edit_click {
-                    self.conn_modal = Some(ConnModal::from_conn(c));
-                }
-                let (del_click, del_resp) = theme::mini_text_button(ui, "删除", theme::c().red);
-                del_resp.on_hover_text("删除连接");
-                if del_click {
-                    self.delete_connection(&c.id);
-                }
-            }
-        });
+        }
         let cid = c.id.clone();
-        self.draw_tree(ui, &cid);
-        // 连接块之间发丝分组线(最后一块不画)
-        ui.add_space(4.0);
-        theme::hairline_bottom(ui);
-        ui.add_space(4.0);
+        self.draw_tree(ui, &cid, online);
     }
 
-    fn draw_tree(&mut self, ui: &mut egui::Ui, conn_id: &str) {
-        // 先快照再释放借用:循环内要调 &mut self
-        let Some((online, databases, expanded, tables_by_db, loading)) = self
-            .trees
-            .get(conn_id)
-            .map(|t| {
-                (
-                    t.online,
-                    t.databases.clone(),
-                    t.expanded_db.clone(),
-                    t.tables_by_db.clone(),
-                    t.loading,
-                )
-            })
-        else {
-            return;
-        };
+    fn draw_tree(&mut self, ui: &mut egui::Ui, conn_id: &str, online: bool) {
         if !online {
             return;
         }
+        let Some((databases, expanded, tables_by_db, loading)) = self.trees.get(conn_id).map(|t| {
+            (
+                t.databases.clone(),
+                t.expanded_db.clone(),
+                t.tables_by_db.clone(),
+                t.loading,
+            )
+        }) else {
+            return;
+        };
         let filter = self.table_filter.to_lowercase();
+        let searching = !filter.is_empty();
+
+        if searching {
+            // 搜索:跨库展示匹配项,库名作为小标题
+            let mut shown = 0usize;
+            for db in &databases {
+                let tables = tables_by_db.get(db).cloned().unwrap_or_default();
+                let matched: Vec<_> = tables
+                    .iter()
+                    .filter(|t| t.name.to_lowercase().contains(&filter))
+                    .collect();
+                if matched.is_empty() {
+                    continue;
+                }
+                shown += matched.len();
+                ui.add_space(2.0);
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), Sense::hover());
+                ui.painter().text(
+                    egui::pos2(rect.left() + 27.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    db,
+                    theme::bold(11.0),
+                    theme::c().muted,
+                );
+                for t in matched {
+                    self.draw_table_row(ui, conn_id, db, &t.name);
+                }
+            }
+            if shown == 0 {
+                ui.add_space(8.0);
+                ui.label(RichText::new("无匹配表").size(12.0).color(theme::c().muted));
+            }
+            return;
+        }
 
         for db in databases {
             let is_open = expanded.as_deref() == Some(db.as_str());
-            let tables: Vec<shujing_core::TableMeta> =
-                tables_by_db.get(&db).cloned().unwrap_or_default();
-            ui.horizontal(|ui| {
-                let tri = icons::triangle(ui, is_open);
-                if tri.clicked() {
-                    self.toggle_database(conn_id, &db);
-                }
-                let lbl = ui.selectable_label(
-                    is_open,
-                    RichText::new(&db)
-                        .size(12.5)
-                        .strong()
-                        .color(if is_open { theme::c().text } else { theme::c().text2 }),
-                );
-                if lbl.clicked() {
-                    self.toggle_database(conn_id, &db);
-                }
-                if is_open && filter.is_empty() {
-                    if loading {
-                        ui.spinner();
-                    } else {
-                        ui.label(RichText::new(format!("{}", tables.len())).size(12.0).color(theme::c().muted));
-                    }
-                }
-            });
             if is_open {
-                let mut shown = 0usize;
-                ui.indent(db.clone(), |ui| {
-                    for t in &tables {
-                        if !filter.is_empty() && !t.name.to_lowercase().contains(&filter) {
-                            continue;
-                        }
-                        shown += 1;
-                        self.draw_table_row(ui, conn_id, &db, &t.name);
-                    }
-                    if !filter.is_empty() && shown == 0 {
-                        ui.label(RichText::new("无匹配表").size(12.0).color(theme::c().muted));
-                    }
-                });
+                self.draw_db_header(
+                    ui,
+                    conn_id,
+                    &db,
+                    loading,
+                    tables_by_db.get(&db).map(|v| v.len()).unwrap_or(0),
+                );
+                let tables = tables_by_db.get(&db).cloned().unwrap_or_default();
+                for t in &tables {
+                    self.draw_table_row(ui, conn_id, &db, &t.name);
+                }
+                ui.add_space(6.0);
+            } else {
+                self.draw_db_collapsed(ui, conn_id, &db);
             }
+        }
+    }
+
+    /// 展开的库:chevron 与粗体库名,右侧表数量
+    fn draw_db_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        conn_id: &str,
+        db: &str,
+        loading: bool,
+        count: usize,
+    ) {
+        let p = theme::c();
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), Sense::click());
+        if resp.hovered() {
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(7), p.row_hover);
+        }
+        let chev = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 14.0, rect.center().y),
+            Vec2::splat(12.0),
+        );
+        icons::paint_triangle(
+            ui.painter(),
+            chev.center(),
+            true,
+            if resp.hovered() { p.text } else { p.text2 },
+        );
+        let baseline = rect.center().y + 4.5;
+        let f = theme::bold(theme::FS_TREE + 0.5);
+        let g = icons::text_galley(
+            ui.painter(),
+            db.to_string(),
+            f,
+            Color32::PLACEHOLDER,
+            rect.width() - 76.0,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                rect.left() + 28.0,
+                baseline - icons::baseline_top(&g, theme::FS_TREE + 0.5),
+            ),
+            g,
+            p.text,
+        );
+        if loading {
+            let sp = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 12.0, rect.center().y),
+                Vec2::splat(12.0),
+            );
+            ui.put(sp, egui::Spinner::new().size(11.0));
+        } else {
+            let t = format!("{count}");
+            let g = ui.painter().layout_no_wrap(
+                t,
+                egui::FontId::proportional(11.0),
+                Color32::PLACEHOLDER,
+            );
+            ui.painter().galley(
+                egui::pos2(
+                    rect.right() - g.size().x - 2.0,
+                    baseline - icons::baseline_top(&g, 11.0),
+                ),
+                g,
+                p.muted,
+            );
+        }
+        let mut new_table = false;
+        let _ = resp.clone().context_menu(|ui| {
+            if ui.button("新建表…").clicked() {
+                new_table = true;
+                ui.close_menu();
+            }
+            if ui.button("刷新表列表").clicked() {
+                ui.close_menu();
+            }
+        });
+        if new_table {
+            crate::modals::open_new_table(self, conn_id, Some(db.to_string()));
+            return;
+        }
+        if resp.clicked() {
+            self.toggle_database(conn_id, db);
+        }
+        let _ = resp.on_hover_text("收起/展开");
+    }
+
+    /// 收起的库:缩进对齐表行,chevron + 粗体库名
+    fn draw_db_collapsed(&mut self, ui: &mut egui::Ui, conn_id: &str, db: &str) {
+        let p = theme::c();
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+            Sense::click(),
+        );
+        if resp.hovered() {
+            let hl = egui::Rect::from_min_max(
+                egui::pos2(rect.left() - 4.0, rect.top() + 2.0),
+                egui::pos2(rect.right() + 2.0, rect.bottom() - 2.0),
+            );
+            ui.painter()
+                .rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+        }
+        icons::paint_triangle(
+            ui.painter(),
+            egui::pos2(rect.left() + 32.0, rect.center().y),
+            false,
+            if resp.hovered() { p.text } else { p.text2 },
+        );
+        let baseline = rect.center().y + 4.5;
+        let g = icons::text_galley(
+            ui.painter(),
+            db.to_string(),
+            theme::bold(theme::FS_TREE + 0.5),
+            Color32::PLACEHOLDER,
+            rect.width() - 96.0,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                rect.left() + 48.0,
+                baseline - icons::baseline_top(&g, theme::FS_TREE + 0.5),
+            ),
+            g,
+            if resp.hovered() { p.text } else { p.text2 },
+        );
+        let count = self
+            .trees
+            .get(conn_id)
+            .and_then(|t| t.tables_by_db.get(db))
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let g = ui.painter().layout_no_wrap(
+            format!("{count}"),
+            egui::FontId::proportional(11.0),
+            Color32::PLACEHOLDER,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                rect.right() - g.size().x - 2.0,
+                baseline - icons::baseline_top(&g, 11.0),
+            ),
+            g,
+            p.muted,
+        );
+        let mut new_table = false;
+        let _ = resp.clone().context_menu(|ui| {
+            if ui.button("新建表…").clicked() {
+                new_table = true;
+                ui.close_menu();
+            }
+        });
+        if new_table {
+            crate::modals::open_new_table(self, conn_id, Some(db.to_string()));
+            return;
+        }
+        if resp.clicked() {
+            self.toggle_database(conn_id, db);
         }
     }
 
     fn draw_table_row(&mut self, ui: &mut egui::Ui, conn_id: &str, db: &str, name: &str) {
+        let p = theme::c();
         let active = self
             .active_tab_info()
             .map(|(c, t, d)| c == conn_id && t == name && d == Some(db))
             .unwrap_or(false);
-        // iOS 列表:选中行 = 系统蓝浸染 + 圆角;普通行透明
-        let frame = if active {
-            egui::Frame::new()
-                .fill(theme::c().active_row)
-                .corner_radius(egui::CornerRadius::same(7))
-                .inner_margin(egui::Margin::symmetric(6, 3))
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+            Sense::click(),
+        );
+        let hl = egui::Rect::from_min_max(
+            egui::pos2(rect.left() - 4.0, rect.top() + 2.0),
+            egui::pos2(rect.right() + 2.0, rect.bottom() - 2.0),
+        );
+        if active {
+            ui.painter()
+                .rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+        } else if resp.hovered() {
+            ui.painter()
+                .rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+        }
+        icons::paint_table(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                egui::pos2(rect.left() + 34.0, rect.center().y),
+                Vec2::splat(14.0),
+            ),
+            if active {
+                p.accent
+            } else if theme::is_dark() {
+                p.text2
+            } else {
+                p.muted
+            },
+        );
+        let color = if active {
+            p.text
+        } else if resp.hovered() {
+            p.text
         } else {
-            egui::Frame::new()
-                .inner_margin(egui::Margin::symmetric(6, 3))
+            p.text2
         };
-        frame.show(ui, |ui| {
-            ui.horizontal(|ui| {
-                icons::table(ui, active);
-                let lbl = ui.selectable_label(
-                    active,
-                    RichText::new(name)
-                        .size(13.0)
-                        .color(if active { theme::c().text } else { theme::c().text2 }),
-                );
-                let hovered = lbl.hovered();
-                if lbl.clicked() {
-                    self.open_table(conn_id, name, Some(db.to_string()));
-                }
-                let table = name.to_string();
-                let menu_id = egui::Id::new(format!("tblmenu-{conn_id}-{db}-{name}"));
-                if let Some(resp) = lbl.context_menu(move |ui| {
-                    if ui.button("表统计").clicked() {
-                        ui.ctx().memory_mut(|m| {
-                            m.data.insert_temp(menu_id, "stats".to_string())
-                        });
-                        ui.close_menu();
-                    }
-                    if ui.button("导入 CSV…").clicked() {
-                        ui.ctx().memory_mut(|m| {
-                            m.data.insert_temp(menu_id, "import".to_string())
-                        });
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button("复制表名").clicked() {
-                        ui.ctx().copy_text(table.clone());
-                        ui.close_menu();
-                    }
-                    if ui.button("复制 SELECT *").clicked() {
-                        let ident = crate::app::quote_ident_by(&table, true);
-                        ui.ctx().copy_text(format!("SELECT * FROM {ident} LIMIT 100;"));
-                        ui.close_menu();
-                    }
-                }) {
-                    let _ = &resp;
-                }
-                // 菜单动作(帧尾读取临时数据转 &mut self)
-                let action: Option<String> = ui
-                    .ctx()
-                    .memory(|m| m.data.get_temp::<String>(menu_id));
-                if let Some(act) = action {
-                    ui.ctx().memory_mut(|m| m.data.remove_temp::<String>(menu_id));
-                    match act.as_str() {
-                        "stats" => self.open_stats(conn_id, db, name),
-                        "import" => self.open_import(conn_id, db, name),
-                        _ => {}
-                    }
-                }
-                if hovered && icons::structure(ui).clicked() {
-                    self.open_structure(conn_id, name, Some(db.to_string()));
-                }
-            });
+        let g = icons::text_galley(
+            ui.painter(),
+            name.to_string(),
+            egui::FontId::proportional(theme::FS_TREE),
+            Color32::PLACEHOLDER,
+            rect.width() - 56.0,
+        );
+        ui.painter().galley(
+            egui::pos2(rect.left() + 48.0, rect.center().y - g.size().y / 2.0),
+            g,
+            color,
+        );
+
+        let menu_id = egui::Id::new(format!("tblmenu-{conn_id}-{db}-{name}"));
+        let clicked_resp = resp.clone();
+        let _ = clicked_resp.context_menu(|ui| {
+            if ui.button("表统计…").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "stats".to_string()));
+                ui.close_menu();
+            }
+            if ui.button("导入 CSV…").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "import".to_string()));
+                ui.close_menu();
+            }
+            if ui.button("表结构").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "struct".to_string()));
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("复制表名").clicked() {
+                ui.ctx().copy_text(name.to_string());
+                ui.close_menu();
+            }
+            if ui.button("复制 SELECT *").clicked() {
+                let ident = crate::app::quote_ident_by(name, true);
+                ui.ctx()
+                    .copy_text(format!("SELECT * FROM {ident} LIMIT 100;"));
+                ui.close_menu();
+            }
         });
+        if resp.clicked() {
+            self.open_table(conn_id, name, Some(db.to_string()));
+        }
+        let action: Option<String> = ui.ctx().memory(|m| m.data.get_temp::<String>(menu_id));
+        if let Some(act) = action {
+            ui.ctx()
+                .memory_mut(|m| m.data.remove_temp::<String>(menu_id));
+            match act.as_str() {
+                "stats" => self.open_stats(conn_id, db, name),
+                "import" => self.open_import(conn_id, db, name),
+                "struct" => self.open_structure(conn_id, name, Some(db.to_string())),
+                _ => {}
+            }
+        }
     }
 
     pub(crate) fn toggle_connect(&mut self, c: &shujing_core::ConnInfo) {
@@ -313,7 +586,8 @@ impl ShujingApp {
                 .min(self.tabs.len().saturating_sub(1));
             return;
         }
-        self.trees.insert(c.id.clone(), crate::app::ConnTree::default());
+        self.trees
+            .insert(c.id.clone(), crate::app::ConnTree::default());
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         let info = c.clone();
