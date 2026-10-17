@@ -1374,6 +1374,12 @@ impl eframe::App for ShujingApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // 每帧强制 style == 当前调色板(切换主题即刻全局生效,杜绝半新旧混排)
         crate::theme::apply(ctx);
+        // macOS app bundle 下 winit 标题可能丢失(显示 untitled):每帧幂等设置
+        let _title = format!("数镜 Native v{}", env!("CARGO_PKG_VERSION"));
+        let cur = ctx.input(|i| i.viewport().title.clone());
+        if cur.as_deref() != Some(_title.as_str()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(_title));
+        }
         self.drain_events(ctx);
         self.autoopen();
         if std::env::var("SHUJING_OPEN_QUERY").is_ok() && !self.autoopen_done {
