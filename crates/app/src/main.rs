@@ -19,7 +19,10 @@ use app::ShujingApp;
 
 fn main() {
     #[cfg(target_os = "macos")]
-    force_appearance(true);
+    {
+        ensure_installed_from_dmg();
+        force_appearance(true);
+    }
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1360.0, 880.0])
@@ -59,5 +62,28 @@ pub fn force_appearance(dark: bool) {
         if !appearance.is_null() {
             let _: () = msg_send![app, setAppearance: appearance];
         }
+    }
+}
+
+/// 从 DMG 挂载卷直接运行时:自动安装到 /Applications 并以正式身份重启(VS Code 安装器同款)
+#[cfg(target_os = "macos")]
+fn ensure_installed_from_dmg() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    if !exe.to_string_lossy().starts_with("/Volumes/") {
+        return;
+    }
+    let Some(src_app) = exe.ancestors().nth(3) else { return };
+    let dst = std::path::Path::new("/Applications").join("数镜Native.app");
+    let _ = std::process::Command::new("rm")
+        .args(["-rf", &dst.to_string_lossy()])
+        .status();
+    let ok = std::process::Command::new("cp")
+        .args(["-R", &src_app.to_string_lossy(), &dst.to_string_lossy()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        let _ = std::process::Command::new("open").arg(&dst).spawn();
+        std::process::exit(0);
     }
 }
