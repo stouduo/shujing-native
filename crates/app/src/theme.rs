@@ -166,6 +166,16 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
+/// 次级小文字按钮(悬停行操作),带语义色;返回 (是否点击, 响应)
+pub fn mini_text_button(ui: &mut egui::Ui, label: &str, color: Color32) -> (bool, egui::Response) {
+    let r = ui.add(
+        egui::Button::new(egui::RichText::new(label).size(11.0).color(color))
+            .fill(Color32::TRANSPARENT)
+            .stroke(Stroke::NONE),
+    );
+    (r.clicked(), r)
+}
+
 /// iOS 发丝分隔线(separator):画在当前 ui 底边,横向铺满
 pub fn hairline_bottom(ui: &egui::Ui) {
     let r = ui.max_rect();

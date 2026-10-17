@@ -71,9 +71,15 @@ pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_
     }
 }
 
-/// 主题切换钮:深色显示太阳,浅色显示月亮
+/// 主题切换钮:深色显示太阳,浅色显示月亮(Button 承载,与文字钮同一对齐机制)
 pub fn theme_toggle(ui: &mut Ui, dark: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
+    let resp = ui.add(
+        egui::Button::new("")
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(Stroke::NONE)
+            .min_size(egui::vec2(26.0, 24.0)),
+    );
+    let rect = resp.rect;
     let color = if resp.hovered() { theme::c().text } else { theme::c().accent };
     let p = ui.painter();
     let c = rect.center();

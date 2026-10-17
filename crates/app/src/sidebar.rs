@@ -85,6 +85,7 @@ impl ShujingApp {
 
     fn draw_conn_block(&mut self, ui: &mut egui::Ui, c: &shujing_core::ConnInfo) {
         let online = self.trees.get(&c.id).map(|t| t.online).unwrap_or(false);
+        let row_top = ui.cursor().top();
         ui.horizontal(|ui| {
             icons::dot(ui, online);
             let resp = ui.selectable_label(
@@ -101,29 +102,29 @@ impl ShujingApp {
                 .map(|t| t.version.clone())
                 .unwrap_or_default();
             if !ver.is_empty() {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(&ver).size(10.0).monospace().color(theme::c().muted));
-                });
+                ui.label(RichText::new(&ver).size(10.0).monospace().color(theme::c().muted));
             }
             let tip = if online { "点击断开" } else { "点击连接" };
-            let hovered = resp.hovered();
             if resp.clicked() {
                 self.toggle_connect(c);
             }
             resp.on_hover_text(tip);
-            if hovered {
-                if ui
-                    .small_button(RichText::new("编辑").size(12.0))
-                    .on_hover_text("编辑连接")
-                    .clicked()
-                {
+            // 行级悬停:整行区域都算,移向按钮不会消失
+            let row_rect = egui::Rect::from_min_max(
+                egui::pos2(ui.min_rect().left(), row_top),
+                egui::pos2(ui.max_rect().right(), ui.min_rect().bottom() + 2.0),
+            );
+            if ui.rect_contains_pointer(row_rect) {
+                ui.add_space(6.0);
+                let (edit_click, edit_resp) =
+                    theme::mini_text_button(ui, "编辑", theme::c().text2);
+                edit_resp.on_hover_text("编辑连接");
+                if edit_click {
                     self.conn_modal = Some(ConnModal::from_conn(c));
                 }
-                if ui
-                    .small_button(RichText::new("删").size(12.0))
-                    .on_hover_text("删除连接")
-                    .clicked()
-                {
+                let (del_click, del_resp) = theme::mini_text_button(ui, "删除", theme::c().red);
+                del_resp.on_hover_text("删除连接");
+                if del_click {
                     self.delete_connection(&c.id);
                 }
             }

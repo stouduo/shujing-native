@@ -1094,78 +1094,152 @@ pub fn export_csv_to_file(tab: &TableTab) -> Result<String, String> {
 pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAction> {
     let mut action = None;
     let mut open = true;
-    egui::Window::new(RichText::new("连接配置").size(15.0).strong())
+    let frame_stroke = egui::Stroke::new(1.0, theme::c().border);
+
+    egui::Window::new("")
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
-        .min_width(430.0)
+        .default_width(440.0)
+        .frame(
+            egui::Frame::new()
+                .fill(theme::c().panel)
+                .stroke(frame_stroke)
+                .corner_radius(egui::CornerRadius::same(12))
+                .inner_margin(egui::Margin { left: 24, right: 24, top: 0, bottom: 0 }),
+        )
         .show(ctx, |ui| {
-            egui::Grid::new("conn-form")
-                .num_columns(2)
-                .spacing([10.0, 7.0])
-                .show(ui, |ui| {
-                    ui.label("名称");
-                    ui.text_edit_singleline(&mut m.name);
-                    ui.end_row();
-                    ui.label("类型");
-                    egui::ComboBox::from_id_salt("dbtype")
-                        .selected_text(format!("{:?}", m.db_type))
-                        .width(160.0)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut m.db_type, shujing_core::DbType::MySql, "MySQL");
-                            ui.selectable_value(&mut m.db_type, shujing_core::DbType::Sqlite, "SQLite");
-                            ui.selectable_value(&mut m.db_type, shujing_core::DbType::Postgres, "PostgreSQL");
-                        });
-                    ui.end_row();
-                    if m.db_type == shujing_core::DbType::Sqlite {
-                        ui.label("文件路径");
-                        ui.text_edit_singleline(&mut m.file_path);
-                        ui.end_row();
-                    } else {
-                        ui.label("主机");
-                        ui.text_edit_singleline(&mut m.host);
-                        ui.end_row();
-                        ui.label("端口");
-                        ui.text_edit_singleline(&mut m.port);
-                        ui.end_row();
-                        ui.label("用户");
-                        ui.text_edit_singleline(&mut m.user);
-                        ui.end_row();
-                        ui.label("密码");
-                        ui.add(egui::TextEdit::singleline(&mut m.password).password(true));
-                        ui.end_row();
-                        ui.label("默认库(可选)");
-                        ui.text_edit_singleline(&mut m.database);
-                        ui.end_row();
+            // 标题行:左标题 + 右关闭(iOS sheet 式)
+            ui.horizontal(|ui| {
+                ui.add_space(0.0);
+                ui.label(RichText::new("连接配置").size(14.0).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(16.0);
+                });
+            });
+            ui.add_space(2.0);
+            theme::hairline_top(ui);
+            ui.add_space(14.0);
+
+            let body_w = 392.0;
+            ui.allocate_ui(egui::vec2(440.0, 0.0), |ui| {
+                ui.set_min_width(body_w + 48.0);
+                ui.spacing_mut().item_spacing.y = 12.0;
+
+                // 字段:标签在上(11 muted)+ 输入框统一宽
+                let mut field = |ui: &mut egui::Ui, label: &str, text: &mut String, pwd: bool| {
+                    ui.label(RichText::new(label).size(11.0).color(theme::c().muted));
+                    let mut te = egui::TextEdit::singleline(text)
+                        .desired_width(body_w)
+                        .font(egui::TextStyle::Body);
+                    if pwd {
+                        te = te.password(true);
+                    }
+                    ui.add(te);
+                };
+
+                field(ui, "名称", &mut m.name, false);
+
+                // 类型:iOS 分段控件
+                ui.label(RichText::new("类型").size(11.0).color(theme::c().muted));
+                ui.horizontal(|ui| {
+                    let seg_w = (body_w - 8.0) / 3.0;
+                    let opts = [
+                        (shujing_core::DbType::MySql, "MySQL"),
+                        (shujing_core::DbType::Sqlite, "SQLite"),
+                        (shujing_core::DbType::Postgres, "PostgreSQL"),
+                    ];
+                    for (i, (t, name)) in opts.iter().enumerate() {
+                        let selected = m.db_type == *t;
+                        if i > 0 {
+                            ui.add_space(4.0);
+                        }
+                        let btn = egui::Button::new(
+                            RichText::new(*name)
+                                .size(12.0)
+                                .color(if selected { theme::c().text } else { theme::c().text2 }),
+                        )
+                        .min_size(egui::vec2(seg_w, 24.0))
+                        .fill(if selected {
+                            theme::c().accent
+                        } else {
+                            theme::c().input_bg
+                        })
+                        .stroke(frame_stroke);
+                        if ui.add(btn).clicked() {
+                            m.db_type = *t;
+                        }
                     }
                 });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button("测试连接").clicked() {
-                    action = Some(ConnAction::Test(app_conn_from_modal(m)));
+
+                if m.db_type == shujing_core::DbType::Sqlite {
+                    field(ui, "文件路径", &mut m.file_path, false);
+                } else {
+                    field(ui, "主机", &mut m.host, false);
+                    ui.label(RichText::new("端口").size(11.0).color(theme::c().muted));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut m.port)
+                            .desired_width(120.0)
+                            .font(egui::TextStyle::Body),
+                    );
+                    field(ui, "用户", &mut m.user, false);
+                    field(ui, "密码", &mut m.password, true);
+                    field(ui, "默认库(可选)", &mut m.database, false);
                 }
-                if let Some(r) = &m.test_result {
-                    match r {
-                        Ok(msg) => ui.label(RichText::new(msg).size(12.0).color(theme::c().green)),
-                        Err(e) => ui.label(RichText::new(icons::clip(e, 60)).size(12.0).color(theme::c().red)),
-                    };
-                }
+
+                ui.add_space(4.0);
+                // 测试 + 结果同行
+                ui.horizontal(|ui| {
+                    if theme::text_button(ui, "测试连接") {
+                        action = Some(ConnAction::Test(app_conn_from_modal(m)));
+                    }
+                    if let Some(r) = &m.test_result {
+                        match r {
+                            Ok(msg) => ui.label(
+                                RichText::new(icons::clip(msg, 46)).size(11.5).color(theme::c().green),
+                            ),
+                            Err(e) => ui.label(
+                                RichText::new(icons::clip(e, 46)).size(11.5).color(theme::c().red),
+                            ),
+                        };
+                    } else if m.testing {
+                        ui.spinner();
+                    }
+                });
             });
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("保存").color(theme::c().bg).strong())
-                            .fill(theme::c().accent),
-                    )
-                    .clicked()
-                {
-                    action = Some(ConnAction::Save(app_conn_from_modal(m)));
-                }
-                if ui.button("取消").clicked() {
-                    action = Some(ConnAction::Cancel);
-                }
+
+            ui.add_space(14.0);
+            theme::hairline_top(ui);
+            ui.add_space(10.0);
+            // 底部:取消(次) + 保存(主,蓝)
+            ui.allocate_ui(egui::vec2(440.0, 0.0), |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(0.0);
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("保存").size(12.5).color(theme::c().text).strong())
+                                .fill(theme::c().accent)
+                                .corner_radius(egui::CornerRadius::same(9))
+                                .min_size(egui::vec2(76.0, 28.0)),
+                        )
+                        .clicked()
+                    {
+                        action = Some(ConnAction::Save(app_conn_from_modal(m)));
+                    }
+                    ui.add_space(8.0);
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("取消").size(12.5).color(theme::c().text2))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .min_size(egui::vec2(64.0, 28.0)),
+                        )
+                        .clicked()
+                    {
+                        action = Some(ConnAction::Cancel);
+                    }
+                });
             });
+            ui.add_space(12.0);
         });
     if !open {
         action = action.or(Some(ConnAction::Cancel));
@@ -1272,6 +1346,9 @@ impl eframe::App for ShujingApp {
             }
         });
 
+        if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {
+            self.conn_modal = Some(ConnModal::new());
+        }
         if self.conn_modal.is_some() {
             let mut modal = self.conn_modal.take().unwrap();
             let action = draw_conn_modal(ctx, &mut modal);
