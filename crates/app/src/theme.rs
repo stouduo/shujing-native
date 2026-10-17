@@ -188,7 +188,8 @@ pub fn hairline_top(ui: &egui::Ui) {
 pub fn text_button(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add(
         egui::Button::new(egui::RichText::new(label).color(c().accent))
-            .fill(Color32::TRANSPARENT),
+            .fill(Color32::TRANSPARENT)
+            .stroke(Stroke::NONE),
     )
     .clicked()
 }

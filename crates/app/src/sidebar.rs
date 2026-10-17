@@ -52,8 +52,12 @@ impl ShujingApp {
                     self.conn_modal = Some(ConnModal::new());
                 }
                 let dark = theme::is_dark();
-                if icons::theme_toggle(ui, dark).on_hover_text(if dark { "切换浅色" } else { "切换深色" }).clicked() {
-                    self.set_theme_dark(ctx, !dark);
+                if icons::theme_toggle(ui, dark)
+                    .on_hover_text(if dark { "切换浅色" } else { "切换深色" })
+                    .clicked()
+                {
+                    let new_dark = !theme::is_dark();
+                    self.set_theme_dark(ctx, new_dark);
                 }
             });
         });

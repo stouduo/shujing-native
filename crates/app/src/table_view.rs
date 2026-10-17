@@ -1202,6 +1202,8 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
 
 impl eframe::App for ShujingApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 每帧强制 style == 当前调色板(切换主题即刻全局生效,杜绝半新旧混排)
+        crate::theme::apply(ctx);
         self.drain_events(ctx);
         self.autoopen();
         self.screenshot_tick(ctx);
@@ -1373,8 +1375,15 @@ fn draw_empty_state(ui: &mut egui::Ui) {
     let top = egui::pos2(c.x, c.y - 18.0);
     let st = egui::Stroke::new(1.6, theme::c().muted);
     p.add(egui::Shape::ellipse_stroke(top, egui::vec2(rw, rh), st));
-    p.line_segment([top - egui::vec2(rw, 0.0), top + egui::vec2(rw, 20.0)], st);
-    p.line_segment([top + egui::vec2(rw, 0.0), top + egui::vec2(-rw, 20.0)], st);
+    // 两侧竖线接同侧(此前交叉画成了蝴蝶结)
+    p.line_segment(
+        [top - egui::vec2(rw, 0.0), top - egui::vec2(rw, -20.0)],
+        st,
+    );
+    p.line_segment(
+        [top + egui::vec2(rw, 0.0), top + egui::vec2(rw, 20.0)],
+        st,
+    );
     p.add(egui::Shape::ellipse_stroke(
         top + egui::vec2(0.0, 20.0),
         egui::vec2(rw, rh),
