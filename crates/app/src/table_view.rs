@@ -1377,6 +1377,7 @@ impl eframe::App for ShujingApp {
         self.drain_events(ctx);
         self.autoopen();
         if std::env::var("SHUJING_OPEN_QUERY").is_ok() && !self.autoopen_done {
+            eprintln!("[hook] OPEN_QUERY firing");
             self.autoopen_done = true;
             self.open_query_tab(None);
         }

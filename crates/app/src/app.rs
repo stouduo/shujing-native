@@ -404,11 +404,17 @@ impl ShujingApp {
             shot.ready_at = Some(shot.frames);
         }
         let should_send = match shot.ready_at {
-            Some(r) => shot.frames > r + 20,
+            Some(r) => shot.frames > r + 60,
             None => shot.frames > 600,
         };
         if should_send && !shot.sent {
             shot.sent = true;
+            eprintln!(
+                "[shot] tabs={:?} active={}",
+                self.tabs.iter().map(|t| t.title.clone()).collect::<Vec<_>>(),
+                self.active_tab
+            );
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
     }
@@ -669,8 +675,10 @@ impl ShujingApp {
             return;
         }
         let Ok(db) = std::env::var("SHUJING_AUTOOPEN") else {
+            eprintln!("[autoopen] no env, skip");
             return;
         };
+        eprintln!("[autoopen] env={db}");
         self.autoopen_done = true;
         let tx = self.event_tx.clone();
         let service = self.service.clone();
