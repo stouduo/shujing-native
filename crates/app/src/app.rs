@@ -717,9 +717,13 @@ impl ShujingApp {
                         self.toast_error(format!("连接失败: {e}"));
                     }
                 },
-                BgEvent::DatabasesLoaded { conn_id, databases } => {
+                BgEvent::DatabasesLoaded { conn_id, mut databases } => {
                     if let Some(tree) = self.trees.get_mut(&conn_id) {
                         tree.loading = false;
+                        // SQLite 无库概念:合成 main 节点,让侧栏树/表搜索可用
+                        if databases.is_empty() {
+                            databases = vec!["main".to_string()];
+                        }
                         tree.databases = databases;
                         if tree.expanded_db.is_none() && !tree.databases.is_empty() {
                             let db = tree.databases[0].clone();
