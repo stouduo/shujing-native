@@ -201,7 +201,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     && ui.input(|i| i.key_pressed(egui::Key::Enter))
                     || (tab.active_filter.is_some()
                         && ui
-                            .button(RichText::new("✕").color(theme::c().muted))
+                            .button(RichText::new("×").size(14.0).color(theme::c().muted))
                             .on_hover_text("清除筛选")
                             .clicked());
                 if apply_filter {
@@ -1379,6 +1379,10 @@ impl eframe::App for ShujingApp {
         crate::theme::apply(ctx);
         self.drain_events(ctx);
         self.autoopen();
+        if std::env::var("SHUJING_OPEN_QUERY").is_ok() && !self.autoopen_done {
+            self.autoopen_done = true;
+            self.open_query_tab(None);
+        }
         self.screenshot_tick(ctx);
 
         if ui_input_new_query(ctx) {
