@@ -239,7 +239,21 @@ impl ShujingApp {
                     self.open_table(conn_id, name, Some(db.to_string()));
                 }
                 let table = name.to_string();
+                let menu_id = egui::Id::new(format!("tblmenu-{conn_id}-{db}-{name}"));
                 if let Some(resp) = lbl.context_menu(move |ui| {
+                    if ui.button("表统计").clicked() {
+                        ui.ctx().memory_mut(|m| {
+                            m.data.insert_temp(menu_id, "stats".to_string())
+                        });
+                        ui.close_menu();
+                    }
+                    if ui.button("导入 CSV…").clicked() {
+                        ui.ctx().memory_mut(|m| {
+                            m.data.insert_temp(menu_id, "import".to_string())
+                        });
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("复制表名").clicked() {
                         ui.ctx().copy_text(table.clone());
                         ui.close_menu();
@@ -251,6 +265,18 @@ impl ShujingApp {
                     }
                 }) {
                     let _ = &resp;
+                }
+                // 菜单动作(帧尾读取临时数据转 &mut self)
+                let action: Option<String> = ui
+                    .ctx()
+                    .memory(|m| m.data.get_temp::<String>(menu_id));
+                if let Some(act) = action {
+                    ui.ctx().memory_mut(|m| m.data.remove_temp::<String>(menu_id));
+                    match act.as_str() {
+                        "stats" => self.open_stats(conn_id, db, name),
+                        "import" => self.open_import(conn_id, db, name),
+                        _ => {}
+                    }
                 }
                 if hovered && icons::structure(ui).clicked() {
                     self.open_structure(conn_id, name, Some(db.to_string()));

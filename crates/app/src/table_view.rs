@@ -1406,6 +1406,9 @@ impl eframe::App for ShujingApp {
         if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command) {
             ctx.memory_mut(|m| m.request_focus(egui::Id::new("table-filter")));
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command) {
+            self.quick_open = Some(crate::app::QuickOpen { query: String::new(), sel: 0 });
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command) && !self.tabs.is_empty()
         {
             let id = self.tabs[self.active_tab].id.clone();
@@ -1419,6 +1422,12 @@ impl eframe::App for ShujingApp {
         }
 
         // 面板按占用顺序:侧栏 → 标签栏 → toast → 工具/分页/内容
+        // 功能弹窗(浮层,不占面板)
+        crate::modals::draw_quick_open(self, ctx);
+        crate::modals::draw_import_modal(self, ctx);
+        crate::modals::draw_stats_modal(self, ctx);
+        crate::modals::draw_new_table_modal(self, ctx);
+
         self.draw_sidebar_panel(ctx);
         draw_tabs(self, ctx);
         self.draw_toast(ctx);

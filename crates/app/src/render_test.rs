@@ -201,6 +201,10 @@ fn render_sidebar_tabs_empty_state() {
         dirty_override: false,
         shot: None,
         dark_mode: true,
+        quick_open: None,
+        stats: None,
+        import: None,
+        new_table: None,
     };
     let cell = std::cell::RefCell::new(Some(app));
     render("sidebar_tabs", 1280.0, 780.0, move |ctx| {

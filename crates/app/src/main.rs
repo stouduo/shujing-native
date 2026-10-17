@@ -8,6 +8,7 @@ mod query;
 mod sidebar;
 mod sql_highlight;
 mod structure;
+mod modals;
 mod table_view;
 mod theme;
 

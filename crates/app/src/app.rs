@@ -19,6 +19,41 @@ pub enum BgEvent {
     AutoTables { conn_id: String, tables: Vec<shujing_core::TableMeta> },
     TestDone { result: Result<String, String> },
     ExportDone { result: Result<String, String> },
+    StatsLoaded { key: String, result: Result<(u64, Option<u64>, Option<u64>), String> },
+    ImportDone { result: Result<usize, String> },
+    DdlDone { result: Result<(), String> },
+}
+
+/// ⌘P 快速打开
+pub struct QuickOpen {
+    pub query: String,
+    pub sel: usize,
+}
+
+/// 表统计弹窗键
+pub fn stats_key(conn: &str, table: &str) -> String {
+    format!("{conn}/{table}")
+}
+
+/// CSV 导入状态
+pub struct ImportState {
+    pub conn_id: String,
+    pub database: Option<String>,
+    pub table: String,
+    pub path: String,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    /// 源列 -> 目标表列索引(None=跳过)
+    pub col_map: Vec<Option<usize>>,
+    pub batch_errors: Option<String>,
+    /// 目标表列名(打开导入时从表结构抓取)
+    pub target_cols: Vec<String>,
+}
+
+impl ImportState {
+    pub fn headers_target(&self) -> Vec<String> {
+        self.target_cols.clone()
+    }
 }
 
 /// 表数据标签
@@ -217,6 +252,10 @@ pub struct ShujingApp {
     pub dirty_override: bool,
     /// 深色主题(持久化到 settings.json)
     pub dark_mode: bool,
+    pub quick_open: Option<QuickOpen>,
+    pub stats: Option<(String, Option<(u64, Option<u64>, Option<u64>)>, Option<String>)>,
+    pub import: Option<ImportState>,
+    pub new_table: Option<(String, Option<String>, String)>, // conn, db, sql
 }
 
 pub enum PendingAction {
@@ -262,6 +301,10 @@ impl ShujingApp {
             table_filter: String::new(),
             pending: None,
             dirty_override: false,
+            quick_open: None,
+            stats: None,
+            import: None,
+            new_table: None,
             dark_mode: dark,
             shot: std::env::var("SHUJING_SCREENSHOT")
                 .ok()
@@ -825,7 +868,9 @@ impl ShujingApp {
                     }
                 }
                 BgEvent::AutoTables { conn_id, tables } => {
-                    self.trees.entry(conn_id.clone()).or_default();
+                    let tree = self.trees.entry(conn_id.clone()).or_default();
+                    tree.online = true;
+                    tree.tables_by_db.insert("main".to_string(), tables.clone());
                     let names: Vec<String> = tables
                         .iter()
                         .filter(|m| m.kind == "table")
@@ -850,6 +895,82 @@ impl ShujingApp {
                 BgEvent::ExportDone { result } => match result {
                     Ok(path) => self.toast_error(format!("已导出: {path}")),
                     Err(e) => self.toast_error(format!("导出失败: {e}")),
+                },
+                BgEvent::StatsLoaded { key, result } => {
+                    match &result {
+                        Ok(_) => self.stats = Some((key, result.ok(), None)),
+                        Err(e) => {
+                            let cur = self.stats.take();
+                            self.stats = Some((key, None, Some(e.clone())));
+                            let _ = cur;
+                        }
+                    }
+                }
+                BgEvent::ImportDone { result } => match result {
+                    Ok(n) => {
+                        self.import = None;
+                        self.toast_error(format!("已导入 {n} 行"));
+                        if let Some(t) = self.tabs.first() {
+                            let id = self
+                                .tabs
+                                .iter()
+                                .find_map(|t| {
+                                    t.table_data().map(|tt| (tt.conn_id.clone(), tt.table.clone(), tt.database.clone(), t.id.clone()))
+                                });
+                            let _ = t;
+                            let _ = id;
+                        }
+                        // 刷新当前表标签(若是导入目标)——简单起见全部刷新
+                        let ids: Vec<String> = self
+                            .tabs
+                            .iter()
+                            .filter(|t| matches!(t.kind, TabKind::Table(_)))
+                            .map(|t| t.id.clone())
+                            .collect();
+                        for id in ids {
+                            self.load_rows(&id);
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(im) = self.import.as_mut() {
+                            im.batch_errors = Some(e);
+                        } else {
+                            self.toast_error(format!("导入失败: {e}"));
+                        }
+                    }
+                },
+                BgEvent::DdlDone { result } => match result {
+                    Ok(()) => {
+                        self.new_table = None;
+                        self.toast_error("创建成功".to_string());
+                        // 刷新该连接的表列表
+                        let conn = self.new_table.as_ref().map(|x| x.0.clone());
+                        let _ = conn;
+                        // 重新载入所有在线树的表
+                        let ids: Vec<String> = self.trees.keys().cloned().collect();
+                        for cid in ids {
+                            let dbs = self.trees.get(&cid).map(|t| {
+                                (t.databases.clone(), t.expanded_db.clone())
+                            });
+                            if let Some((dbs, exp)) = dbs {
+                                if let Some(db) = exp.or_else(|| dbs.first().cloned()) {
+                                    let tx = self.event_tx.clone();
+                                    let service = self.service.clone();
+                                    let (c2, d2) = (cid.clone(), db.clone());
+                                    net::spawn(async move {
+                                        let tables =
+                                            service.list_tables(&c2, Some(d2)).await.unwrap_or_default();
+                                        let _ = tx.send(BgEvent::TablesLoaded {
+                                            conn_id: c2,
+                                            database: Some(db),
+                                            tables,
+                                        });
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => self.toast_error(format!("创建失败: {e}")),
                 },
             }
         }
@@ -931,4 +1052,82 @@ fn write_tga(img: &egui::ColorImage, path: &std::path::Path) -> std::io::Result<
     }
     f.write_all(&buf)?;
     Ok(())
+}
+
+impl ShujingApp {
+    /// 启动 CSV 导入(按当前 col_map 拼 composite::CsvImport)
+    pub fn start_import(&mut self) {
+        let Some(im) = self.import.as_ref() else { return };
+        let col_map: Vec<(usize, String)> = im
+            .col_map
+            .iter()
+            .enumerate()
+            .filter_map(|(src, dst)| dst.map(|d| (src, im.target_cols[d].clone())))
+            .collect();
+        if col_map.is_empty() {
+            self.toast_error("未映射任何列".to_string());
+            return;
+        }
+        let imp = shujing_core::composite::CsvImport {
+            path: im.path.clone(),
+            database: im.database.clone(),
+            table: im.table.clone(),
+            col_map,
+            has_header: true,
+        };
+        let info = match self.conns.iter().find(|c| c.id == im.conn_id) {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        let service = self.service.clone();
+        let tx = self.event_tx.clone();
+        crate::net::spawn(async move {
+            let r = shujing_core::composite::import_csv(&service, info, imp).await;
+            let _ = tx.send(BgEvent::ImportDone { result: r });
+        });
+    }
+}
+
+impl ShujingApp {
+    /// 打开表统计弹窗并异步取数
+    pub fn open_stats(&mut self, conn_id: &str, database: &str, table: &str) {
+        let key = crate::app::stats_key(conn_id, table);
+        self.stats = Some((key.clone(), None, None));
+        let Some(info) = self.conns.iter().find(|c| c.id == conn_id).cloned() else { return };
+        let service = self.service.clone();
+        let tx = self.event_tx.clone();
+        let db = database.to_string();
+        let tbl = table.to_string();
+        let key2 = key.clone();
+        crate::net::spawn(async move {
+            let r = shujing_core::composite::table_stats(&service, &info, Some(db), &tbl).await;
+            let _ = tx.send(BgEvent::StatsLoaded { key: key2, result: r });
+        });
+    }
+
+    pub fn open_import(&mut self, conn_id: &str, database: &str, table: &str) {
+        // 打开系统文件选择框,读表结构填目标列
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("CSV", &["csv", "txt"])
+            .pick_file()
+        else {
+            return;
+        };
+        let target_cols = self
+            .tabs
+            .iter()
+            .find_map(|t| t.table_data().map(|tt| tt.columns.clone()))
+            .unwrap_or_default();
+        self.import = Some(ImportState {
+            conn_id: conn_id.to_string(),
+            database: Some(database.to_string()),
+            table: table.to_string(),
+            path: path.display().to_string(),
+            headers: Vec::new(),
+            rows: Vec::new(),
+            col_map: Vec::new(),
+            batch_errors: None,
+            target_cols,
+        });
+    }
 }

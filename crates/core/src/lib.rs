@@ -2,6 +2,7 @@
 //! 纯 Rust 库,无 UI 框架依赖;egui 应用进程内直调(无 IPC)。
 
 pub mod backend;
+pub mod composite;
 pub mod edits;
 pub mod exec;
 mod model;
@@ -203,6 +204,15 @@ impl Service {
 
     /// 执行 SQL,返回多结果集(PostgreSQL 完整支持;MySQL/SQLite 返回第一个结果集)。
     /// 含只读拦截与断线自动重连。
+    /// 供 composite 等组合模块直接执行原始 SQL
+    pub async fn run_sql_standalone(
+        service: &Service,
+        info: &ConnInfo,
+        sql: &str,
+    ) -> Result<Vec<crate::ExecResult>, String> {
+        service.run_sql(&info.id, sql.to_string(), None).await
+    }
+
     pub async fn run_sql(
         &self,
         id: &str,

@@ -9,6 +9,18 @@ pub struct CellUpdate {
     pub sets: Vec<(String, Option<String>)>,
 }
 
+/// 供组合模块引用的标识符引注(mysql=反引号,其余双引号)
+pub fn quote_ident_pub(database: &Option<String>, name: &str) -> String {
+    match database {
+        Some(db) => format!(
+            "{}.{}",
+            quote(db, false),
+            quote(name, false)
+        ),
+        None => quote(name, false),
+    }
+}
+
 fn quote(name: &str, mysql: bool) -> String {
     if mysql {
         format!("`{}`", name.replace('`', "``"))
