@@ -23,19 +23,18 @@ pub fn draw_query_view(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("连接").size(12.0).color(theme::c().muted));
-                let selected = conns
+                let opts: Vec<(String, String)> = conns
+                    .iter()
+                    .map(|c| (c.id.clone(), c.name.clone()))
+                    .collect();
+                let sel_name = conns
                     .iter()
                     .find(|c| c.id == q.conn_id)
                     .map(|c| c.name.clone())
                     .unwrap_or_else(|| "选择连接".into());
-                egui::ComboBox::from_id_salt("query-conn")
-                    .selected_text(RichText::new(selected).size(12.5).color(theme::c().text))
-                    .width(150.0)
-                    .show_ui(ui, |ui| {
-                        for c in conns {
-                            ui.selectable_value(&mut q.conn_id, c.id.clone(), c.name.clone());
-                        }
-                    });
+                if let Some(new_id) = theme::select(ui, "query-conn-select", &sel_name, &opts, 170.0) {
+                    q.conn_id = new_id;
+                }
                 if q.running {
                     ui.spinner();
                 }

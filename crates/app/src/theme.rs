@@ -230,6 +230,88 @@ pub fn form_field(ui: &mut egui::Ui, label: &str, text: &mut String, width: f32,
     ui.add(te);
 }
 
+/// iOS 式下拉选择:圆角输入框样式 + 弹层列表(选中蓝底/悬停浅蓝)
+/// 返回 Some(新值) 当用户选中;options = [(值, 显示)]
+pub fn select(
+    ui: &mut egui::Ui,
+    id: &str,
+    selected: &str,
+    options: &[(String, String)],
+    width: f32,
+) -> Option<String> {
+    let popup_id = egui::Id::new(id).with("popup");
+    let opened = ui.memory(|m| m.is_popup_open(popup_id));
+    let h = 28.0;
+
+    // 关闭态:输入框样式的圆角框 + 选中文字 + 右缘下拉三角
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::click());
+    let p = ui.painter();
+    p.rect_filled(rect, 8, c().input_bg);
+    p.rect_stroke(rect, 8, Stroke::new(1.0, if resp.hovered() || opened { c().accent } else { c().border }), egui::StrokeKind::Inside);
+    p.text(
+        egui::pos2(rect.left() + 12.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        selected,
+        egui::FontId::proportional(12.5),
+        c().text,
+    );
+    let tri = egui::pos2(rect.right() - 14.0, rect.center().y);
+    let s3 = 3.4;
+    let pts: Vec<egui::Pos2> = if opened {
+        vec![
+            egui::pos2(tri.x - s3, tri.y + s3 / 2.0),
+            egui::pos2(tri.x + s3, tri.y + s3 / 2.0),
+            egui::pos2(tri.x, tri.y - s3),
+        ]
+    } else {
+        vec![
+            egui::pos2(tri.x - s3, tri.y - s3 / 2.0),
+            egui::pos2(tri.x + s3, tri.y - s3 / 2.0),
+            egui::pos2(tri.x, tri.y + s3),
+        ]
+    };
+    p.add(egui::Shape::convex_polygon(pts, c().muted, Stroke::NONE));
+
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup_id));
+    }
+
+    let mut picked = None;
+    if opened {
+        let below = true;
+        egui::popup_below_widget(
+            ui,
+            popup_id,
+            &resp,
+            if below { egui::PopupCloseBehavior::CloseOnClick } else { egui::PopupCloseBehavior::CloseOnClick },
+            |ui| {
+                ui.set_min_width(width);
+                for (val, label) in options {
+                    let is_sel = val == selected;
+                    let item = egui::Button::new(
+                        egui::RichText::new(label)
+                            .size(12.5)
+                            .color(if is_sel { c().text } else { c().text2 }),
+                    )
+                    .fill(if is_sel {
+                        c().accent.gamma_multiply(0.35)
+                    } else {
+                        Color32::TRANSPARENT
+                    })
+                    .stroke(Stroke::NONE)
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .min_size(egui::vec2(width - 20.0, 26.0));
+                    if ui.add(item).clicked() {
+                        picked = Some(val.clone());
+                        ui.memory_mut(|m| m.close_popup());
+                    }
+                }
+            },
+        );
+    }
+    picked
+}
+
 /// 次级小文字按钮(悬停行操作),带语义色;返回 (是否点击, 响应)
 pub fn mini_text_button(ui: &mut egui::Ui, label: &str, color: Color32) -> (bool, egui::Response) {
     let r = ui.add(

@@ -76,7 +76,7 @@ pub fn theme_toggle(ui: &mut Ui, dark: bool) -> egui::Response {
     ui.add(
         egui::Button::new(
             egui::RichText::new(if dark { "☀" } else { "☾" })
-                .size(14.0)
+                .size(16.0)
                 .color(theme::c().accent),
         )
         .fill(egui::Color32::TRANSPARENT)

@@ -317,21 +317,18 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let mut ps = tab.page_size;
-                    egui::ComboBox::from_id_salt("page-size")
-                        .selected_text(
-                            RichText::new(format!("{ps} 行/页"))
-                                .size(12.0)
-                                .color(theme::c().text2),
-                        )
-                        .width(92.0)
-                        .show_ui(ui, |ui| {
-                            for v in [50usize, 100, 200, 500] {
-                                ui.selectable_value(&mut ps, v, format!("{v} 行/页"));
-                            }
-                        });
-                    if ps != tab.page_size {
-                        tab.page_size = ps;
+                    let ps_opts: Vec<(String, String)> = [50usize, 100, 200, 500]
+                        .iter()
+                        .map(|v| (v.to_string(), format!("{v} 行/页")))
+                        .collect();
+                    if let Some(v) = theme::select(
+                        ui,
+                        "page-size-select",
+                        &tab.page_size.to_string(),
+                        &ps_opts,
+                        96.0,
+                    ) {
+                        tab.page_size = v.parse().unwrap_or(tab.page_size);
                         actions.push(TabAction::SetPage { tab_id: tab_id.clone(), page: 1 });
                     }
                     let total_pages =
