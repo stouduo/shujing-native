@@ -44,21 +44,25 @@ impl ShujingApp {
     }
 
     pub fn draw_sidebar(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("数镜").size(14.0).strong());
-            ui.label(RichText::new("Native").size(11.0).color(theme::c().muted));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if theme::text_button(ui, "＋ 连接") {
-                    self.conn_modal = Some(ConnModal::new());
-                }
-                let dark = theme::is_dark();
-                if icons::theme_toggle(ui, dark)
-                    .on_hover_text(if dark { "切换浅色" } else { "切换深色" })
-                    .clicked()
-                {
-                    let new_dark = !theme::is_dark();
-                    self.set_theme_dark(ctx, new_dark);
-                }
+        // 头部固定 30px 带:标题/主题钮/连接钮共用同一垂直中心线
+        ui.allocate_ui(egui::vec2(ui.available_width(), 30.0), |ui| {
+            ui.set_min_height(30.0);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(RichText::new("数镜").size(14.0).strong());
+                ui.label(RichText::new("Native").size(11.0).color(theme::c().muted));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if theme::text_button(ui, "＋ 连接") {
+                        self.conn_modal = Some(ConnModal::new());
+                    }
+                    let dark = theme::is_dark();
+                    if icons::theme_toggle(ui, dark)
+                        .on_hover_text(if dark { "切换浅色" } else { "切换深色" })
+                        .clicked()
+                    {
+                        let new_dark = !theme::is_dark();
+                        self.set_theme_dark(ctx, new_dark);
+                    }
+                });
             });
         });
         theme::hairline_bottom(ui);
@@ -88,12 +92,14 @@ impl ShujingApp {
         let row_top = ui.cursor().top();
         ui.horizontal(|ui| {
             icons::dot(ui, online);
-            let resp = ui.selectable_label(
-                false,
-                RichText::new(&c.name)
-                    .size(13.0)
-                    .strong()
-                    .color(if online { theme::c().text } else { theme::c().text2}),
+            let resp = ui.add(
+                egui::Label::new(
+                    RichText::new(&c.name)
+                        .size(13.0)
+                        .strong()
+                        .color(if online { theme::c().text } else { theme::c().text2 }),
+                )
+                .sense(egui::Sense::click()),
             );
             let ver = self
                 .trees

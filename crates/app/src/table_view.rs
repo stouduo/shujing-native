@@ -1568,7 +1568,7 @@ fn draw_empty_state(ui: &mut egui::Ui) {
     ui.label(RichText::new("没有打开的标签").size(15.0).strong());
     ui.add_space(4.0);
     ui.label(
-        RichText::new("在左侧连接一个数据库,点击表名浏览数据\n⌘T 新建查询标签")
+        RichText::new("在左侧连接一个数据库,点击表名浏览数据\n或点标签栏的 ＋ 新建查询标签")
             .size(12.0)
             .color(theme::c().muted),
     );

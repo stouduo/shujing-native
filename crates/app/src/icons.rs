@@ -82,7 +82,7 @@ pub fn theme_toggle(ui: &mut Ui, dark: bool) -> egui::Response {
     let rect = resp.rect;
     let color = if resp.hovered() { theme::c().text } else { theme::c().accent };
     let p = ui.painter();
-    let c = rect.center();
+    let c = rect.center() + egui::vec2(0.0, 1.0);
     if dark {
         // 太阳:圆 + 8 条射线
         p.circle_stroke(c, 3.4, Stroke::new(1.3, color));

@@ -235,7 +235,8 @@ pub fn mini_text_button(ui: &mut egui::Ui, label: &str, color: Color32) -> (bool
     let r = ui.add(
         egui::Button::new(egui::RichText::new(label).size(11.0).color(color))
             .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::NONE),
+            .stroke(Stroke::NONE)
+            .min_size(egui::vec2(0.0, 24.0)),
     );
     (r.clicked(), r)
 }
