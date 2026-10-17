@@ -314,6 +314,21 @@ impl ShujingApp {
                 break;
             }
         }
+        // 符号回落:系统字库 Apple Symbols(↵ ▾ ✕ ☀ ☾ ⌘ ↻ …),
+        // 挂两个家族末尾——缺字形一律回落到这里,不再有豆腐块
+        if let Some(bytes) = Self::mmap_static("/System/Library/Fonts/Apple Symbols.ttf") {
+            fonts.font_data.insert(
+                "symbols".to_owned(),
+                std::sync::Arc::new(egui::FontData {
+                    font: std::borrow::Cow::Borrowed(bytes),
+                    index: 0,
+                    tweak: Default::default(),
+                }),
+            );
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                fonts.families.entry(family).or_default().push("symbols".to_owned());
+            }
+        }
         ctx.set_fonts(fonts);
     }
 

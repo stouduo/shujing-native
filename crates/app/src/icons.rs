@@ -71,36 +71,18 @@ pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_
     }
 }
 
-/// 主题切换钮:深色显示太阳,浅色显示月亮(Button 承载,与文字钮同一对齐机制)
+/// 主题切换钮:系统字形 ☀/☾(Apple Symbols,与文字同一 metrics)
 pub fn theme_toggle(ui: &mut Ui, dark: bool) -> egui::Response {
-    let resp = ui.add(
-        egui::Button::new("")
-            .fill(egui::Color32::TRANSPARENT)
-            .stroke(Stroke::NONE)
-            .min_size(egui::vec2(26.0, 24.0)),
-    );
-    let rect = resp.rect;
-    let color = if resp.hovered() { theme::c().text } else { theme::c().accent };
-    let p = ui.painter();
-    let c = rect.center() + egui::vec2(0.0, 1.0);
-    if dark {
-        // 太阳:圆 + 8 条射线
-        p.circle_stroke(c, 3.4, Stroke::new(1.3, color));
-        for i in 0..8 {
-            let a = i as f32 * std::f32::consts::TAU / 8.0;
-            let d0 = 5.2;
-            let d1 = 7.0;
-            p.line_segment(
-                [egui::pos2(c.x + d0 * a.cos(), c.y + d0 * a.sin()), egui::pos2(c.x + d1 * a.cos(), c.y + d1 * a.sin())],
-                Stroke::new(1.2, color),
-            );
-        }
-    } else {
-        // 月亮:大圆填充 + 背景色圆错位遮出月牙
-        p.circle_filled(c, 5.4, color);
-        p.circle_filled(c + egui::vec2(2.6, -1.6), 4.6, theme::c().bg);
-    }
-    resp
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(if dark { "☀" } else { "☾" })
+                .size(14.0)
+                .color(theme::c().accent),
+        )
+        .fill(egui::Color32::TRANSPARENT)
+        .stroke(Stroke::NONE)
+        .min_size(egui::vec2(26.0, 24.0)),
+    )
 }
 
 /// 漏斗 glyph(筛选语义)
@@ -191,34 +173,14 @@ pub fn search_box_icon(
     resp
 }
 
-/// 刷新:圆弧箭头(Button 承载,与文字/菜单按钮同一对齐机制)
+/// 刷新:系统字形 ↻(Apple Symbols)
 pub fn refresh(ui: &mut Ui, color: egui::Color32) -> egui::Response {
-    let resp = ui.add(
-        egui::Button::new("")
+    ui.add(
+        egui::Button::new(egui::RichText::new("↻").size(15.0).color(color))
             .fill(egui::Color32::TRANSPARENT)
             .stroke(Stroke::NONE)
             .min_size(egui::vec2(26.0, 24.0)),
-    );
-    let rect = resp.rect;
-    let c = rect.center() - egui::vec2(0.0, 1.5);
-    let r = 5.0;
-    let st = Stroke::new(1.5, color);
-    let p = ui.painter();
-    // 300° 弧,起点右上留缺口
-    let mut prev = None;
-    for i in 0..=10 {
-        let a = (-90.0 + i as f32 * 30.0).to_radians();
-        let pt = egui::pos2(c.x + r * a.cos(), c.y + r * a.sin());
-        if let Some(pr) = prev {
-            p.line_segment([pr, pt], st);
-        }
-        prev = Some(pt);
-    }
-    // 缺口处箭头(右上)
-    let tip = egui::pos2(c.x + r * (-60f32).to_radians().cos() - 1.0, c.y + r * (-60f32).to_radians().sin() - 2.5);
-    p.line_segment([tip, tip + egui::vec2(-4.0, 1.0)], st);
-    p.line_segment([tip, tip + egui::vec2(1.5, 4.0)], st);
-    resp
+    )
 }
 
 /// 更多 ⋯

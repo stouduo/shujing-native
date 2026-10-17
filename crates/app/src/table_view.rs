@@ -201,7 +201,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     && ui.input(|i| i.key_pressed(egui::Key::Enter))
                     || (tab.active_filter.is_some()
                         && ui
-                            .button(RichText::new("×").size(14.0).color(theme::c().muted))
+                            .button(RichText::new("✕").size(13.0).color(theme::c().muted))
                             .on_hover_text("清除筛选")
                             .clicked());
                 if apply_filter {

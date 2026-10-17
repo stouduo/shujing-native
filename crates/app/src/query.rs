@@ -42,7 +42,7 @@ pub fn draw_query_view(
                 if ui
                     .add_enabled(
                         !q.running && !q.sql.trim().is_empty() && !q.conn_id.is_empty(),
-                        egui::Button::new(RichText::new("运行 ⌘回车").color(theme::c().bg).strong())
+                        egui::Button::new(RichText::new("运行 ⌘↵").color(theme::c().bg).strong())
                             .fill(theme::c().accent)
                             .corner_radius(egui::CornerRadius::same(9)),
                     )
@@ -63,7 +63,7 @@ pub fn draw_query_view(
                 }
                 let history = q.history.clone();
                 let hist_menu = ui.menu_button(
-                    RichText::new("历史").size(13.0).color(theme::c().accent),
+                    RichText::new("历史 ▾").size(13.0).color(theme::c().accent),
                     |ui| {
                     if history.is_empty() {
                         ui.label(RichText::new("暂无记录").size(12.0).color(theme::c().muted));
@@ -80,20 +80,7 @@ pub fn draw_query_view(
                         }
                     }
                 });
-                // 下拉小三角(painter 直绘,▾ 缺字形)
-                let r = hist_menu.response.rect;
-                let c0 = egui::pos2(r.right() - 8.0, r.center().y + 1.0);
-                let s = 3.0;
-                let pts = vec![
-                    egui::pos2(c0.x - s, c0.y - s / 2.0),
-                    egui::pos2(c0.x + s, c0.y - s / 2.0),
-                    egui::pos2(c0.x, c0.y + s),
-                ];
-                ui.painter().add(egui::Shape::convex_polygon(
-                    pts,
-                    theme::c().accent,
-                    egui::Stroke::NONE,
-                ));
+                let _ = hist_menu.response; // ▾ 已用系统字形
             });
             crate::theme::hairline_bottom(ui);
         });
@@ -114,14 +101,14 @@ pub fn draw_query_view(
             ui.add(
                 egui::TextEdit::multiline(&mut q.sql)
                     .code_editor()
-                    .hint_text(RichText::new("输入 SQL…   ⌘回车 运行").color(theme::c().muted))
+                    .hint_text(RichText::new("SELECT …   ⌘↵ 运行").color(theme::c().muted))
                     .desired_width(f32::INFINITY)
                     .desired_rows(6)
                     .layouter(&mut layouter),
             );
         });
 
-        // ⌘回车 运行
+        // ⌘↵ 运行
         if ui.input(|i| {
             i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
         }) {
