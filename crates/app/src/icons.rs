@@ -97,6 +97,30 @@ pub fn theme_toggle(ui: &mut Ui, dark: bool) -> egui::Response {
     resp
 }
 
+/// 漏斗 glyph(筛选语义)
+pub fn funnel_glyph(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    let st = Stroke::new(1.3, color);
+    let (x, y) = (center.x, center.y);
+    p.line_segment([egui::pos2(x - 4.0, y - 3.5), egui::pos2(x + 4.0, y - 3.5)], st);
+    p.line_segment([egui::pos2(x - 4.0, y - 3.5), egui::pos2(x - 1.0, y + 0.5)], st);
+    p.line_segment([egui::pos2(x + 4.0, y - 3.5), egui::pos2(x + 1.0, y + 0.5)], st);
+    p.line_segment([egui::pos2(x - 1.0, y + 0.5), egui::pos2(x - 1.0, y + 4.0)], st);
+    p.line_segment([egui::pos2(x + 1.0, y + 0.5), egui::pos2(x + 1.0, y + 2.5)], st);
+    p.line_segment([egui::pos2(x - 1.0, y + 4.0), egui::pos2(x + 1.0, y + 2.5)], st);
+}
+
+/// 状态徽章(0/1/2 类短值):绿=on 红=off
+pub fn status_badge(ui: &mut Ui, text: &str, on: bool) {
+    let p = theme::c();
+    let font = egui::FontId::proportional(10.5);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font.clone(), p.text);
+    let size = galley.size() + egui::vec2(10.0, 5.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let (bg, fg) = if on { (p.green, p.green) } else { (p.red, p.red) };
+    ui.painter().rect_filled(rect, 5, bg.gamma_multiply(0.16));
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, font, fg);
+}
+
 /// 放大镜 glyph(搜索框内)
 pub fn magnifier(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
     let st = Stroke::new(1.3, color);
@@ -115,10 +139,30 @@ pub fn search_box(
     placeholder: &str,
     width: f32,
 ) -> egui::Response {
+    search_box_icon(ui, id_salt, text, placeholder, width, false)
+}
+
+/// 同上,funnel=true 用漏斗图标(筛选语义)
+pub fn search_box_icon(
+    ui: &mut Ui,
+    id_salt: &str,
+    text: &mut String,
+    placeholder: &str,
+    width: f32,
+    funnel: bool,
+) -> egui::Response {
     let h = 26.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 8, crate::theme::c().bg);
-    magnifier(ui.painter(), egui::pos2(rect.left() + 12.0, rect.center().y), crate::theme::c().muted);
+    ui.painter().rect_filled(rect, 8, crate::theme::c().input_bg);
+    if funnel {
+        funnel_glyph(
+            ui.painter(),
+            egui::pos2(rect.left() + 12.0, rect.center().y),
+            crate::theme::c().muted,
+        );
+    } else {
+        magnifier(ui.painter(), egui::pos2(rect.left() + 12.0, rect.center().y), crate::theme::c().muted);
+    }
     let inner = egui::Rect::from_min_size(
         egui::pos2(rect.left() + 24.0, rect.top()),
         egui::Vec2::new(width - 30.0, h),

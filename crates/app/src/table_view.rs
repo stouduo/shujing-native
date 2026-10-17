@@ -187,15 +187,16 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 }
                 if tab.loading {
                     ui.spinner();
-                } else if tab.pk_loaded && tab.pk_cols.is_empty() {
-                    ui.label(RichText::new("只读").size(11.0).color(theme::c().muted));
+                } else if tab.pk_loaded {
+                    let hint = if tab.pk_cols.is_empty() { "只读" } else { "双击编辑" };
+                    ui.label(RichText::new(hint).size(11.0).color(theme::c().muted));
                 }
                 if let Some(err) = &tab.error {
                     ui.label(RichText::new(icons::clip(err, 80)).size(11.0).color(theme::c().red));
                 }
                 ui.add_space(8.0);
                 // 筛选框(iOS 搜索框:圆角底 + 内嵌放大镜)
-                let resp = icons::search_box(ui, "table-filter", &mut tab.filter, "筛选 ⌘F", 150.0);
+                let resp = icons::search_box_icon(ui, "table-filter", &mut tab.filter, "筛选 ⌘F", 150.0, true);
                 let apply_filter = resp.lost_focus()
                     && ui.input(|i| i.key_pressed(egui::Key::Enter))
                     || (tab.active_filter.is_some()
@@ -601,7 +602,7 @@ fn draw_data_table(
     let col_widths = suggested_widths(rows, columns);
     let mut tb = egui_extras::TableBuilder::new(ui)
         .id_salt("data-table")
-        .striped(true)
+        .striped(false)
         .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .vscroll(true)
