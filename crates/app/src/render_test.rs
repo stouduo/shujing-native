@@ -201,6 +201,7 @@ fn render_sidebar_tabs_empty_state() {
         dirty_override: false,
         shot: None,
         dark_mode: true,
+        auto_connect_done: true,
         quick_open: None,
         stats: None,
         import: None,

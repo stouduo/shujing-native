@@ -69,12 +69,18 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
                 q.sel = q.sel.min(candidates.len() - 1);
             }
 
+            let any_online = app.trees.values().any(|t| t.online);
             egui::ScrollArea::vertical()
                 .max_height(280.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if candidates.is_empty() {
-                        ui.label(RichText::new("无匹配表").size(12.0).color(theme::c().muted));
+                        let msg = if any_online {
+                            "无匹配表"
+                        } else {
+                            "暂无在线连接——请先在左侧点击连接名"
+                        };
+                        ui.label(RichText::new(msg).size(12.0).color(theme::c().muted));
                     }
                     for (i, (cid, name, db, conn_name)) in candidates.iter().enumerate() {
                         let is_sel = i == q.sel;

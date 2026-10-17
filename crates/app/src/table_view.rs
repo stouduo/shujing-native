@@ -253,20 +253,16 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                     }
                     if !tab.changes.is_empty() {
                         let n = tab.changes.len();
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(format!("保存 {n} ⌘S"))
-                                        .color(theme::c().bg)
-                                        .strong()
-                                        .size(12.5),
-                                )
-                                .fill(theme::c().green)
-                                .corner_radius(egui::CornerRadius::same(9)),
-                            )
-                            .on_hover_text("保存全部未保存修改")
-                            .clicked()
-                        {
+                        let save_resp = theme::pill_button(
+                            ui,
+                            &format!("保存 {n}"),
+                            Some("⌘S"),
+                            theme::c().green,
+                            theme::c().bg,
+                            theme::c().bg,
+                        );
+                        save_resp.clone().on_hover_text("保存全部未保存修改");
+                        if save_resp.clicked() {
                             actions.push(TabAction::SaveChanges { tab_id: tab_id.clone() });
                         }
                     }
@@ -1382,6 +1378,14 @@ impl eframe::App for ShujingApp {
         }
         self.drain_events(ctx);
         self.autoopen();
+        // 启动后自动连接所有已保存连接(打开即用)
+        if !self.auto_connect_done {
+            self.auto_connect_done = true;
+            let conns = self.conns.clone();
+            for c in conns {
+                self.toggle_connect(&c);
+            }
+        }
         if std::env::var("SHUJING_OPEN_QUERY").is_ok() && !self.autoopen_done {
             eprintln!("[hook] OPEN_QUERY firing");
             self.autoopen_done = true;

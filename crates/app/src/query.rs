@@ -38,15 +38,17 @@ pub fn draw_query_view(
                 if q.running {
                     ui.spinner();
                 }
-                if ui
-                    .add_enabled(
-                        !q.running && !q.sql.trim().is_empty() && !q.conn_id.is_empty(),
-                        egui::Button::new(RichText::new("运行 ⌘↵").color(theme::c().bg).strong())
-                            .fill(theme::c().accent)
-                            .corner_radius(egui::CornerRadius::same(9)),
-                    )
-                    .clicked()
-                {
+                let run_enabled = !q.running && !q.sql.trim().is_empty() && !q.conn_id.is_empty();
+                let run_resp = theme::pill_button(
+                    ui,
+                    "运行",
+                    Some("⌘↵"),
+                    if run_enabled { theme::c().accent } else { theme::c().hover },
+                    if run_enabled { theme::c().text } else { theme::c().muted },
+                    if run_enabled { theme::c().text } else { theme::c().muted },
+                );
+                run_resp.clone().on_hover_text("运行查询");
+                if run_enabled && run_resp.clicked() {
                     actions.push(TabAction::RunQuery { tab_id: tab_id.to_string() });
                 }
                 if let Some(err) = &q.error {
@@ -62,7 +64,7 @@ pub fn draw_query_view(
                 }
                 let history = q.history.clone();
                 let hist_menu = ui.menu_button(
-                    RichText::new("历史 ▾").size(13.0).color(theme::c().accent),
+                    RichText::new("历史").size(13.0).color(theme::c().accent),
                     |ui| {
                     if history.is_empty() {
                         ui.label(RichText::new("暂无记录").size(12.0).color(theme::c().muted));
@@ -79,7 +81,20 @@ pub fn draw_query_view(
                         }
                     }
                 });
-                let _ = hist_menu.response; // ▾ 已用系统字形
+                // 下拉三角画在按钮右缘、与文字中心对齐
+                let hr = hist_menu.response.rect;
+                let c0 = egui::pos2(hr.right() + 6.0, hr.center().y + 1.0);
+                let s3 = 3.4;
+                let pts = vec![
+                    egui::pos2(c0.x - s3, c0.y - s3 / 2.0),
+                    egui::pos2(c0.x + s3, c0.y - s3 / 2.0),
+                    egui::pos2(c0.x, c0.y + s3),
+                ];
+                ui.painter().add(egui::Shape::convex_polygon(
+                    pts,
+                    theme::c().accent,
+                    egui::Stroke::NONE,
+                ));
             });
             crate::theme::hairline_bottom(ui);
         });

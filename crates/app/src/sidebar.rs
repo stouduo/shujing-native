@@ -285,7 +285,7 @@ impl ShujingApp {
         });
     }
 
-    fn toggle_connect(&mut self, c: &shujing_core::ConnInfo) {
+    pub(crate) fn toggle_connect(&mut self, c: &shujing_core::ConnInfo) {
         if self.trees.get(&c.id).map(|t| t.online).unwrap_or(false) {
             self.trees.remove(&c.id);
             // 断开的连接:相关标签一并关闭,避免残留标签对失效连接报错

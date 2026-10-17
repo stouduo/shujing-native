@@ -312,6 +312,39 @@ pub fn select(
     picked
 }
 
+/// 胶囊按钮:主文字 + 副符号(如 "运行"+"⌘↵"),两部分分别用各自字体绘制、
+/// 垂直方向强制同一中心线(符号字体基线差异的根治方案)。返回是否点击。
+pub fn pill_button(
+    ui: &mut egui::Ui,
+    main: &str,
+    sub: Option<&str>,
+    fill: Color32,
+    main_color: Color32,
+    sub_color: Color32,
+) -> egui::Response {
+    let pad_x = 14.0;
+    let h = 30.0;
+    let main_font = egui::FontId::proportional(13.0);
+    let sub_font = egui::FontId::proportional(11.5);
+    let main_g = ui.painter().layout_no_wrap(main.to_string(), main_font.clone(), main_color);
+    let sub_g = sub.map(|s| ui.painter().layout_no_wrap(s.to_string(), sub_font.clone(), sub_color));
+    let mut w = pad_x * 2.0 + main_g.size().x;
+    if let Some(g) = &sub_g {
+        w += 8.0 + g.size().x;
+    }
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+    let p = ui.painter();
+    p.rect_filled(rect, 9, fill);
+    let cy = rect.center().y;
+    let mut x = rect.left() + pad_x;
+    p.text(egui::pos2(x, cy), egui::Align2::LEFT_CENTER, main, main_font, main_color);
+    x += main_g.size().x + 8.0;
+    if let Some(g) = sub_g {
+        p.text(egui::pos2(x, cy), egui::Align2::LEFT_CENTER, sub.unwrap_or(""), sub_font, sub_color);
+    }
+    resp
+}
+
 /// 次级小文字按钮(悬停行操作),带语义色;返回 (是否点击, 响应)
 pub fn mini_text_button(ui: &mut egui::Ui, label: &str, color: Color32) -> (bool, egui::Response) {
     let r = ui.add(

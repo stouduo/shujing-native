@@ -252,6 +252,7 @@ pub struct ShujingApp {
     pub dirty_override: bool,
     /// 深色主题(持久化到 settings.json)
     pub dark_mode: bool,
+    pub auto_connect_done: bool,
     pub quick_open: Option<QuickOpen>,
     pub stats: Option<(String, Option<(u64, Option<u64>, Option<u64>)>, Option<String>)>,
     pub import: Option<ImportState>,
@@ -281,6 +282,7 @@ impl ShujingApp {
         let _ = std::fs::create_dir_all(&config_dir);
         let service = Arc::new(Service::new(&config_dir));
         let conns = service.list_saved_connections();
+        eprintln!("[startup] config_dir={:?} conns={}", config_dir.display(), conns.len());
         let (event_tx, events) = std::sync::mpsc::channel();
         let dark = Self::load_dark_pref(&config_dir);
         crate::theme::set_dark(dark);
@@ -306,6 +308,7 @@ impl ShujingApp {
             import: None,
             new_table: None,
             dark_mode: dark,
+            auto_connect_done: false,
             shot: std::env::var("SHUJING_SCREENSHOT")
                 .ok()
                 .map(|path| ShotState {
