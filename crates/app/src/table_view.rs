@@ -319,7 +319,11 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut ps = tab.page_size;
                     egui::ComboBox::from_id_salt("page-size")
-                        .selected_text(RichText::new(format!("{ps} 行/页")).size(12.0))
+                        .selected_text(
+                            RichText::new(format!("{ps} 行/页"))
+                                .size(12.0)
+                                .color(theme::c().text2),
+                        )
                         .width(92.0)
                         .show_ui(ui, |ui| {
                             for v in [50usize, 100, 200, 500] {
@@ -415,7 +419,11 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                                                 RichText::new(text)
                                                     .size(12.0)
                                                     .monospace()
-                                                    .color(icons::cell_text_color(v, false)),
+                                                    .color(if v.is_none() {
+                                                theme::c().null_text
+                                            } else {
+                                                theme::c().text
+                                            }),
                                             )
                                             .wrap()
                                             .selectable(true),
@@ -531,7 +539,7 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
                 _ => Some((c, true)),
             };
             *page = 1;
-            actions.push(TabAction::Reload { tab_id });
+            actions.push(TabAction::Reload { tab_id: tab_id.clone() });
         }
         if let Some((ri, ci, val)) = commit {
             let col_name = columns[ci].clone();
@@ -547,6 +555,97 @@ pub(crate) fn draw_table_view(ctx: &egui::Context, tab_id: &str, tab: &mut Table
             changes.push((ri, col_name, None));
         }
     });
+
+    // ---- 查看完整内容弹窗(右键菜单进入) ----
+    if let Some((col, text)) = tab.view_cell.clone() {
+        let open = std::cell::Cell::new(true);
+        let mut copy_it = false;
+        egui::Window::new("")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(560.0)
+            .frame(theme::modal_frame())
+            .show(ctx, |ui| {
+                theme::modal_title(ui, &format!("{col} · 完整内容"));
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&text).size(12.0).monospace().color(theme::c().text),
+                            )
+                            .wrap()
+                            .selectable(true),
+                        );
+                    });
+                theme::modal_footer(ui, |ui| {
+                    if theme::modal_primary(ui, "复制", theme::c().accent) {
+                        copy_it = true;
+                    }
+                    ui.add_space(8.0);
+                    if theme::modal_secondary(ui, "关闭") {
+                        open.set(false);
+                    }
+                });
+            });
+        if copy_it {
+            ctx.copy_text(text);
+        }
+        if !open.get() {
+            tab.view_cell = None;
+        }
+    }
+
+    // ---- 新增行表单 ----
+    if tab.insert_form.is_some() {
+        let open = std::cell::Cell::new(true);
+        let mut submit = false;
+        egui::Window::new("")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(440.0)
+            .frame(theme::modal_frame())
+            .show(ctx, |ui| {
+                theme::modal_title(ui, &format!("{} · 新增行", tab.table));
+                ui.label(
+                    RichText::new("留空的字段取数据库默认值 / NULL")
+                        .size(12.0)
+                        .color(theme::c().muted),
+                );
+                ui.add_space(10.0);
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 12.0;
+                        if let Some(form) = tab.insert_form.as_mut() {
+                            for (c, v) in form.iter_mut() {
+                                theme::form_field(ui, c, v, 392.0, false);
+                            }
+                        }
+                    });
+                theme::modal_footer(ui, |ui| {
+                    if theme::modal_primary(ui, "插入", theme::c().accent) {
+                        submit = true;
+                    }
+                    ui.add_space(8.0);
+                    if theme::modal_secondary(ui, "取消") {
+                        open.set(false);
+                    }
+                });
+            });
+        if submit {
+            tab.insert_form = None;
+            actions.push(TabAction::InsertRow { tab_id: tab_id.clone() });
+        } else if !open.get() {
+            tab.insert_form = None;
+        }
+    }
+
+    if close_detail {
+        tab.selected = None;
+    }
 
     actions
 }
@@ -1395,25 +1494,24 @@ impl eframe::App for ShujingApp {
                 },
                 None => unreachable!(),
             };
-            egui::Window::new(RichText::new("未保存的修改").size(14.0).strong())
+            egui::Window::new("")
                 .collapsible(false)
                 .resizable(false)
-                .min_width(320.0)
+                .default_width(380.0)
+                .frame(theme::modal_frame())
                 .show(ctx, |ui| {
-                    ui.label(RichText::new(format!("有未保存的单元格修改,继续{desc}将丢弃它们。")).size(13.0));
-                    ui.add_space(8.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new("丢弃修改并继续").color(theme::c().bg).strong())
-                                    .fill(theme::c().red)
-                                    .corner_radius(egui::CornerRadius::same(9)),
-                            )
-                            .clicked()
-                        {
+                    theme::modal_title(ui, "未保存的修改");
+                    ui.label(
+                        RichText::new(format!("有未保存的单元格修改,继续{desc}将丢弃它们。"))
+                            .size(13.0)
+                            .color(theme::c().text2),
+                    );
+                    theme::modal_footer(ui, |ui| {
+                        if theme::modal_primary(ui, "丢弃并继续", theme::c().red) {
                             resolved = Some(true);
                         }
-                        if theme::text_button(ui, "取消") {
+                        ui.add_space(8.0);
+                        if theme::modal_secondary(ui, "取消") {
                             resolved = Some(false);
                         }
                     });

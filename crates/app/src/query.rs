@@ -29,8 +29,8 @@ pub fn draw_query_view(
                     .map(|c| c.name.clone())
                     .unwrap_or_else(|| "选择连接".into());
                 egui::ComboBox::from_id_salt("query-conn")
-                    .selected_text(selected)
-                    .width(160.0)
+                    .selected_text(RichText::new(selected).size(12.5).color(theme::c().text))
+                    .width(150.0)
                     .show_ui(ui, |ui| {
                         for c in conns {
                             ui.selectable_value(&mut q.conn_id, c.id.clone(), c.name.clone());
@@ -98,6 +98,7 @@ pub fn draw_query_view(
             ui.add(
                 egui::TextEdit::multiline(&mut q.sql)
                     .code_editor()
+                    .hint_text(RichText::new("SELECT …  (⌘↵ 运行)").color(theme::c().muted))
                     .desired_width(f32::INFINITY)
                     .desired_rows(6)
                     .layouter(&mut layouter),

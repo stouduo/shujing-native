@@ -166,6 +166,70 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
+/// 统一弹窗骨架:iOS sheet 式(标题行 + 发丝线 + 内容 + 发丝线 + 底栏容器由调用方填)
+pub fn modal_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(c().panel)
+        .stroke(egui::Stroke::new(1.0, c().border))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin { left: 24, right: 24, top: 0, bottom: 0 })
+}
+
+/// 弹窗标题行(左标题 + 右关闭返回值) + 底部发丝线
+pub fn modal_title(ui: &mut egui::Ui, title: &str) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(title).size(14.0).strong());
+    });
+    ui.add_space(2.0);
+    hairline_top(ui);
+    ui.add_space(14.0);
+}
+
+/// 弹窗底栏容器:先画顶部发丝线再进入右对齐布局
+pub fn modal_footer(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(14.0);
+    hairline_top(ui);
+    ui.add_space(10.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add_buttons);
+    ui.add_space(12.0);
+}
+
+/// 弹窗主按钮(填充)
+pub fn modal_primary(ui: &mut egui::Ui, label: &str, fill: egui::Color32) -> bool {
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(label).size(12.5).color(if fill == c().accent { c().text } else { Color32::WHITE }).strong(),
+        )
+        .fill(fill)
+        .corner_radius(egui::CornerRadius::same(9))
+        .min_size(egui::vec2(84.0, 28.0)),
+    )
+    .clicked()
+}
+
+/// 弹窗次按钮(透明)
+pub fn modal_secondary(ui: &mut egui::Ui, label: &str) -> bool {
+    ui.add(
+        egui::Button::new(egui::RichText::new(label).size(12.5).color(c().text2))
+            .fill(Color32::TRANSPARENT)
+            .stroke(egui::Stroke::NONE)
+            .min_size(egui::vec2(64.0, 28.0)),
+    )
+    .clicked()
+}
+
+/// 字段:标签上置 + 统一宽输入框
+pub fn form_field(ui: &mut egui::Ui, label: &str, text: &mut String, width: f32, pwd: bool) {
+    ui.label(egui::RichText::new(label).size(11.0).color(c().muted));
+    let mut te = egui::TextEdit::singleline(text)
+        .desired_width(width)
+        .font(egui::TextStyle::Body);
+    if pwd {
+        te = te.password(true);
+    }
+    ui.add(te);
+}
+
 /// 次级小文字按钮(悬停行操作),带语义色;返回 (是否点击, 响应)
 pub fn mini_text_button(ui: &mut egui::Ui, label: &str, color: Color32) -> (bool, egui::Response) {
     let r = ui.add(

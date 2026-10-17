@@ -191,10 +191,16 @@ pub fn search_box_icon(
     resp
 }
 
-/// 刷新:圆弧箭头
+/// 刷新:圆弧箭头(Button 承载,与文字/菜单按钮同一对齐机制)
 pub fn refresh(ui: &mut Ui, color: egui::Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::click());
-    let c = rect.center() - egui::vec2(0.0, 0.5);
+    let resp = ui.add(
+        egui::Button::new("")
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(Stroke::NONE)
+            .min_size(egui::vec2(26.0, 24.0)),
+    );
+    let rect = resp.rect;
+    let c = rect.center() - egui::vec2(0.0, 1.5);
     let r = 5.0;
     let st = Stroke::new(1.5, color);
     let p = ui.painter();

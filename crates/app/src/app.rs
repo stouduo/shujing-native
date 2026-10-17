@@ -800,8 +800,14 @@ impl ShujingApp {
                         .filter(|m| m.kind == "table")
                         .map(|m| m.name.clone())
                         .collect();
+                    let struct_first = std::env::var("SHUJING_OPEN_STRUCT")
+                        .ok()
+                        .and_then(|_| names.first().cloned());
                     for name in names {
                         self.open_table(&conn_id, &name, None);
+                    }
+                    if let Some(first) = struct_first {
+                        self.open_structure(&conn_id, &first, None);
                     }
                 }
                 BgEvent::TestDone { result } => {
