@@ -322,7 +322,11 @@ impl ShujingApp {
                 std::sync::Arc::new(egui::FontData {
                     font: std::borrow::Cow::Borrowed(bytes),
                     index: 0,
-                    tweak: Default::default(),
+                    // Apple Symbols 行内基线低于 PingFang:上移对齐(否则按钮里 ↵▾☀ 比文字低)
+                    tweak: egui::FontTweak {
+                        y_offset: -2.5,
+                        ..Default::default()
+                    },
                 }),
             );
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
