@@ -52,12 +52,17 @@ pub fn draw_query_view(
                             .color(p.red),
                     );
                 }
+                let is_redis = conns
+                    .iter()
+                    .find(|c| c.id == q.conn_id)
+                    .map(|c| c.db_type == shujing_core::DbType::Redis)
+                    .unwrap_or(false);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let runnable = !q.running && !q.sql.trim().is_empty() && !q.conn_id.is_empty();
                     let run = theme::button_shortcut(
                         ui,
-                        "运行",
+                        if is_redis { "执行命令" } else { "运行" },
                         "⌘↵",
                         if runnable {
                             theme::BtnKind::Primary
@@ -65,10 +70,20 @@ pub fn draw_query_view(
                             theme::BtnKind::Secondary
                         },
                     );
-                    run.clone().on_hover_text("运行 SQL (⌘↵)");
+                    run.clone().on_hover_text(if is_redis {
+                        "执行 Redis 命令 (⌘↵)"
+                    } else {
+                        "运行 SQL (⌘↵)"
+                    });
                     if runnable && run.clicked() {
-                        actions.push(TabAction::RunQuery {
-                            tab_id: tab_id.to_string(),
+                        actions.push(if is_redis {
+                            TabAction::RunRedisCmd {
+                                tab_id: tab_id.to_string(),
+                            }
+                        } else {
+                            TabAction::RunQuery {
+                                tab_id: tab_id.to_string(),
+                            }
                         });
                     }
                     let has_grid = q
@@ -118,6 +133,11 @@ pub fn draw_query_view(
                 .inner_margin(egui::Margin::symmetric(12, 12)),
         )
         .show(ctx, |ui| {
+            let is_redis = conns
+                .iter()
+                .find(|c| c.id == q.conn_id)
+                .map(|c| c.db_type == shujing_core::DbType::Redis)
+                .unwrap_or(false);
             // 编辑器卡片
             let has_results = !q.results.is_empty();
             let editor_h = if has_results {
@@ -125,8 +145,9 @@ pub fn draw_query_view(
             } else {
                 (ui.available_height() - 4.0).max(180.0)
             };
+            // 编辑器属于内容层:用背景色而不是卡片色,避免整块内容区变成灰色
             egui::Frame::new()
-                .fill(p.panel)
+                .fill(p.bg)
                 .stroke(egui::Stroke::new(1.0, p.border))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin::same(12))
@@ -148,9 +169,13 @@ pub fn draw_query_view(
                                     .frame(false)
                                     .margin(egui::Margin::ZERO)
                                     .hint_text(
-                                        RichText::new("SELECT …    ⌘↵ 运行")
-                                            .font(theme::mono(12.0))
-                                            .color(p.muted),
+                                        RichText::new(if is_redis {
+                                            "GET key    ⌘↵ 执行命令"
+                                        } else {
+                                            "SELECT …    ⌘↵ 运行"
+                                        })
+                                        .font(theme::mono(12.0))
+                                        .color(p.muted),
                                     )
                                     .desired_width(f32::INFINITY)
                                     .desired_rows(5)
@@ -162,8 +187,14 @@ pub fn draw_query_view(
             if ui.input(|i| {
                 i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
             }) {
-                actions.push(TabAction::RunQuery {
-                    tab_id: tab_id.to_string(),
+                actions.push(if is_redis {
+                    TabAction::RunRedisCmd {
+                        tab_id: tab_id.to_string(),
+                    }
+                } else {
+                    TabAction::RunQuery {
+                        tab_id: tab_id.to_string(),
+                    }
                 });
             }
 

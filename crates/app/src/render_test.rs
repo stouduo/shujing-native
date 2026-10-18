@@ -353,6 +353,13 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
             let conns = app.conns.clone();
             let _ = query::draw_query_view(&conns, ctx, &tab_id, q);
         }
+        TabKind::Designer(d) => {
+            crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
+            let _ = crate::designer::draw_designer_view(ctx, &tab_id, d);
+        }
+        TabKind::Redis(rt) => {
+            let _ = crate::redis::draw_redis_view(ctx, &tab_id, rt, false);
+        }
     }
 }
 
@@ -561,5 +568,102 @@ fn render_conn_modal() {
         draw_app(&mut b, ctx);
         let mut mb = cell.borrow_mut();
         let _ = table_view::draw_conn_modal(ctx, mb.as_mut().unwrap());
+    });
+}
+
+#[test]
+fn render_designer_edit() {
+    let mut app = test_app(vec![], 0);
+    app.conns.push(shujing_core::ConnInfo {
+        id: "c1".into(),
+        name: "dramato-dev".into(),
+        db_type: shujing_core::DbType::MySql,
+        host: Some("127.0.0.1".into()),
+        port: Some(3306),
+        user: Some("root".into()),
+        password: None,
+        database: None,
+        file_path: None,
+        color: None,
+        read_only: false,
+    });
+    app.open_designer("c1", Some("users"), Some("dramato".to_string()));
+    if let TabKind::Designer(d) = &mut app.tabs.last_mut().unwrap().kind {
+        d.loading = false;
+        d.loaded = true;
+        d.columns = vec![
+            crate::app::DesignerColumn {
+                name: "id".into(),
+                data_type: "INTEGER".into(),
+                nullable: false,
+                pk: true,
+                auto_inc: true,
+                existing: true,
+                ..Default::default()
+            },
+            crate::app::DesignerColumn {
+                name: "name".into(),
+                data_type: "VARCHAR".into(),
+                length: "255".into(),
+                nullable: true,
+                comment: "姓名".into(),
+                existing: true,
+                ..Default::default()
+            },
+            crate::app::DesignerColumn {
+                name: "email".into(),
+                data_type: "VARCHAR".into(),
+                length: "320".into(),
+                nullable: true,
+                ..Default::default()
+            },
+        ];
+    }
+    let app = std::cell::RefCell::new(app);
+    render("designer_edit", 1200.0, 700.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
+        draw_app(&mut b, ctx);
+    });
+}
+
+#[test]
+fn render_redis_panel() {
+    let mut app = test_app(vec![], 0);
+    app.open_redis("c1", 0);
+    if let TabKind::Redis(rt) = &mut app.tabs.last_mut().unwrap().kind {
+        rt.keys = vec![
+            "user:1001".into(),
+            "user:1002".into(),
+            "session:abc".into(),
+            "cache:home:banner".into(),
+        ];
+        rt.selected_key = Some("user:1001".into());
+        rt.key_types = std::collections::HashMap::from([
+            ("user:1001".to_string(), "hash".to_string()),
+            ("user:1002".to_string(), "string".to_string()),
+            ("session:abc".to_string(), "string".to_string()),
+            ("cache:home:banner".to_string(), "list".to_string()),
+        ]);
+        rt.key_ttls = std::collections::HashMap::from([
+            ("user:1001".to_string(), -1i64),
+            ("session:abc".to_string(), 120i64),
+        ]);
+        rt.detail = Some(shujing_core::redis_ops::RedisDetail {
+            key_type: "hash".into(),
+            ttl: -1,
+            len: 3,
+            text: None,
+            pairs: vec![
+                ("name".into(), "张三".into()),
+                ("city".into(), "北京".into()),
+                ("level".into(), "9".into()),
+            ],
+        });
+    }
+    let app = std::cell::RefCell::new(app);
+    render("redis_panel", 1200.0, 700.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
     });
 }

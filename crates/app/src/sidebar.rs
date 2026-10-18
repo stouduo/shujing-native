@@ -371,12 +371,16 @@ impl ShujingApp {
                 new_table = true;
                 ui.close_menu();
             }
+            if ui.button("新建查询").clicked() {
+                self.open_query_tab(Some(conn_id.to_string()));
+                ui.close_menu();
+            }
             if ui.button("刷新表列表").clicked() {
                 ui.close_menu();
             }
         });
         if new_table {
-            crate::modals::open_new_table(self, conn_id, Some(db.to_string()));
+            self.open_designer(conn_id, None, Some(db.to_string()));
             return;
         }
         if resp.clicked() {
@@ -447,9 +451,13 @@ impl ShujingApp {
                 new_table = true;
                 ui.close_menu();
             }
+            if ui.button("新建查询").clicked() {
+                self.open_query_tab(Some(conn_id.to_string()));
+                ui.close_menu();
+            }
         });
         if new_table {
-            crate::modals::open_new_table(self, conn_id, Some(db.to_string()));
+            self.open_designer(conn_id, None, Some(db.to_string()));
             return;
         }
         if resp.clicked() {
@@ -459,6 +467,22 @@ impl ShujingApp {
 
     fn draw_table_row(&mut self, ui: &mut egui::Ui, conn_id: &str, db: &str, name: &str) {
         let p = theme::c();
+        // Redis 伪条目(kind=redis-db:idx:keys)→ 渲染为 db 行,点击开 Redis 浏览标签
+        let redis_kind = self
+            .trees
+            .get(conn_id)
+            .and_then(|t| t.tables_by_db.get(db))
+            .and_then(|v| v.iter().find(|m| m.name == name))
+            .map(|m| m.kind.clone())
+            .unwrap_or_default();
+        if let Some(rest) = redis_kind.strip_prefix("redis-db:") {
+            let mut parts = rest.splitn(2, ':');
+            let idx: u8 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let keys: u64 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let _ = p;
+            self.draw_redis_db_row(ui, conn_id, idx, keys);
+            return;
+        }
         let active = self
             .active_tab_info()
             .map(|(c, t, d)| c == conn_id && t == name && d == Some(db))
@@ -530,6 +554,16 @@ impl ShujingApp {
                     .memory_mut(|m| m.data.insert_temp(menu_id, "struct".to_string()));
                 ui.close_menu();
             }
+            if ui.button("设计表").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "design".to_string()));
+                ui.close_menu();
+            }
+            if ui.button("新建查询").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "query".to_string()));
+                ui.close_menu();
+            }
             ui.separator();
             if ui.button("复制表名").clicked() {
                 ui.ctx().copy_text(name.to_string());
@@ -553,8 +587,76 @@ impl ShujingApp {
                 "stats" => self.open_stats(conn_id, db, name),
                 "import" => self.open_import(conn_id, db, name),
                 "struct" => self.open_structure(conn_id, name, Some(db.to_string())),
+                "design" => self.open_designer(conn_id, Some(name), Some(db.to_string())),
+                "query" => self.open_query_tab(Some(conn_id.to_string())),
                 _ => {}
             }
+        }
+    }
+
+    /// Redis db 行:菱形 + dbN + 键数徽标,点击打开浏览标签
+    fn draw_redis_db_row(&mut self, ui: &mut egui::Ui, conn_id: &str, idx: u8, keys: u64) {
+        let p = theme::c();
+        let name = format!("db{idx}");
+        let active = self
+            .tabs
+            .get(self.active_tab)
+            .map(|t| matches!(&t.kind, crate::app::TabKind::Redis(rt) if rt.conn_id == conn_id && rt.db == idx))
+            .unwrap_or(false);
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+            Sense::click(),
+        );
+        let hl = egui::Rect::from_min_max(
+            egui::pos2(rect.left() - 4.0, rect.top() + 2.0),
+            egui::pos2(rect.right() + 2.0, rect.bottom() - 2.0),
+        );
+        if active {
+            ui.painter()
+                .rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+        } else if resp.hovered() {
+            ui.painter()
+                .rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+        }
+        let c = egui::pos2(rect.left() + 34.0, rect.center().y);
+        let s4 = 4.5;
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(c.x, c.y - s4),
+                egui::pos2(c.x + s4, c.y),
+                egui::pos2(c.x, c.y + s4),
+                egui::pos2(c.x - s4, c.y),
+            ],
+            if active || resp.hovered() { p.red } else { theme::tint(p.red, 150) },
+            egui::Stroke::NONE,
+        ));
+        let g = icons::text_galley(
+            ui.painter(),
+            name.clone(),
+            egui::FontId::proportional(theme::FS_TREE),
+            Color32::PLACEHOLDER,
+            rect.width() - 96.0,
+        );
+        ui.painter().galley(
+            egui::pos2(rect.left() + 48.0, rect.center().y - g.size().y / 2.0),
+            g,
+            if active || resp.hovered() { p.text } else { p.text2 },
+        );
+        let kg = ui.painter().layout_no_wrap(
+            format!("{keys} keys"),
+            egui::FontId::proportional(10.0),
+            Color32::PLACEHOLDER,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                rect.right() - kg.size().x - 2.0,
+                rect.center().y - kg.size().y / 2.0,
+            ),
+            kg,
+            p.muted,
+        );
+        if resp.clicked() {
+            self.open_redis(conn_id, idx);
         }
     }
 
@@ -570,6 +672,8 @@ impl ShujingApp {
                     crate::app::TabKind::Table(t) => &t.conn_id == cid,
                     crate::app::TabKind::Structure(t) => &t.conn_id == cid,
                     crate::app::TabKind::Query(q) => &q.conn_id == cid,
+                    crate::app::TabKind::Designer(d) => &d.conn_id == cid,
+                    crate::app::TabKind::Redis(r) => &r.conn_id == cid,
                 };
                 if belongs {
                     if i < self.active_tab {

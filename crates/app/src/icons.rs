@@ -74,6 +74,42 @@ pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_
                 Stroke::NONE,
             ));
         }
+        3 => {
+            // 设计器:铅笔(斜杆 + 笔尖三角)
+            let c = rect.center();
+            let st = Stroke::new(1.2, color);
+            p.line_segment(
+                [egui::pos2(c.x - 3.5, c.y + 3.5), egui::pos2(c.x + 2.0, c.y - 4.0)],
+                st,
+            );
+            p.line_segment(
+                [egui::pos2(c.x - 1.0, c.y - 5.8), egui::pos2(c.x + 2.0, c.y - 4.0)],
+                st,
+            );
+            p.line_segment(
+                [egui::pos2(c.x - 3.5, c.y + 3.5), egui::pos2(c.x - 1.0, c.y - 5.8)],
+                st,
+            );
+            p.line_segment(
+                [egui::pos2(c.x - 5.0, c.y + 5.5), egui::pos2(c.x - 3.5, c.y + 3.5)],
+                st,
+            );
+        }
+        4 => {
+            // Redis:菱形(品牌红钻)
+            let c = rect.center();
+            let s = 5.0;
+            p.add(Shape::convex_polygon(
+                vec![
+                    egui::pos2(c.x, c.y - s),
+                    egui::pos2(c.x + s, c.y),
+                    egui::pos2(c.x, c.y + s),
+                    egui::pos2(c.x - s, c.y),
+                ],
+                Color32::TRANSPARENT,
+                Stroke::new(1.2, color),
+            ));
+        }
         _ => {
             let c = rect.center();
             let st = Stroke::new(1.1, color);
@@ -171,6 +207,40 @@ pub fn paint_plus(p: &egui::Painter, center: egui::Pos2, half: f32, color: Color
         ],
         st,
     );
+}
+
+/// 画一个减号
+pub fn paint_minus(p: &egui::Painter, center: egui::Pos2, half: f32, color: Color32) {
+    p.line_segment(
+        [
+            egui::pos2(center.x - half, center.y),
+            egui::pos2(center.x + half, center.y),
+        ],
+        Stroke::new(1.4, color),
+    );
+}
+
+/// 行内小 chip(圆角底 + 文字),垂直居中于当前行
+pub fn chip(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
+    let p = theme::c();
+    let g = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(10.0),
+        Color32::PLACEHOLDER,
+    );
+    let w = g.size().x + 14.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 18.0), Sense::hover());
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(5), theme::tint(p.panel, 90));
+    ui.painter().galley(
+        egui::pos2(
+            rect.center().x - g.size().x / 2.0,
+            rect.center().y - g.size().y / 2.0,
+        ),
+        g,
+        color,
+    );
+    resp
 }
 
 /// 刷新图标:3/4 圆弧 + 箭头(手绘,避免字形基线问题)

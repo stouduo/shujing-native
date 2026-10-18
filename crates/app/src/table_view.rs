@@ -1,7 +1,7 @@
 //! 表数据网格视图 + 标签栏 + 连接弹窗 + eframe::App 实现。
 //! egui 即时模式惯例:绘制函数返回"动作",由 update 循环执行(避免 self 双重借用)。
 
-use crate::app::{BgEvent, ConnModal, ShujingApp, TabKind, TableTab};
+use crate::app::{BgEvent, ConnModal, RedisOp, ShujingApp, TabKind, TableTab};
 use crate::net;
 use crate::query;
 use crate::structure;
@@ -9,6 +9,29 @@ use crate::{icons, theme};
 use egui::{Align, Color32, Layout, RichText, Sense};
 use egui_extras::Column;
 use shujing_core::Service;
+
+/// 取 Redis 标签的 (连接, service, 事件通道);非 Redis 标签返回 None
+fn redis_conn_of(
+    app: &ShujingApp,
+    tab_id: &str,
+) -> Option<(String, std::sync::Arc<Service>, std::sync::mpsc::Sender<BgEvent>)> {
+    let tab = app.tabs.iter().find(|t| t.id == tab_id)?;
+    let crate::app::TabKind::Redis(rt) = &tab.kind else {
+        return None;
+    };
+    Some((rt.conn_id.clone(), app.service.clone(), app.event_tx.clone()))
+}
+
+fn redis_db_of(app: &ShujingApp, tab_id: &str) -> u8 {
+    app.tabs
+        .iter()
+        .find(|t| t.id == tab_id)
+        .and_then(|t| match &t.kind {
+            crate::app::TabKind::Redis(rt) => Some(rt.db),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
 
 /// 表格视图产生的用户动作
 #[derive(Clone)]
@@ -24,6 +47,36 @@ pub enum TabAction {
     DeleteRow { tab_id: String, ri: usize },
     InsertRow { tab_id: String },
     ToggleTheme,
+    SaveDesigner { tab_id: String },
+    /// 从结构页跳设计器(结构页拿不到 app,经动作中转)
+    OpenDesigner {
+        conn_id: String,
+        table: String,
+        database: Option<String>,
+    },
+    RedisScan { tab_id: String, reset: bool },
+    RedisSelectKey { tab_id: String, key: String },
+    RedisOp { tab_id: String, op: crate::app::RedisOp },
+    RedisSetTtl { tab_id: String, key: String, seconds: i64 },
+    RedisSetString { tab_id: String, key: String, value: String },
+    RedisMemberOp {
+        tab_id: String,
+        key: String,
+        key_type: String,
+        op: String,
+        member: String,
+        extra: String,
+    },
+    RedisNewKey {
+        tab_id: String,
+        key: String,
+        key_type: String,
+        text: String,
+        pairs: Vec<(String, String)>,
+    },
+    RedisAnalyze { tab_id: String },
+    /// 查询页 Redis 命令行模式运行
+    RunRedisCmd { tab_id: String },
 }
 
 /// 连接弹窗产生的动作
@@ -63,6 +116,8 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Table(_) => 0u8,
                                 TabKind::Query(_) => 1,
                                 TabKind::Structure(_) => 2,
+                                TabKind::Designer(_) => 3,
+                                TabKind::Redis(_) => 4,
                             };
                             let (a, c) = draw_one_tab(ui, i == app.active_tab, &title, glyph);
                             if a {
@@ -1350,8 +1405,19 @@ pub(crate) fn badge_value(col: &str, v: &Option<String>) -> Option<(String, bool
     }
 }
 
-fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabAction) {
-    // 未保存修改防护:会重载数据的动作先拦截
+fn app_tabs_set_saving(app: &mut ShujingApp, tab_id: &str, saving: bool) {
+    if let Some(t) = app.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let crate::app::TabKind::Designer(d) = &mut t.kind {
+            d.saving = saving;
+            if saving {
+                d.error = None;
+                d.info = None;
+            }
+        }
+    }
+}
+
+fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabAction) {    // 未保存修改防护:会重载数据的动作先拦截
     let tab_id_for_gate = match &action {
         TabAction::Reload { tab_id } | TabAction::SetPage { tab_id, .. } => Some(tab_id.clone()),
         _ => None,
@@ -1481,7 +1547,241 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             let dark = !theme::is_dark();
             app.set_theme_dark(ctx, dark);
         }
+        TabAction::OpenDesigner {
+            conn_id,
+            table,
+            database,
+        } => {
+            app.open_designer(&conn_id, Some(&table), database);
+        }
+        TabAction::RedisScan { tab_id, reset } => app.redis_scan(&tab_id, reset),
+        TabAction::RedisSelectKey { tab_id, key } => app.redis_fetch_detail(&tab_id, &key),
+        TabAction::RedisSetTtl {
+            tab_id,
+            key,
+            seconds,
+        } => {
+            let conn = redis_conn_of(app, &tab_id);
+            let db = redis_db_of(app, &tab_id);
+            if let Some((conn_id, service, tx)) = conn {
+                let tid = tab_id.clone();
+                app.tabs_mark_redis_op(&tab_id);
+                net::spawn(async move {
+                    let result = service.redis_set_ttl(&conn_id, db, &key, seconds).await;
+                    let _ = tx.send(BgEvent::RedisOpDone {
+                        tab_id: tid,
+                        op: RedisOp::Refresh { key },
+                        result,
+                    });
+                });
+            }
+        }
+        TabAction::RedisSetString { tab_id, key, value } => {
+            let conn = redis_conn_of(app, &tab_id);
+            let db = redis_db_of(app, &tab_id);
+            if let Some((conn_id, service, tx)) = conn {
+                let tid = tab_id.clone();
+                app.tabs_mark_redis_op(&tab_id);
+                net::spawn(async move {
+                    let result = service.redis_set(&conn_id, db, &key, &value).await;
+                    let _ = tx.send(BgEvent::RedisOpDone {
+                        tab_id: tid,
+                        op: RedisOp::Refresh { key },
+                        result,
+                    });
+                });
+            }
+        }
+        TabAction::RedisOp { tab_id, op } => {
+            let conn = redis_conn_of(app, &tab_id);
+            let db = redis_db_of(app, &tab_id);
+            if let Some((conn_id, service, tx)) = conn {
+                match op {
+                    RedisOp::Del { key } => {
+                        let tid = tab_id.clone();
+                        app.tabs_mark_redis_op(&tab_id);
+                        net::spawn(async move {
+                            let result = service.redis_del(&conn_id, db, &key).await;
+                            let _ = tx.send(BgEvent::RedisOpDone {
+                                tab_id: tid,
+                                op: RedisOp::Del { key },
+                                result: result.map(|_| ()),
+                            });
+                        });
+                    }
+                    RedisOp::Rename { from, to } => {
+                        let tid = tab_id.clone();
+                        app.tabs_mark_redis_op(&tab_id);
+                        net::spawn(async move {
+                            let result = service.redis_rename(&conn_id, db, &from, &to).await;
+                            let _ = tx.send(BgEvent::RedisOpDone {
+                                tab_id: tid,
+                                op: RedisOp::Rename { from, to },
+                                result,
+                            });
+                        });
+                    }
+                    other => {
+                        // Refresh/NewKey 由对应动作自己发事件,这里不需网络
+                        let _ = other;
+                    }
+                }
+            }
+        }
+        TabAction::RedisMemberOp {
+            tab_id,
+            key,
+            key_type,
+            op,
+            member,
+            extra,
+        } => {
+            let conn = redis_conn_of(app, &tab_id);
+            let db = redis_db_of(app, &tab_id);
+            if let Some((conn_id, service, tx)) = conn {
+                let tid = tab_id.clone();
+                app.tabs_mark_redis_op(&tab_id);
+                net::spawn(async move {
+                    let result = service
+                        .redis_member_op(&conn_id, db, &key, &key_type, &op, &member, &extra)
+                        .await;
+                    let _ = tx.send(BgEvent::RedisOpDone {
+                        tab_id: tid,
+                        op: RedisOp::Refresh { key },
+                        result,
+                    });
+                });
+            }
+        }
+        TabAction::RedisNewKey {
+            tab_id,
+            key,
+            key_type,
+            text,
+            pairs,
+        } => {
+            let conn = redis_conn_of(app, &tab_id);
+            let db = redis_db_of(app, &tab_id);
+            if let Some((conn_id, service, tx)) = conn {
+                let tid = tab_id.clone();
+                app.tabs_mark_redis_op(&tab_id);
+                net::spawn(async move {
+                    let result = service
+                        .redis_new_key(&conn_id, db, &key, &key_type, &text, &pairs)
+                        .await;
+                    let _ = tx.send(BgEvent::RedisOpDone {
+                        tab_id: tid,
+                        op: RedisOp::NewKey { key },
+                        result,
+                    });
+                });
+            }
+        }
+        TabAction::RedisAnalyze { tab_id } => {
+            let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
+                return;
+            };
+            let crate::app::TabKind::Redis(rt) = &tab.kind else {
+                return;
+            };
+            let Some(a) = rt.analyze.as_ref() else {
+                return;
+            };
+            let (mode, sample) = (if a.mode == 1 { "hot" } else { "big" }, a.sample);
+            let conn_id = rt.conn_id.clone();
+            let db = rt.db;
+            let tid = tab_id.clone();
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            net::spawn(async move {
+                let result = service.redis_analyze(&conn_id, db, sample, mode).await;
+                let _ = tx.send(BgEvent::RedisAnalyzeDone { tab_id: tid, result });
+            });
+        }
+        TabAction::SaveDesigner { tab_id } => {
+            let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
+                return;
+            };
+            let crate::app::TabKind::Designer(d) = &tab.kind else {
+                return;
+            };
+            // 校验(与 dbclient saveDesigner 一致)
+            let err = if d.table_name.trim().is_empty() {
+                Some("请填写表名")
+            } else if d.columns.is_empty() {
+                Some("至少需要一个字段")
+            } else if d.columns.iter().any(|c| c.name.trim().is_empty()) {
+                Some("存在未命名字段")
+            } else {
+                None
+            };
+            if let Some(e) = err {
+                let tid = tab_id.clone();
+                if let Some(t) = app.tabs.iter_mut().find(|t| t.id == tid) {
+                    if let crate::app::TabKind::Designer(d) = &mut t.kind {
+                        d.error = Some(e.to_string());
+                        d.info = None;
+                    }
+                }
+                return;
+            }
+            let Some(conn) = app.conns.iter().find(|c| c.id == d.conn_id) else {
+                return;
+            };
+            let db_type = conn.db_type;
+            let out = shujing_core::designer::designer_sql(
+                db_type,
+                d.is_create(),
+                &d.table_name,
+                &d.columns,
+            );
+            let mut stmts: Vec<String> = Vec::new();
+            if let Some(create) = &out.create {
+                stmts.push(create.clone());
+            }
+            stmts.extend(out.alters.iter().cloned());
+            let warnings = out.warnings.clone();
+            let info = if d.is_create() {
+                format!("表 {} 创建成功", d.table_name)
+            } else {
+                format!("已执行 {} 条 ALTER 语句", stmts.len())
+            };
+            if stmts.is_empty() {
+                let tid = tab_id.clone();
+                if let Some(t) = app.tabs.iter_mut().find(|t| t.id == tid) {
+                    if let crate::app::TabKind::Designer(d) = &mut t.kind {
+                        d.info = Some(if warnings.is_empty() {
+                            "没有可保存的变更".to_string()
+                        } else {
+                            warnings.join(";")
+                        });
+                    }
+                }
+                return;
+            }
+            let conn_id = d.conn_id.clone();
+            let tid = tab_id.clone();
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            app_tabs_set_saving(app, &tab_id, true);
+            net::spawn(async move {
+                let mut exec_result: Result<(), String> = Ok(());
+                for stmt in &stmts {
+                    let rs = service.run_sql(&conn_id, stmt.clone(), Some(1)).await;
+                    if let Err(e) = rs {
+                        exec_result = Err(e);
+                        break;
+                    }
+                }
+                let _ = tx.send(BgEvent::DesignerSaved {
+                    tab_id: tid,
+                    result: exec_result.map(|_| info),
+                    warnings,
+                });
+            });
+        }
         TabAction::RunQuery { tab_id } => app.run_query(&tab_id),
+        TabAction::RunRedisCmd { tab_id } => app.run_redis_cmd(&tab_id),
         TabAction::ExportQueryCsv { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
                 return;
@@ -1865,6 +2165,22 @@ impl eframe::App for ShujingApp {
                 TabKind::Query(q) => {
                     let conns = self.conns.clone();
                     query::draw_query_view(&conns, ctx, &tab_id, q)
+                }
+                TabKind::Designer(d) => {
+                    // 方言信息给设计器(SQL 生成用)
+                    if let Some(c) = self.conns.iter().find(|c| c.id == d.conn_id) {
+                        crate::designer::stash_dialect(ctx, c.db_type);
+                    }
+                    crate::designer::draw_designer_view(ctx, &tab_id, d)
+                }
+                TabKind::Redis(rt) => {
+                    let read_only = self
+                        .conns
+                        .iter()
+                        .find(|c| c.id == rt.conn_id)
+                        .map(|c| c.read_only)
+                        .unwrap_or(false);
+                    crate::redis::draw_redis_view(ctx, &tab_id, rt, read_only)
                 }
             };
             for a in actions {

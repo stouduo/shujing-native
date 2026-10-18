@@ -71,6 +71,14 @@ pub fn draw_structure_view(
                             tab_id: tab_id.to_string(),
                         });
                     }
+                    if !s.loading && theme::button(ui, "设计", theme::BtnKind::Secondary).clicked()
+                    {
+                        actions.push(TabAction::OpenDesigner {
+                            conn_id: s.conn_id.clone(),
+                            table: s.table.clone(),
+                            database: s.database.clone(),
+                        });
+                    }
                     if let Some(d) = &s.data {
                         if theme::button(ui, "复制 DDL", theme::BtnKind::Secondary).clicked() {
                             ui.ctx().copy_text(d.ddl.clone());
@@ -115,8 +123,9 @@ pub fn draw_structure_view(
 
                     section_title(ui, "DDL", 0);
                     ui.add_space(8.0);
+                    // DDL 也是内容层:与查询 SQL 编辑器一致,用背景色 + 描边
                     egui::Frame::new()
-                        .fill(p.panel)
+                        .fill(p.bg)
                         .stroke(egui::Stroke::new(1.0, p.border))
                         .corner_radius(egui::CornerRadius::same(8))
                         .inner_margin(egui::Margin::same(12))

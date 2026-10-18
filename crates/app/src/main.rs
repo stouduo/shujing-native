@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod designer;
 mod grid;
 mod icons;
 mod modals;
 mod net;
 mod query;
+mod redis;
 mod sidebar;
 mod sql_highlight;
 mod structure;

@@ -64,6 +64,50 @@ pub enum BgEvent {
     DdlDone {
         result: Result<(), String>,
     },
+    /// 设计器编辑模式:初始结构拉取完成
+    DesignerLoaded {
+        tab_id: String,
+        result: Result<shujing_core::TableStructure, String>,
+    },
+    /// 设计器保存完成(result=提示文案;附带回写的告警)
+    DesignerSaved {
+        tab_id: String,
+        result: Result<String, String>,
+        warnings: Vec<String>,
+    },
+    /// Redis SCAN 一页完成(reset=true 覆盖列表,否则追加)
+    RedisScanDone {
+        tab_id: String,
+        reset: bool,
+        result: Result<(u64, Vec<String>), String>,
+    },
+    /// Redis key 详情
+    RedisDetailDone {
+        tab_id: String,
+        key: String,
+        result: Result<shujing_core::redis_ops::RedisDetail, String>,
+    },
+    /// 批量键类型(key, type)
+    RedisTypesDone {
+        tab_id: String,
+        pairs: Vec<(String, String)>,
+    },
+    /// 批量 TTL(key, ttl)
+    RedisTtlsDone {
+        tab_id: String,
+        pairs: Vec<(String, i64)>,
+    },
+    /// Redis 写操作完成
+    RedisOpDone {
+        tab_id: String,
+        op: RedisOp,
+        result: Result<(), String>,
+    },
+    /// Redis 分析弹窗结果
+    RedisAnalyzeDone {
+        tab_id: String,
+        result: Result<Vec<shujing_core::redis_ops::KeyStat>, String>,
+    },
 }
 
 /// ⌘P 快速打开
@@ -185,6 +229,98 @@ pub struct QueryTab {
     pub error: Option<String>,
 }
 
+/// 设计器一行列规格(直接复用 core 的纯数据)
+pub type DesignerColumn = shujing_core::designer::ColumnSpec;
+
+/// 表设计器标签(新建/编辑两种模式)
+pub struct DesignerTab {
+    pub conn_id: String,
+    pub database: Option<String>,
+    /// 编辑模式下的原表名(锁定);新建模式与 table_name 同步
+    pub original_table: Option<String>,
+    pub table_name: String,
+    pub columns: Vec<DesignerColumn>,
+    /// 结构已加载过一次(编辑模式初始拉取)
+    pub loaded: bool,
+    pub loading: bool,
+    pub saving: bool,
+    pub error: Option<String>,
+    pub info: Option<String>,
+}
+
+impl DesignerTab {
+    pub fn is_create(&self) -> bool {
+        self.original_table.is_none()
+    }
+}
+
+/// Redis 新建 key 弹窗
+pub struct RedisNewKeyState {
+    pub name: String,
+    /// 0 string / 1 hash / 2 list / 3 set / 4 zset
+    pub kind: u8,
+    pub text: String,
+    /// 多行输入(hash: field=value / zset: member score / list,set: 每行一个)
+    pub lines: String,
+}
+
+/// Redis 扫描分析弹窗
+pub struct RedisAnalyzeState {
+    /// 0 大 key / 1 热 key
+    pub mode: u8,
+    pub sample: usize,
+    pub running: bool,
+    pub ran: bool,
+    pub stats: Vec<shujing_core::redis_ops::KeyStat>,
+    pub error: Option<String>,
+}
+
+/// Redis 浏览标签
+pub struct RedisTab {
+    pub conn_id: String,
+    pub db: u8,
+    pub pattern: String,
+    pub cursor: u64,
+    pub keys: Vec<String>,
+    pub selected_key: Option<String>,
+    pub detail: Option<shujing_core::redis_ops::RedisDetail>,
+    pub detail_loading: bool,
+    pub scanning: bool,
+    pub error: Option<String>,
+    /// SCAN 后批量拉取的键类型/TTL 徽标
+    pub key_types: HashMap<String, String>,
+    pub key_ttls: HashMap<String, i64>,
+    /// 0 默认 / 1 A→Z / 2 Z→A
+    pub sort: u8,
+    /// 进行中的写操作(禁用按钮)
+    pub op_running: bool,
+    pub new_key: Option<RedisNewKeyState>,
+    pub analyze: Option<RedisAnalyzeState>,
+    /// 内联重命名草稿
+    pub rename_draft: Option<String>,
+    /// 内联 TTL 秒数草稿
+    pub ttl_draft: Option<String>,
+    /// string 值编辑弹窗草稿
+    pub edit_value: Option<String>,
+    /// 成员添加行:(成员, 附加(hash 值/zset 分数))
+    pub member_add: Option<(String, String)>,
+    /// member_add 处于 hash 字段编辑模式(提交走 set 而不是 add)
+    pub member_set_hash: bool,
+    /// list 元素内联编辑:(显示序号, 草稿)
+    pub list_edit: Option<(usize, String)>,
+}
+
+/// Redis 写操作完成后的行为
+#[derive(Clone)]
+pub enum RedisOp {
+    Del { key: String },
+    Rename { from: String, to: String },
+    /// 操作后重取该 key 详情
+    Refresh { key: String },
+    /// 新建后重扫并选中
+    NewKey { key: String },
+}
+
 /// 统一标签
 pub struct Tab {
     pub id: String,
@@ -196,6 +332,8 @@ pub enum TabKind {
     Table(TableTab),
     Structure(StructureTab),
     Query(QueryTab),
+    Designer(DesignerTab),
+    Redis(RedisTab),
 }
 
 impl Tab {
@@ -661,7 +799,7 @@ impl ShujingApp {
         Some(match &t.kind {
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Structure(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
-            TabKind::Query(_) => return None,
+            TabKind::Query(_) | TabKind::Designer(_) | TabKind::Redis(_) => return None,
         })
     }
 
@@ -714,6 +852,230 @@ impl ShujingApp {
         self.load_structure(&id);
     }
 
+    /// 打开表设计器:table=None 新建模式,Some 编辑模式(拉现有结构)
+    pub fn open_designer(&mut self, conn_id: &str, table: Option<&str>, database: Option<String>) {
+        let id = format!("d{}", rand_suffix());
+        match table {
+            Some(t) => {
+                let title = format!("设计 {t}");
+                self.tabs.push(Tab {
+                    id: id.clone(),
+                    title,
+                    kind: TabKind::Designer(DesignerTab {
+                        conn_id: conn_id.to_string(),
+                        database,
+                        original_table: Some(t.to_string()),
+                        table_name: t.to_string(),
+                        columns: vec![],
+                        loaded: false,
+                        loading: true,
+                        saving: false,
+                        error: None,
+                        info: None,
+                    }),
+                });
+                self.active_tab = self.tabs.len() - 1;
+                self.load_designer_structure(&id);
+            }
+            None => {
+                self.tabs.push(Tab {
+                    id: id.clone(),
+                    title: "新表".to_string(),
+                    kind: TabKind::Designer(DesignerTab {
+                        conn_id: conn_id.to_string(),
+                        database,
+                        original_table: None,
+                        table_name: String::new(),
+                        columns: vec![DesignerColumn {
+                            name: "id".into(),
+                            data_type: "INTEGER".into(),
+                            length: String::new(),
+                            nullable: false,
+                            pk: true,
+                            auto_inc: true,
+                            ..Default::default()
+                        }],
+                        loaded: true,
+                        loading: false,
+                        saving: false,
+                        error: None,
+                        info: None,
+                    }),
+                });
+                self.active_tab = self.tabs.len() - 1;
+            }
+        }
+    }
+
+    /// 拉取结构填充设计器列快照(编辑模式初始 + 保存后刷新)
+    pub fn load_designer_structure(&mut self, tab_id: &str) {
+        let tab_id = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Designer(d) = &mut tab.kind else {
+            return;
+        };
+        let conn_id = d.conn_id.clone();
+        let table = d.original_table.clone().unwrap_or_else(|| d.table_name.clone());
+        let database = d.database.clone();
+        d.loading = true;
+        net::spawn(async move {
+            let result = service
+                .get_table_structure(&conn_id, &table, database)
+                .await;
+            let _ = tx.send(BgEvent::DesignerLoaded { tab_id, result });
+        });
+    }
+
+    /// 打开 Redis 浏览标签(同连接同 db 已开则激活)
+    pub fn open_redis(&mut self, conn_id: &str, db: u8) {
+        let existing = self.tabs.iter().position(|t| {
+            matches!(&t.kind, TabKind::Redis(rt) if rt.conn_id == conn_id && rt.db == db)
+        });
+        if let Some(i) = existing {
+            self.active_tab = i;
+            return;
+        }
+        let id = format!("r{}", rand_suffix());
+        self.tabs.push(Tab {
+            id: id.clone(),
+            title: format!("db{db}"),
+            kind: TabKind::Redis(RedisTab {
+                conn_id: conn_id.to_string(),
+                db,
+                pattern: "*".to_string(),
+                cursor: 0,
+                keys: vec![],
+                selected_key: None,
+                detail: None,
+                detail_loading: false,
+                scanning: false,
+                error: None,
+                key_types: HashMap::new(),
+                key_ttls: HashMap::new(),
+                sort: 0,
+                op_running: false,
+                new_key: None,
+                analyze: None,
+                rename_draft: None,
+                ttl_draft: None,
+                edit_value: None,
+                member_add: None,
+                member_set_hash: false,
+                list_edit: None,
+            }),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.redis_scan(&id, true);
+    }
+
+    /// SCAN 一页 key(count=200,与 dbclient 一致)
+    pub fn redis_scan(&mut self, tab_id: &str, reset: bool) {
+        let tab_id = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Redis(rt) = &mut tab.kind else {
+            return;
+        };
+        let conn_id = rt.conn_id.clone();
+        let db = rt.db;
+        let pattern = if rt.pattern.trim().is_empty() {
+            "*".to_string()
+        } else {
+            rt.pattern.clone()
+        };
+        let cursor = if reset { 0 } else { rt.cursor };
+        rt.scanning = true;
+        rt.error = None;
+        let tid = tab_id.clone();
+        net::spawn(async move {
+            let result = service.redis_scan(&conn_id, db, &pattern, cursor, 200).await;
+            let _ = tx.send(BgEvent::RedisScanDone {
+                tab_id: tid,
+                reset,
+                result,
+            });
+        });
+    }
+
+    /// 取 key 详情
+    pub fn redis_fetch_detail(&mut self, tab_id: &str, key: &str) {
+        let tab_id = tab_id.to_string();
+        let key = key.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Redis(rt) = &mut tab.kind else {
+            return;
+        };
+        let conn_id = rt.conn_id.clone();
+        let db = rt.db;
+        rt.selected_key = Some(key.clone());
+        rt.detail = None;
+        rt.detail_loading = true;
+        rt.rename_draft = None;
+        rt.member_add = None;
+        let tid = tab_id.clone();
+        let k = key.clone();
+        net::spawn(async move {
+            let result = service.redis_key_detail(&conn_id, db, &k).await;
+            let _ = tx.send(BgEvent::RedisDetailDone {
+                tab_id: tid,
+                key,
+                result,
+            });
+        });
+    }
+
+    /// Redis 写操作进行中(按钮禁用)
+    pub fn tabs_mark_redis_op(&mut self, tab_id: &str) {
+        if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            if let TabKind::Redis(rt) = &mut t.kind {
+                rt.op_running = true;
+            }
+        }
+    }
+
+    /// SCAN 后批量拉类型 + TTL 徽标
+    pub fn redis_fetch_badges(&mut self, tab_id: &str) {
+        let tab_id = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Redis(rt) = &tab.kind else {
+            return;
+        };
+        let keys: Vec<String> = rt.keys.iter().take(200).cloned().collect();
+        if keys.is_empty() {
+            return;
+        }
+        let conn_id = rt.conn_id.clone();
+        let db = rt.db;
+        let tid = tab_id.clone();
+        net::spawn(async move {
+            if let Ok(types) = service.redis_key_types(&conn_id, db, &keys).await {
+                let pairs: Vec<(String, String)> =
+                    keys.iter().cloned().zip(types.into_iter()).collect();
+                let _ = tx.send(BgEvent::RedisTypesDone { tab_id: tid.clone(), pairs });
+            }
+            if let Ok(ttls) = service.redis_ttl_batch(&conn_id, db, &keys).await {
+                let pairs: Vec<(String, i64)> =
+                    keys.iter().cloned().zip(ttls.into_iter()).collect();
+                let _ = tx.send(BgEvent::RedisTtlsDone { tab_id: tid, pairs });
+            }
+        });
+    }
+
     /// 新建查询标签
     pub fn open_query_tab(&mut self, conn_id: Option<String>) {
         let inherit = conn_id.or_else(|| {
@@ -721,10 +1083,12 @@ impl ShujingApp {
                 TabKind::Table(t) => t.conn_id.clone(),
                 TabKind::Structure(s) => s.conn_id.clone(),
                 TabKind::Query(q) => q.conn_id.clone(),
+                TabKind::Designer(d) => d.conn_id.clone(),
+                TabKind::Redis(r) => r.conn_id.clone(),
             })
         });
-        self.query_seq += 1;
         let id = format!("q{}", rand_suffix());
+        self.query_seq += 1;
         let title = format!("查询 {}", self.query_seq);
         self.tabs.push(Tab {
             id: id.clone(),
@@ -903,6 +1267,49 @@ impl ShujingApp {
         let conn_id = q.conn_id.clone();
         net::spawn(async move {
             let result = service.run_sql(&conn_id, sql, None).await;
+            let _ = tx.send(BgEvent::QueryDone { tab_id, result });
+        });
+    }
+
+    /// 查询页 Redis 命令行模式:redis_run 执行,结果渲染成单列结果集
+    pub fn run_redis_cmd(&mut self, tab_id: &str) {
+        let tab_id = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Query(q) = &mut tab.kind else {
+            return;
+        };
+        if q.running {
+            return;
+        }
+        if q.conn_id.is_empty() {
+            q.error = Some("请先在工具栏选择目标连接".into());
+            return;
+        }
+        let cmd = q.sql.trim().to_string();
+        if cmd.is_empty() {
+            q.error = Some("命令为空".into());
+            return;
+        }
+        q.running = true;
+        q.error = None;
+        q.history.retain(|h| h != &cmd);
+        q.history.insert(0, cmd.clone());
+        q.history.truncate(20);
+        let conn_id = q.conn_id.clone();
+        net::spawn(async move {
+            let result = service.redis_run(&conn_id, &cmd).await.map(|lines| {
+                vec![shujing_core::ExecResult {
+                    columns: vec!["结果".to_string()],
+                    rows: lines.into_iter().map(|l| vec![Some(l)]).collect(),
+                    affected: 0,
+                    elapsed_ms: 0,
+                    truncated: false,
+                }]
+            });
             let _ = tx.send(BgEvent::QueryDone { tab_id, result });
         });
     }
@@ -1154,8 +1561,7 @@ impl ShujingApp {
                 BgEvent::DdlDone { result } => match result {
                     Ok(()) => {
                         self.new_table = None;
-                        self.toast_error("创建成功".to_string());
-                        // 重新载入所有在线树的表
+                        self.toast_error("创建成功".to_string());                        // 重新载入所有在线树的表
                         let ids: Vec<String> = self.trees.keys().cloned().collect();
                         for cid in ids {
                             let dbs = self
@@ -1184,6 +1590,214 @@ impl ShujingApp {
                     }
                     Err(e) => self.toast_error(format!("创建失败: {e}")),
                 },
+                BgEvent::DesignerLoaded { tab_id, result } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let TabKind::Designer(d) = &mut tab.kind else {
+                        return;
+                    };
+                    d.loading = false;
+                    match result {
+                        Ok(st) => {
+                            d.columns = shujing_core::designer::columns_from_structure(&st);
+                            d.loaded = true;
+                            d.error = None;
+                        }
+                        Err(e) => d.error = Some(e),
+                    }
+                }
+                BgEvent::DesignerSaved {
+                    tab_id,
+                    result,
+                    warnings,
+                } => {
+                    // 先落地结果,再刷新树/结构(避免拿着 tabs 借用调 self)
+                    let (conn_id, db, reload_struct) = {
+                        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                            return;
+                        };
+                        let TabKind::Designer(d) = &mut tab.kind else {
+                            return;
+                        };
+                        d.saving = false;
+                        match result {
+                            Ok(msg) => {
+                                d.info = Some(if warnings.is_empty() {
+                                    msg
+                                } else {
+                                    format!("{msg} · {}", warnings.join(";"))
+                                });
+                                d.error = None;
+                                let r = !d.is_create();
+                                (d.conn_id.clone(), d.database.clone(), r)
+                            }
+                            Err(e) => {
+                                d.error = Some(e);
+                                return;
+                            }
+                        }
+                    };
+                    // 保存成功:刷新在线树的表列表(新建表出现)
+                    if let Some(tree) = self.trees.get_mut(&conn_id) {
+                        tree.loading = true;
+                    }
+                    let tx = self.event_tx.clone();
+                    let service = self.service.clone();
+                    let c2 = conn_id.clone();
+                    net::spawn(async move {
+                        let tables = service.list_tables(&c2, db.clone()).await.unwrap_or_default();
+                        let _ = tx.send(BgEvent::TablesLoaded {
+                            conn_id: c2,
+                            database: db,
+                            tables,
+                        });
+                    });
+                    // 编辑模式:刷新列快照,避免重复执行 ALTER
+                    if reload_struct {
+                        self.load_designer_structure(&tab_id);
+                    }
+                }
+                BgEvent::RedisScanDone {
+                    tab_id,
+                    reset,
+                    result,
+                } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let TabKind::Redis(rt) = &mut tab.kind else {
+                        return;
+                    };
+                    rt.scanning = false;
+                    match result {
+                        Ok((cursor, keys)) => {
+                            rt.cursor = cursor;
+                            if reset {
+                                rt.keys = keys;
+                            } else {
+                                for k in keys {
+                                    if !rt.keys.contains(&k) {
+                                        rt.keys.push(k);
+                                    }
+                                }
+                            }
+                            self.redis_fetch_badges(&tab_id);
+                        }
+                        Err(e) => rt.error = Some(e),
+                    }
+                }
+                BgEvent::RedisDetailDone {
+                    tab_id,
+                    key,
+                    result,
+                } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let TabKind::Redis(rt) = &mut tab.kind else {
+                        return;
+                    };
+                    rt.detail_loading = false;
+                    // 期间切换了选中 key:丢弃过期结果
+                    if rt.selected_key.as_deref() != Some(key.as_str()) {
+                        return;
+                    }
+                    match result {
+                        Ok(d) => rt.detail = Some(d),
+                        Err(e) => rt.error = Some(e),
+                    }
+                }
+                BgEvent::RedisTypesDone { tab_id, pairs } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let TabKind::Redis(rt) = &mut tab.kind else {
+                        return;
+                    };
+                    for (k, t) in pairs {
+                        rt.key_types.insert(k, t);
+                    }
+                }
+                BgEvent::RedisTtlsDone { tab_id, pairs } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let TabKind::Redis(rt) = &mut tab.kind else {
+                        return;
+                    };
+                    for (k, t) in pairs {
+                        rt.key_ttls.insert(k, t);
+                    }
+                }
+                BgEvent::RedisOpDone {
+                    tab_id,
+                    op,
+                    result,
+                } => {
+                    if let Err(e) = &result {
+                        self.toast_error(format!("操作失败: {e}"));
+                    }
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let TabKind::Redis(rt) = &mut tab.kind else {
+                        return;
+                    };
+                    rt.op_running = false;
+                    if result.is_err() {
+                        return;
+                    }
+                    match op {
+                        RedisOp::Del { key } => {
+                            rt.keys.retain(|k| *k != key);
+                            rt.key_types.remove(&key);
+                            rt.key_ttls.remove(&key);
+                            rt.selected_key = None;
+                            rt.detail = None;
+                            self.toast_error(format!("已删除 {key}"));
+                        }
+                        RedisOp::Rename { from, to } => {
+                            for k in rt.keys.iter_mut() {
+                                if *k == from {
+                                    *k = to.clone();
+                                }
+                            }
+                            if rt.selected_key.as_deref() == Some(from.as_str()) {
+                                rt.selected_key = Some(to.clone());
+                            }
+                            let tid = tab_id.clone();
+                            self.redis_fetch_detail(&tid, &to);
+                            self.toast_error(format!("已重命名为 {to}"));
+                        }
+                        RedisOp::Refresh { key } => {
+                            let tid = tab_id.clone();
+                            self.redis_fetch_detail(&tid, &key);
+                        }
+                        RedisOp::NewKey { key } => {
+                            self.redis_scan(&tab_id, true);
+                            let tid = tab_id.clone();
+                            self.redis_fetch_detail(&tid, &key);
+                        }
+                    }
+                }
+                BgEvent::RedisAnalyzeDone { tab_id, result } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let TabKind::Redis(rt) = &mut tab.kind else {
+                        return;
+                    };
+                    let Some(a) = rt.analyze.as_mut() else {
+                        return;
+                    };
+                    a.running = false;
+                    a.ran = true;
+                    match result {
+                        Ok(stats) => a.stats = stats,
+                        Err(e) => a.error = Some(e),
+                    }
+                }
             }
         }
         if dirty {

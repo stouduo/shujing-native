@@ -62,6 +62,7 @@ pub async fn scan_keys(
 /// key 详情(类型/TTL/长度/内容预览)
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Clone)]
 pub struct RedisDetail {
     pub key_type: String,
     pub ttl: i64,

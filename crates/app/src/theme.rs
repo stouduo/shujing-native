@@ -78,65 +78,67 @@ pub struct Palette {
 }
 
 pub static DARK: Palette = Palette {
-    bg: Color32::from_rgb(0x00, 0x00, 0x00),
-    panel: Color32::from_rgb(0x1c, 0x1c, 0x1e),
-    elevated: Color32::from_rgb(0x2c, 0x2c, 0x2e),
-    hover: Color32::from_rgb(0x3a, 0x3a, 0x3c),
-    border: Color32::from_rgb(0x38, 0x38, 0x3a),
-    row_line: Color32::from_rgb(0x23, 0x23, 0x25),
-    text: Color32::from_rgb(0xff, 0xff, 0xff),
-    text2: Color32::from_rgb(0x9e, 0x9e, 0xa4),
-    muted: Color32::from_rgb(0x6e, 0x6e, 0x73),
-    cell_text: Color32::from_rgb(0xf5, 0xf5, 0xf7),
-    null_text: Color32::from_rgb(0x57, 0x57, 0x5c),
-    accent: Color32::from_rgb(0x0a, 0x84, 0xff),
-    green: Color32::from_rgb(0x30, 0xd1, 0x58),
-    red: Color32::from_rgb(0xff, 0x45, 0x3a),
-    row_hover: Color32::from_rgba_premultiplied(8, 8, 8, 8),
-    active_row: Color32::from_rgba_premultiplied(2, 25, 48, 48),
-    selected_row: Color32::from_rgba_premultiplied(1, 10, 20, 20),
-    change_bg: Color32::from_rgb(0x0d, 0x2a, 0x19),
-    change_fg: Color32::from_rgb(0x30, 0xd1, 0x58),
-    dot_off: Color32::from_rgb(0x63, 0x63, 0x66),
-    stripe: Color32::from_rgb(0x10, 0x10, 0x12),
-    input_bg: Color32::from_rgb(0x1c, 0x1c, 0x1e),
+    // 石墨蓝:比纯黑柔和,卡片与背景有层次但不生硬
+    bg: Color32::from_rgb(0x0c, 0x0e, 0x12),
+    panel: Color32::from_rgb(0x15, 0x18, 0x1e),
+    elevated: Color32::from_rgb(0x1f, 0x23, 0x2a),
+    hover: Color32::from_rgb(0x26, 0x2b, 0x33),
+    border: Color32::from_rgb(0x2a, 0x2f, 0x38),
+    row_line: Color32::from_rgb(0x1b, 0x1f, 0x25),
+    text: Color32::from_rgb(0xed, 0xef, 0xf3),
+    text2: Color32::from_rgb(0x9a, 0xa0, 0xaa),
+    muted: Color32::from_rgb(0x6a, 0x70, 0x7a),
+    cell_text: Color32::from_rgb(0xe8, 0xea, 0xee),
+    null_text: Color32::from_rgb(0x5a, 0x61, 0x6c),
+    accent: Color32::from_rgb(0x5b, 0x8c, 0xff),
+    green: Color32::from_rgb(0x3d, 0xd6, 0x8c),
+    red: Color32::from_rgb(0xef, 0x44, 0x44),
+    row_hover: Color32::from_rgba_premultiplied(7, 7, 7, 7),
+    active_row: Color32::from_rgb(0x16, 0x25, 0x3c),
+    selected_row: Color32::from_rgb(0x12, 0x1a, 0x29),
+    change_bg: Color32::from_rgb(0x10, 0x2a, 0x1d),
+    change_fg: Color32::from_rgb(0x3d, 0xd6, 0x8c),
+    dot_off: Color32::from_rgb(0x4b, 0x52, 0x5c),
+    stripe: Color32::from_rgb(0x10, 0x13, 0x18),
+    input_bg: Color32::from_rgb(0x15, 0x18, 0x1e),
     overlay: Color32::from_black_alpha(150),
-    shadow: Color32::from_black_alpha(170),
-    sql_keyword: Color32::from_rgb(0x42, 0x9b, 0xff),
-    sql_string: Color32::from_rgb(0x64, 0xd2, 0xff),
-    sql_number: Color32::from_rgb(0xff, 0x9f, 0x0a),
-    sql_comment: Color32::from_rgb(0x6e, 0x6e, 0x73),
+    shadow: Color32::from_black_alpha(180),
+    sql_keyword: Color32::from_rgb(0x7b, 0xa7, 0xff),
+    sql_string: Color32::from_rgb(0x5e, 0xea, 0xd4),
+    sql_number: Color32::from_rgb(0xfb, 0xbf, 0x24),
+    sql_comment: Color32::from_rgb(0x6a, 0x70, 0x7a),
 };
 
 pub static LIGHT: Palette = Palette {
-    bg: Color32::from_rgb(0xf6, 0xf5, 0xf8),
+    // 雾白:冷调浅灰底 + 纯白卡片,选中用低饱和蓝
+    bg: Color32::from_rgb(0xf4, 0xf6, 0xf9),
     panel: Color32::from_rgb(0xff, 0xff, 0xff),
-    elevated: Color32::from_rgb(0xec, 0xeb, 0xef),
-    hover: Color32::from_rgb(0xe8, 0xe7, 0xeb),
-    border: Color32::from_rgb(0xd7, 0xd7, 0xd9),
-    row_line: Color32::from_rgb(0xe8, 0xe7, 0xea),
-    text: Color32::from_rgb(0x1d, 0x1d, 0x1f),
-    text2: Color32::from_rgb(0x66, 0x66, 0x68),
-    muted: Color32::from_rgb(0x8a, 0x8a, 0x8f),
-    cell_text: Color32::from_rgb(0x1d, 0x1d, 0x1f),
-    null_text: Color32::from_rgb(0xa6, 0xa6, 0xab),
-    accent: Color32::from_rgb(0x00, 0x7a, 0xff),
-    green: Color32::from_rgb(0x24, 0x8a, 0x3d),
-    red: Color32::from_rgb(0xd7, 0x00, 0x15),
+    elevated: Color32::from_rgb(0xea, 0xed, 0xf2),
+    hover: Color32::from_rgb(0xe2, 0xe6, 0xec),
+    border: Color32::from_rgb(0xd9, 0xde, 0xe6),
+    row_line: Color32::from_rgb(0xe7, 0xeb, 0xf0),
+    text: Color32::from_rgb(0x1b, 0x1f, 0x26),
+    text2: Color32::from_rgb(0x5f, 0x66, 0x73),
+    muted: Color32::from_rgb(0x8a, 0x92, 0x9e),
+    cell_text: Color32::from_rgb(0x1b, 0x1f, 0x26),
+    null_text: Color32::from_rgb(0xa6, 0xad, 0xb8),
+    accent: Color32::from_rgb(0x3b, 0x82, 0xf6),
+    green: Color32::from_rgb(0x16, 0xa3, 0x4a),
+    red: Color32::from_rgb(0xdc, 0x26, 0x26),
     row_hover: Color32::from_rgba_premultiplied(0, 0, 0, 5),
-    active_row: Color32::from_rgba_premultiplied(0, 22, 46, 46),
-    selected_row: Color32::from_rgba_premultiplied(0, 10, 20, 20),
-    change_bg: Color32::from_rgb(0xe3, 0xf6, 0xe9),
-    change_fg: Color32::from_rgb(0x14, 0x7a, 0x38),
-    dot_off: Color32::from_rgb(0xc7, 0xc7, 0xcc),
-    stripe: Color32::from_rgb(0xf0, 0xef, 0xf3),
+    active_row: Color32::from_rgb(0xdf, 0xea, 0xff),
+    selected_row: Color32::from_rgb(0xea, 0xf1, 0xff),
+    change_bg: Color32::from_rgb(0xe7, 0xf8, 0xee),
+    change_fg: Color32::from_rgb(0x15, 0x80, 0x3d),
+    dot_off: Color32::from_rgb(0xc3, 0xc9, 0xd2),
+    stripe: Color32::from_rgb(0xee, 0xf1, 0xf6),
     input_bg: Color32::from_rgb(0xff, 0xff, 0xff),
-    overlay: Color32::from_black_alpha(70),
-    shadow: Color32::from_black_alpha(50),
-    sql_keyword: Color32::from_rgb(0x00, 0x66, 0xcc),
-    sql_string: Color32::from_rgb(0x1f, 0x7a, 0x44),
-    sql_number: Color32::from_rgb(0xb2, 0x50, 0x00),
-    sql_comment: Color32::from_rgb(0x8a, 0x8a, 0x8f),
+    overlay: Color32::from_black_alpha(64),
+    shadow: Color32::from_black_alpha(45),
+    sql_keyword: Color32::from_rgb(0x25, 0x63, 0xeb),
+    sql_string: Color32::from_rgb(0x0f, 0x76, 0x6e),
+    sql_number: Color32::from_rgb(0xc2, 0x41, 0x0c),
+    sql_comment: Color32::from_rgb(0x8a, 0x92, 0x9e),
 };
 
 static DARK_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -337,7 +339,7 @@ impl BtnKind {
             BtnKind::Primary => (p.accent, Color32::WHITE, None),
             BtnKind::Success => {
                 if is_dark() {
-                    (p.green, Color32::from_rgb(0, 0, 0), None)
+                    (p.green, Color32::from_rgb(0x04, 0x1f, 0x14), None)
                 } else {
                     (p.green, Color32::WHITE, None)
                 }
@@ -651,7 +653,7 @@ pub fn select(
 
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::click());
     let painter = ui.painter();
-    painter.rect_filled(rect, egui::CornerRadius::same(8), p.input_bg);
+    painter.rect_filled(rect, egui::CornerRadius::same(8), p.bg);
     painter.rect_stroke(
         rect,
         egui::CornerRadius::same(8),

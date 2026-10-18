@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod composite;
+pub mod designer;
 pub mod edits;
 pub mod exec;
 mod model;
