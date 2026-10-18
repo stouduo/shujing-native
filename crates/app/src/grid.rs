@@ -23,7 +23,7 @@ pub fn result_rows(
     egui::ScrollArea::horizontal()
         .id_salt(format!("{id_salt}-hscroll"))
         .auto_shrink([false, false])
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width().max(desired_w));
             // 拖拽平移:按住结果网格左右拖 = 横向滚动(只读网格无编辑态)
@@ -213,7 +213,7 @@ pub fn result_rows_editable(
     egui::ScrollArea::horizontal()
         .id_salt(format!("{id_salt}-hscroll"))
         .auto_shrink([false, false])
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width().max(desired_w));
             // 拖拽平移(编辑态除外)
