@@ -45,7 +45,10 @@ enum SessionTab {
         table: Option<String>,
         table_name: String,
     },
-    Redis { conn: String, db: u8 },
+    Redis {
+        conn: String,
+        db: u8,
+    },
     Er {
         conn: String,
         database: Option<String>,
@@ -75,10 +78,12 @@ pub enum BgEvent {
     },
     RowsLoaded {
         tab_id: String,
+        seq: u64,
         result: Result<shujing_core::ExecResult, String>,
     },
     CountLoaded {
         tab_id: String,
+        seq: u64,
         total: Option<u64>,
     },
     PkLoaded {
@@ -171,7 +176,10 @@ pub enum BgEvent {
         result: Result<Vec<shujing_core::SearchHit>, String>,
     },
     /// 查询结果回写:主键列
-    QueryPkDone { tab_id: String, cols: Vec<String> },
+    QueryPkDone {
+        tab_id: String,
+        cols: Vec<String>,
+    },
     /// 一次性 SQL 执行完成(导入 SQL 文件),成功提示用 msg
     SqlDone {
         msg: String,
@@ -240,6 +248,8 @@ pub struct TableTab {
     pub page: usize,
     pub page_size: usize,
     pub loading: bool,
+    /// 数据请求代次:快速翻页/排序时丢弃迟到的旧结果
+    pub load_seq: u64,
     pub error: Option<String>,
     pub sort: Option<(String, bool)>,
     pub pk_cols: Vec<String>,
@@ -291,6 +301,7 @@ impl TableTab {
             page: 1,
             page_size: 100,
             loading: true,
+            load_seq: 0,
             error: None,
             sort: None,
             pk_cols: vec![],
@@ -350,17 +361,22 @@ pub fn compute_col_stats(
                 format!("{x}")
             }
         };
-        out.push(("数值个数".to_string(), crate::icons::thousands(numeric as u64)));
+        out.push((
+            "数值个数".to_string(),
+            crate::icons::thousands(numeric as u64),
+        ));
         out.push(("SUM".to_string(), fmt(sum)));
         out.push(("AVG".to_string(), fmt(avg)));
         out.push(("MIN".to_string(), fmt(non_null[0])));
         out.push(("MAX".to_string(), fmt(non_null[non_null.len() - 1])));
     } else {
-        let mut distinct: Vec<&String> =
-            vals.iter().filter_map(|v| v.as_ref()).collect();
+        let mut distinct: Vec<&String> = vals.iter().filter_map(|v| v.as_ref()).collect();
         distinct.sort();
         distinct.dedup();
-        out.push(("非空去重".to_string(), crate::icons::thousands(distinct.len() as u64)));
+        out.push((
+            "非空去重".to_string(),
+            crate::icons::thousands(distinct.len() as u64),
+        ));
     }
     (col.to_string(), out)
 }
@@ -546,12 +562,21 @@ pub struct RedisTab {
 /// Redis 写操作完成后的行为
 #[derive(Clone)]
 pub enum RedisOp {
-    Del { key: String },
-    Rename { from: String, to: String },
+    Del {
+        key: String,
+    },
+    Rename {
+        from: String,
+        to: String,
+    },
     /// 操作后重取该 key 详情
-    Refresh { key: String },
+    Refresh {
+        key: String,
+    },
     /// 新建后重扫并选中
-    NewKey { key: String },
+    NewKey {
+        key: String,
+    },
 }
 
 /// 统一标签
@@ -706,18 +731,14 @@ pub struct ShujingApp {
     /// 会话持久化
     pub snippets: Vec<String>,
     pub settings_open: bool,
+    /// 侧栏底部主题切换请求(绘制层无 ctx,经 update 消费)
+    pub theme_toggle_requested: bool,
     pub session_dirty: bool,
     pub last_session_save: Option<std::time::Instant>,
     pub session_restored: bool,
     pub pending_online: Vec<String>,
     pub pending_expanded: HashMap<String, String>,
-    pub last_session_sig: (
-        usize,
-        usize,
-        bool,
-        usize,
-        Vec<Option<String>>,
-    ),
+    pub last_session_sig: (usize, usize, bool, usize, Vec<Option<String>>),
 }
 
 pub enum PendingAction {
@@ -785,6 +806,7 @@ impl ShujingApp {
             confirm: None,
             snippets,
             settings_open: false,
+            theme_toggle_requested: false,
             session_dirty: false,
             last_session_save: None,
             session_restored: false,
@@ -1012,8 +1034,8 @@ impl ShujingApp {
         crate::theme::set_dark(dark);
         crate::theme::apply(ctx);
         let path = self.config_dir.join("settings.json");
-        let json = serde_json::json!({ "dark": dark, "accent": crate::theme::accent_idx() })
-            .to_string();
+        let json =
+            serde_json::json!({ "dark": dark, "accent": crate::theme::accent_idx() }).to_string();
         let _ = std::fs::write(path, json);
         #[cfg(target_os = "macos")]
         crate::force_appearance(dark);
@@ -1092,7 +1114,11 @@ impl ShujingApp {
         Some(match &t.kind {
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Structure(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
-            TabKind::Query(_) | TabKind::Designer(_) | TabKind::Redis(_) | TabKind::Er(_) | TabKind::Ddl(_) => return None,
+            TabKind::Query(_)
+            | TabKind::Designer(_)
+            | TabKind::Redis(_)
+            | TabKind::Er(_)
+            | TabKind::Ddl(_) => return None,
         })
     }
 
@@ -1212,7 +1238,10 @@ impl ShujingApp {
             return;
         };
         let conn_id = d.conn_id.clone();
-        let table = d.original_table.clone().unwrap_or_else(|| d.table_name.clone());
+        let table = d
+            .original_table
+            .clone()
+            .unwrap_or_else(|| d.table_name.clone());
         let database = d.database.clone();
         d.loading = true;
         net::spawn(async move {
@@ -1273,9 +1302,9 @@ impl ShujingApp {
 
     /// 打开 ER 图标签(同连接同库已开则激活)
     pub fn open_er(&mut self, conn_id: &str, database: Option<String>) {
-        let existing = self.tabs.iter().position(|t| {
-            matches!(&t.kind, TabKind::Er(e) if e.conn_id == conn_id && e.database == database)
-        });
+        let existing = self.tabs.iter().position(
+            |t| matches!(&t.kind, TabKind::Er(e) if e.conn_id == conn_id && e.database == database),
+        );
         if let Some(i) = existing {
             self.active_tab = i;
             return;
@@ -1322,7 +1351,12 @@ impl ShujingApp {
             let tables = service
                 .list_tables(&conn_id, database.clone())
                 .await
-                .map(|v| v.into_iter().filter(|t| t.kind == "table").map(|t| t.name).collect::<Vec<_>>())
+                .map(|v| {
+                    v.into_iter()
+                        .filter(|t| t.kind == "table")
+                        .map(|t| t.name)
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
             let fks = service
                 .list_foreign_keys(&conn_id, database.clone())
@@ -1346,9 +1380,9 @@ impl ShujingApp {
 
     /// 打开 Redis 浏览标签(同连接同 db 已开则激活)
     pub fn open_redis(&mut self, conn_id: &str, db: u8) {
-        let existing = self.tabs.iter().position(|t| {
-            matches!(&t.kind, TabKind::Redis(rt) if rt.conn_id == conn_id && rt.db == db)
-        });
+        let existing = self.tabs.iter().position(
+            |t| matches!(&t.kind, TabKind::Redis(rt) if rt.conn_id == conn_id && rt.db == db),
+        );
         if let Some(i) = existing {
             self.active_tab = i;
             return;
@@ -1409,7 +1443,9 @@ impl ShujingApp {
         rt.error = None;
         let tid = tab_id.clone();
         net::spawn(async move {
-            let result = service.redis_scan(&conn_id, db, &pattern, cursor, 200).await;
+            let result = service
+                .redis_scan(&conn_id, db, &pattern, cursor, 200)
+                .await;
             let _ = tx.send(BgEvent::RedisScanDone {
                 tab_id: tid,
                 reset,
@@ -1480,7 +1516,10 @@ impl ShujingApp {
             if let Ok(types) = service.redis_key_types(&conn_id, db, &keys).await {
                 let pairs: Vec<(String, String)> =
                     keys.iter().cloned().zip(types.into_iter()).collect();
-                let _ = tx.send(BgEvent::RedisTypesDone { tab_id: tid.clone(), pairs });
+                let _ = tx.send(BgEvent::RedisTypesDone {
+                    tab_id: tid.clone(),
+                    pairs,
+                });
             }
             if let Ok(ttls) = service.redis_ttl_batch(&conn_id, db, &keys).await {
                 let pairs: Vec<(String, i64)> =
@@ -1540,10 +1579,45 @@ impl ShujingApp {
         }
         if idx < self.tabs.len() {
             self.tabs.remove(idx);
-            if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
+            // 关闭活动标签之前的标签时,活动下标要跟着左移;否则会静默切到错误的标签
+            if idx < self.active_tab {
+                self.active_tab -= 1;
+            }
+            if self.tabs.is_empty() {
+                self.active_tab = 0;
+            } else if self.active_tab >= self.tabs.len() {
                 self.active_tab = self.tabs.len() - 1;
             }
         }
+    }
+
+    /// 关闭某个连接下的全部标签(断开/删除连接时用)
+    pub fn close_tabs_for_connection(&mut self, conn_id: &str) {
+        let mut removed_before_active = 0usize;
+        let mut i = 0usize;
+        while i < self.tabs.len() {
+            let belongs = match &self.tabs[i].kind {
+                TabKind::Table(t) => t.conn_id == conn_id,
+                TabKind::Structure(t) => t.conn_id == conn_id,
+                TabKind::Query(q) => q.conn_id == conn_id,
+                TabKind::Designer(d) => d.conn_id == conn_id,
+                TabKind::Redis(r) => r.conn_id == conn_id,
+                TabKind::Er(e) => e.conn_id == conn_id,
+                TabKind::Ddl(d) => d.conn_id == conn_id,
+            };
+            if belongs {
+                if i < self.active_tab {
+                    removed_before_active += 1;
+                }
+                self.tabs.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        self.active_tab = self
+            .active_tab
+            .saturating_sub(removed_before_active)
+            .min(self.tabs.len().saturating_sub(1));
     }
 
     /// 拉取表数据标签的分页数据(LIMIT/OFFSET [+ ORDER BY]);首次同时拉主键
@@ -1577,6 +1651,8 @@ impl ShujingApp {
             where_parts.push(w.clone());
         }
         let where_clause = (!where_parts.is_empty()).then(|| where_parts.join(" AND "));
+        tab.load_seq = tab.load_seq.wrapping_add(1);
+        let seq = tab.load_seq;
         tab.loading = true;
         tab.changes.clear();
         tab.editing = None;
@@ -1625,6 +1701,7 @@ impl ShujingApp {
             let result = result.map(|mut rs| rs.pop().unwrap_or_default());
             let _ = tx.send(BgEvent::RowsLoaded {
                 tab_id: tab_id.clone(),
+                seq,
                 result,
             });
             let mut cnt = format!("SELECT COUNT(*) FROM {full}");
@@ -1639,7 +1716,7 @@ impl ShujingApp {
                     .and_then(|v| v.as_deref())
                     .and_then(|s| s.parse::<u64>().ok())
             });
-            let _ = tx.send(BgEvent::CountLoaded { tab_id, total });
+            let _ = tx.send(BgEvent::CountLoaded { tab_id, seq, total });
         });
     }
 
@@ -1731,7 +1808,10 @@ impl ShujingApp {
         let service = self.service.clone();
         net::spawn(async move {
             let result = service.run_sql(&conn_id, explain, Some(200)).await;
-            let _ = tx.send(BgEvent::QueryDone { tab_id: tid, result });
+            let _ = tx.send(BgEvent::QueryDone {
+                tab_id: tid,
+                result,
+            });
         });
     }
 
@@ -1868,9 +1948,10 @@ impl ShujingApp {
         let mysql = mysql_quote(self.conns.as_slice(), conn_id);
         let ident = quote_ident_by(name, mysql);
         // 已有该连接的查询标签就用它
-        let existing = self.tabs.iter().position(|t| {
-            matches!(&t.kind, TabKind::Query(q) if q.conn_id == conn_id)
-        });
+        let existing = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.kind, TabKind::Query(q) if q.conn_id == conn_id));
         let idx = match existing {
             Some(i) => {
                 self.active_tab = i;
@@ -2106,11 +2187,7 @@ impl ShujingApp {
                     });
                     loaders.push((id.clone(), "structure".into()));
                 }
-                SessionTab::Query {
-                    conn,
-                    sql,
-                    history,
-                } => {
+                SessionTab::Query { conn, sql, history } => {
                     self.query_seq += 1;
                     let id = format!("q{}", rand_suffix());
                     self.tabs.push(Tab {
@@ -2279,7 +2356,9 @@ impl ShujingApp {
             .map(|t| mysql_quote(&self.conns, &t.conn_id))
             .unwrap_or(true);
         let (conds, free) = {
-            let Some(t) = self.table_tab(tab_id) else { return };
+            let Some(t) = self.table_tab(tab_id) else {
+                return;
+            };
             (t.conds.clone(), t.free_where.clone())
         };
         let built = build_cond_where(&conds, &free, mysql);
@@ -2350,7 +2429,10 @@ impl ShujingApp {
                     rs.truncate(1);
                     rs.pop().ok_or_else(|| "没有执行计划".to_string())
                 });
-            let _ = tx.send(BgEvent::OptimizeDone { tab_id: tid, result });
+            let _ = tx.send(BgEvent::OptimizeDone {
+                tab_id: tid,
+                result,
+            });
         });
     }
 
@@ -2470,8 +2552,16 @@ impl ShujingApp {
                         tree.tables_by_db.insert(key, tables);
                     }
                 }
-                BgEvent::RowsLoaded { tab_id, result } => {
+                BgEvent::RowsLoaded {
+                    tab_id,
+                    seq,
+                    result,
+                } => {
                     if let Some(t) = self.table_tab_mut(&tab_id) {
+                        // 丢弃过期请求(快速翻页/排序时旧请求可能后到)
+                        if t.load_seq != seq {
+                            continue;
+                        }
                         t.loading = false;
                         t.selected = None; // 数据翻页后旧选中会指错行
                         match result {
@@ -2487,9 +2577,11 @@ impl ShujingApp {
                         }
                     }
                 }
-                BgEvent::CountLoaded { tab_id, total } => {
+                BgEvent::CountLoaded { tab_id, seq, total } => {
                     if let Some(t) = self.table_tab_mut(&tab_id) {
-                        t.total = total;
+                        if t.load_seq == seq {
+                            t.total = total;
+                        }
                     }
                 }
                 BgEvent::PkLoaded { tab_id, cols } => {
@@ -2505,9 +2597,7 @@ impl ShujingApp {
                             .iter()
                             .any(|t| t.id == tab_id && matches!(t.kind, TabKind::Query(_)));
                         if is_query {
-                            if let Some(tab) =
-                                self.tabs.iter_mut().find(|t| t.id == tab_id)
-                            {
+                            if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                                 if let TabKind::Query(q) = &mut tab.kind {
                                     q.q_changes.clear();
                                     q.q_editing = None;
@@ -2544,8 +2634,7 @@ impl ShujingApp {
                                     q.active_set = 0;
                                     q.q_changes.clear();
                                     q.q_editing = None;
-                                    q.result_table =
-                                        detect_single_table(&q.sql);
+                                    q.result_table = detect_single_table(&q.sql);
                                     q.pk_checked = false;
                                     // 单表 SELECT:拉主键判断结果集可否回写
                                     if let Some(t) = q.result_table.clone() {
@@ -2565,10 +2654,8 @@ impl ShujingApp {
                                                         .collect::<Vec<_>>()
                                                 })
                                                 .unwrap_or_default();
-                                            let _ = tx.send(BgEvent::QueryPkDone {
-                                                tab_id: tid,
-                                                cols,
-                                            });
+                                            let _ =
+                                                tx.send(BgEvent::QueryPkDone { tab_id: tid, cols });
                                         });
                                     }
                                 }
@@ -2663,7 +2750,7 @@ impl ShujingApp {
                 BgEvent::DdlDone { result } => match result {
                     Ok(()) => {
                         self.new_table = None;
-                        self.toast_error("创建成功".to_string());                        // 重新载入所有在线树的表
+                        self.toast_error("创建成功".to_string()); // 重新载入所有在线树的表
                         let ids: Vec<String> = self.trees.keys().cloned().collect();
                         for cid in ids {
                             let dbs = self
@@ -2748,7 +2835,10 @@ impl ShujingApp {
                     let service = self.service.clone();
                     let c2 = conn_id.clone();
                     net::spawn(async move {
-                        let tables = service.list_tables(&c2, db.clone()).await.unwrap_or_default();
+                        let tables = service
+                            .list_tables(&c2, db.clone())
+                            .await
+                            .unwrap_or_default();
                         let _ = tx.send(BgEvent::TablesLoaded {
                             conn_id: c2,
                             database: db,
@@ -2832,11 +2922,7 @@ impl ShujingApp {
                         rt.key_ttls.insert(k, t);
                     }
                 }
-                BgEvent::RedisOpDone {
-                    tab_id,
-                    op,
-                    result,
-                } => {
+                BgEvent::RedisOpDone { tab_id, op, result } => {
                     if let Err(e) = &result {
                         self.toast_error(format!("操作失败: {e}"));
                     }
@@ -3039,8 +3125,16 @@ pub fn detect_single_table(sql: &str) -> Option<String> {
         return None;
     }
     for bad in [
-        " join ", " union ", " group by ", " having ", " into ", "insert ", "update ",
-        "delete ", ") select ", ")select",
+        " join ",
+        " union ",
+        " group by ",
+        " having ",
+        " into ",
+        "insert ",
+        "update ",
+        "delete ",
+        ") select ",
+        ")select",
     ] {
         if lower.contains(bad) {
             return None;

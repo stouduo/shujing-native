@@ -23,7 +23,7 @@ impl ShujingApp {
                     .inner_margin(egui::Margin {
                         left: 10,
                         right: 10,
-                        top: 9,
+                        top: 5,
                         bottom: 8,
                     }),
             )
@@ -63,13 +63,14 @@ impl ShujingApp {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 
-    pub fn draw_sidebar(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
+    pub fn draw_sidebar(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let p = theme::c();
         let w = ui.available_width();
 
-        // 头部:数镜 Native(15/12.5)+ 新建连接
+        // 头部:与标签栏同一水平带(高度 = 标签高度),保证 ＋ 与标题同线
+        let head_h = theme::TABBAR_H - 5.0;
         ui.allocate_ui_with_layout(
-            egui::vec2(w, 30.0),
+            egui::vec2(w, head_h),
             Layout::left_to_right(Align::Center),
             |ui| {
                 let title_resp =
@@ -97,7 +98,8 @@ impl ShujingApp {
                 });
             },
         );
-        ui.add_space(10.0);
+        theme::hairline_bottom(ui);
+        ui.add_space(8.0);
 
         // 表搜索(原型常驻)
         theme::search_box(ui, "side-table-search", &mut self.table_filter, "搜索表", w);
@@ -108,6 +110,7 @@ impl ShujingApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
+                let _ = ctx;
                 let conns = self.conns.clone();
                 for c in conns {
                     self.draw_conn_block(ui, &c);
@@ -122,6 +125,33 @@ impl ShujingApp {
                     );
                 }
             });
+
+        // 底部栏:版本号 + 黑白主题切换
+        ui.add_space(6.0);
+        theme::hairline_top(ui);
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (rect, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
+                let glyph = if theme::is_dark() { "☀" } else { "☾" };
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    glyph,
+                    egui::FontId::proportional(15.0),
+                    if resp.hovered() { p.text } else { p.text2 },
+                );
+                resp.clone().on_hover_text("切换深浅外观");
+                if resp.clicked() {
+                    self.theme_toggle_requested = true;
+                }
+            });
+        });
     }
 
     fn draw_conn_block(&mut self, ui: &mut egui::Ui, c: &shujing_core::ConnInfo) {
@@ -299,18 +329,19 @@ impl ShujingApp {
         for db in databases {
             let is_open = expanded.as_deref() == Some(db.as_str());
             if is_open {
-                self.draw_db_header(
-                    ui,
-                    conn_id,
-                    &db,
-                    loading,
-                    tables_by_db.get(&db).map(|v| v.len()).unwrap_or(0),
-                );
                 let tables = tables_by_db.get(&db).cloned().unwrap_or_default();
-                // 分组:表 / 视图 / 程序对象(触发器·函数·过程)
-                let groups: [(&str, &str, Box<dyn Fn(&shujing_core::TableMeta) -> bool>); 3] = [
-                    ("table", "表", Box::new(|m: &shujing_core::TableMeta| m.kind == "table")),
-                    ("view", "视图", Box::new(|m: &shujing_core::TableMeta| m.kind == "view")),
+                // 表直接铺在库下(与原型一致);视图/程序对象才额外分组
+                let table_count = tables.iter().filter(|m| m.kind == "table").count();
+                self.draw_db_header(ui, conn_id, &db, loading, table_count);
+                for m in tables.iter().filter(|m| m.kind == "table") {
+                    self.draw_table_row(ui, conn_id, &db, &m.name);
+                }
+                let groups: [(&str, &str, Box<dyn Fn(&shujing_core::TableMeta) -> bool>); 2] = [
+                    (
+                        "view",
+                        "视图",
+                        Box::new(|m: &shujing_core::TableMeta| m.kind == "view"),
+                    ),
                     (
                         "prog",
                         "程序对象",
@@ -330,14 +361,12 @@ impl ShujingApp {
                         .trees
                         .get(conn_id)
                         .and_then(|t| t.groups_open.get(&open_key).copied())
-                        .unwrap_or(gkey == "table");
+                        .unwrap_or(false);
                     self.draw_group_header(ui, conn_id, &open_key, glabel, items.len(), open);
                     if open {
                         for m in items {
                             if gkey == "prog" {
                                 self.draw_prog_row(ui, conn_id, &db, &m.name, &m.kind);
-                            } else {
-                                self.draw_table_row(ui, conn_id, &db, &m.name);
                             }
                         }
                     }
@@ -382,65 +411,54 @@ impl ShujingApp {
             g,
             p.muted,
         );
-        if resp.clicked() {
-            if let Some(tree) = self.trees.get_mut(conn_id) {
-                let next = !open;
-                tree.groups_open.insert(open_key.to_string(), next);
-            }
-        }
-        // 程序对象组:＋ 新建对象(模板进查询页)
+        let mut plus_clicked = false;
+        // 程序对象组:＋ 新建对象(菜单直接开模板)
         if open_key.ends_with("|prog") {
             let plus_rect = egui::Rect::from_center_size(
                 egui::pos2(rect.right() - 14.0, rect.center().y),
-                egui::vec2(20.0, 20.0),
+                egui::vec2(22.0, 22.0),
             );
-            let plus = ui.interact(plus_rect, egui::Id::new("new-obj"), Sense::click());
-            let pc = if plus.hovered() { p.text } else { p.muted };
-            icons::paint_plus(ui.painter(), plus_rect.center(), 5.0, pc);
-            plus.clone().on_hover_text("新建对象(模板)");
-            if plus.clicked() {
-                // 记住待选连接,菜单项直接开模板
-                ui.ctx()
-                    .memory_mut(|m| m.data.insert_temp(egui::Id::new("newobj-conn"), conn_id.to_string()));
+            let mut picked: Option<&'static str> = None;
+            let plus_resp = ui
+                .allocate_new_ui(
+                    egui::UiBuilder::new()
+                        .max_rect(plus_rect)
+                        .layout(Layout::left_to_right(Align::Center)),
+                    |ui| {
+                        ui.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
+                        ui.menu_button(RichText::new("＋").size(13.0).color(p.muted), |ui| {
+                            for (kind, label) in [
+                                ("trigger", "触发器"),
+                                ("procedure", "存储过程"),
+                                ("function", "函数"),
+                                ("view", "视图"),
+                            ] {
+                                if ui.button(label).clicked() {
+                                    picked = Some(kind);
+                                    ui.close_menu();
+                                }
+                            }
+                        })
+                        .response
+                    },
+                )
+                .inner;
+            plus_clicked = plus_resp.clicked();
+            plus_resp.on_hover_text("新建对象(模板)");
+            if let Some(kind) = picked {
+                self.open_query_tab(Some(conn_id.to_string()));
+                let idx = self.tabs.len() - 1;
+                if let Some(t) = self.tabs.get_mut(idx) {
+                    if let crate::app::TabKind::Query(q) = &mut t.kind {
+                        q.sql = object_template(kind);
+                    }
+                }
             }
-            let _ = plus.context_menu(|ui| {
-                for (kind, label) in [
-                    ("trigger", "触发器"),
-                    ("procedure", "存储过程"),
-                    ("function", "函数"),
-                    ("view", "视图"),
-                ] {
-                    if ui.button(label).clicked() {
-                        ui.ctx().memory_mut(|m| {
-                            m.data.insert_temp(
-                                egui::Id::new("newobj-kind"),
-                                kind.to_string(),
-                            )
-                        });
-                        ui.close_menu();
-                    }
-                }
-            });
-            if let Some(kind) = ui
-                .ctx()
-                .memory(|m| m.data.get_temp::<String>(egui::Id::new("newobj-kind")))
-            {
-                ui.ctx()
-                    .memory_mut(|m| m.data.remove_temp::<String>(egui::Id::new("newobj-kind")));
-                if let Some(conn) = ui
-                    .ctx()
-                    .memory(|m| m.data.get_temp::<String>(egui::Id::new("newobj-conn")))
-                {
-                    ui.ctx()
-                        .memory_mut(|m| m.data.remove_temp::<String>(egui::Id::new("newobj-conn")));
-                    self.open_query_tab(Some(conn));
-                    let idx = self.tabs.len() - 1;
-                    if let Some(t) = self.tabs.get_mut(idx) {
-                        if let crate::app::TabKind::Query(q) = &mut t.kind {
-                            q.sql = object_template(&kind);
-                        }
-                    }
-                }
+        }
+        if resp.clicked() && !plus_clicked {
+            if let Some(tree) = self.trees.get_mut(conn_id) {
+                let next = !open;
+                tree.groups_open.insert(open_key.to_string(), next);
             }
         }
     }
@@ -485,7 +503,11 @@ impl ShujingApp {
         ui.painter().galley(
             egui::pos2(rect.left() + 48.0, rect.center().y - g.size().y / 2.0),
             g,
-            if active || resp.hovered() { p.text } else { p.text2 },
+            if active || resp.hovered() {
+                p.text
+            } else {
+                p.text2
+            },
         );
         let tag = match kind {
             "trigger" => "TRG",
@@ -527,7 +549,13 @@ impl ShujingApp {
                     "procedure" => format!("DROP PROCEDURE IF EXISTS {{v}};"),
                     _ => format!("DROP FUNCTION IF EXISTS {{v}};"),
                 };
-                let stmt = stmt.replace("{v}", &crate::app::quote_ident_by(name, crate::app::mysql_quote(&self.conns, conn_id)));
+                let stmt = stmt.replace(
+                    "{v}",
+                    &crate::app::quote_ident_by(
+                        name,
+                        crate::app::mysql_quote(&self.conns, conn_id),
+                    ),
+                );
                 self.open_confirm(
                     conn_id,
                     "删除对象",
@@ -609,6 +637,7 @@ impl ShujingApp {
         let mut import_sql = false;
         let mut export_full = false;
         let mut export_schema = false;
+        let mut refresh_tables = false;
         let _ = resp.clone().context_menu(|ui| {
             if ui.button("新建表…").clicked() {
                 new_table = true;
@@ -636,6 +665,7 @@ impl ShujingApp {
                 ui.close_menu();
             }
             if ui.button("刷新表列表").clicked() {
+                refresh_tables = true;
                 ui.close_menu();
             }
         });
@@ -650,6 +680,10 @@ impl ShujingApp {
         }
         if export_schema {
             self.export_database_sql_file(conn_id, db, false);
+        }
+        if refresh_tables {
+            self.reload_tables(conn_id, db);
+            return;
         }
         if new_table {
             self.open_designer(conn_id, None, Some(db.to_string()));
@@ -678,7 +712,7 @@ impl ShujingApp {
         }
         icons::paint_triangle(
             ui.painter(),
-            egui::pos2(rect.left() + 32.0, rect.center().y),
+            egui::pos2(rect.left() + 14.0, rect.center().y),
             false,
             if resp.hovered() { p.text } else { p.text2 },
         );
@@ -688,11 +722,11 @@ impl ShujingApp {
             db.to_string(),
             theme::bold(theme::FS_TREE + 0.5),
             Color32::PLACEHOLDER,
-            rect.width() - 96.0,
+            rect.width() - 76.0,
         );
         ui.painter().galley(
             egui::pos2(
-                rect.left() + 48.0,
+                rect.left() + 28.0,
                 baseline - icons::baseline_top(&g, theme::FS_TREE + 0.5),
             ),
             g,
@@ -985,7 +1019,11 @@ impl ShujingApp {
                         "清空表数据",
                         &format!(
                             "确认清空表 {name} 的全部数据?{}",
-                            if mysql { "" } else { "(SQLite 用 DELETE 逐行清空)" }
+                            if mysql {
+                                ""
+                            } else {
+                                "(SQLite 用 DELETE 逐行清空)"
+                            }
                         ),
                         None,
                         sql,
@@ -1040,7 +1078,11 @@ impl ShujingApp {
                 egui::pos2(c.x, c.y + s4),
                 egui::pos2(c.x - s4, c.y),
             ],
-            if active || resp.hovered() { p.red } else { theme::tint(p.red, 150) },
+            if active || resp.hovered() {
+                p.red
+            } else {
+                theme::tint(p.red, 150)
+            },
             egui::Stroke::NONE,
         ));
         let g = icons::text_galley(
@@ -1053,7 +1095,11 @@ impl ShujingApp {
         ui.painter().galley(
             egui::pos2(rect.left() + 48.0, rect.center().y - g.size().y / 2.0),
             g,
-            if active || resp.hovered() { p.text } else { p.text2 },
+            if active || resp.hovered() {
+                p.text
+            } else {
+                p.text2
+            },
         );
         let kg = ui.painter().layout_no_wrap(
             format!("{keys} keys"),
@@ -1077,32 +1123,7 @@ impl ShujingApp {
         if self.trees.get(&c.id).map(|t| t.online).unwrap_or(false) {
             self.trees.remove(&c.id);
             // 断开的连接:相关标签一并关闭,避免残留标签对失效连接报错
-            let cid = &c.id;
-            let mut removed_before_active = 0usize;
-            let mut i = 0usize;
-            while i < self.tabs.len() {
-                let belongs = match &self.tabs[i].kind {
-                    crate::app::TabKind::Table(t) => &t.conn_id == cid,
-                    crate::app::TabKind::Structure(t) => &t.conn_id == cid,
-                    crate::app::TabKind::Query(q) => &q.conn_id == cid,
-                    crate::app::TabKind::Designer(d) => &d.conn_id == cid,
-                    crate::app::TabKind::Redis(r) => &r.conn_id == cid,
-                    crate::app::TabKind::Er(e) => &e.conn_id == cid,
-                    crate::app::TabKind::Ddl(d) => &d.conn_id == cid,
-                };
-                if belongs {
-                    if i < self.active_tab {
-                        removed_before_active += 1;
-                    }
-                    self.tabs.remove(i);
-                } else {
-                    i += 1;
-                }
-            }
-            self.active_tab = self
-                .active_tab
-                .saturating_sub(removed_before_active)
-                .min(self.tabs.len().saturating_sub(1));
+            self.close_tabs_for_connection(&c.id);
             return;
         }
         self.trees
@@ -1116,6 +1137,23 @@ impl ShujingApp {
             let _ = tx.send(BgEvent::ConnectDone {
                 conn_id: info.id.clone(),
                 result: result.map(|_| version.unwrap_or_default()),
+            });
+        });
+    }
+
+    fn reload_tables(&mut self, conn_id: &str, db: &str) {
+        if let Some(tree) = self.trees.get_mut(conn_id) {
+            tree.loading = true;
+        }
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let (cid, db2) = (conn_id.to_string(), db.to_string());
+        net::spawn(async move {
+            let tables = service.list_tables(&cid, Some(db2.clone())).await;
+            let _ = tx.send(BgEvent::TablesLoaded {
+                conn_id: cid,
+                database: Some(db2),
+                tables: tables.unwrap_or_default(),
             });
         });
     }
@@ -1149,9 +1187,10 @@ impl ShujingApp {
             Err(e) => self.toast_error(e),
         }
         self.trees.remove(id);
+        // 删除连接时同步关闭它的标签,避免留下永远报错的死标签
+        self.close_tabs_for_connection(id);
     }
 }
-
 
 /// 新建对象 SQL 模板(与 dbclient ObjectTemplates 同源,通用 MySQL 风格)
 fn object_template(kind: &str) -> String {
@@ -1162,22 +1201,26 @@ FOR EACH ROW
 BEGIN
   -- 触发器逻辑
   UPDATE `table_name` SET updated_at = NOW() WHERE id = NEW.id;
-END;".to_string(),
+END;"
+            .to_string(),
         "procedure" => r"CREATE PROCEDURE `procedure_name`(IN param1 INT)
 BEGIN
   -- 存储过程逻辑
   SELECT * FROM `table_name` WHERE id = param1;
-END;".to_string(),
+END;"
+            .to_string(),
         "function" => r"CREATE FUNCTION `function_name`(param1 INT)
 RETURNS INT
 DETERMINISTIC
 BEGIN
   -- 函数逻辑
   RETURN param1 * 2;
-END;".to_string(),
+END;"
+            .to_string(),
         _ => r"CREATE VIEW `view_name` AS
 SELECT *
 FROM `table_name`
-WHERE 1=1;".to_string(),
+WHERE 1=1;"
+            .to_string(),
     }
 }

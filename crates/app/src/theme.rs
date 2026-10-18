@@ -180,7 +180,10 @@ pub fn accent_color_light(i: usize) -> Color32 {
 }
 
 pub fn set_accent(idx: usize) {
-    ACCENT_IDX.store(idx.min(ACCENTS.len() - 1), std::sync::atomic::Ordering::Relaxed);
+    ACCENT_IDX.store(
+        idx.min(ACCENTS.len() - 1),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 pub fn accent_idx() -> usize {
@@ -488,6 +491,81 @@ pub fn button_ex(
         x += 8.0;
         painter.galley(egui::pos2(x, cy - g.size().y / 2.0), g.clone(), sub_color);
         let _ = s;
+    }
+    resp
+}
+
+/// 自绘复选框:当前主题把通用按钮的描边关掉了,egui 默认 Checkbox 的方框会不可见
+pub fn checkbox(ui: &mut egui::Ui, checked: &mut bool, label: &str) -> egui::Response {
+    let p = c();
+    let enabled = ui.is_enabled();
+    let font = egui::FontId::proportional(11.5);
+    let g = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), Color32::PLACEHOLDER);
+    let label_w = if label.is_empty() {
+        0.0
+    } else {
+        8.0 + g.size().x
+    };
+    let (rect, mut resp) =
+        ui.allocate_exact_size(egui::vec2(15.0 + label_w, 18.0), egui::Sense::click());
+    let box_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 7.5, rect.center().y),
+        egui::Vec2::splat(15.0),
+    );
+    let (fill, stroke, fg) = if !enabled {
+        (p.bg, p.border, p.muted)
+    } else if *checked {
+        (p.accent, p.accent, Color32::WHITE)
+    } else {
+        (
+            p.bg,
+            if resp.hovered() { p.accent } else { p.border },
+            p.text2,
+        )
+    };
+    ui.painter()
+        .rect_filled(box_rect, egui::CornerRadius::same(4), fill);
+    ui.painter().rect_stroke(
+        box_rect,
+        egui::CornerRadius::same(4),
+        egui::Stroke::new(1.0, stroke),
+        egui::StrokeKind::Inside,
+    );
+    if *checked {
+        let c = box_rect.center();
+        let st = egui::Stroke::new(1.6, fg);
+        ui.painter().line_segment(
+            [egui::pos2(c.x - 3.4, c.y), egui::pos2(c.x - 0.8, c.y + 2.6)],
+            st,
+        );
+        ui.painter().line_segment(
+            [
+                egui::pos2(c.x - 0.8, c.y + 2.6),
+                egui::pos2(c.x + 3.6, c.y - 2.9),
+            ],
+            st,
+        );
+    }
+    if !label.is_empty() {
+        ui.painter().text(
+            egui::pos2(box_rect.right() + 8.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font,
+            if !enabled {
+                p.muted
+            } else if resp.hovered() {
+                p.text
+            } else {
+                p.text2
+            },
+        );
+    }
+    if enabled && resp.clicked() {
+        *checked = !*checked;
+        resp.mark_changed();
     }
     resp
 }

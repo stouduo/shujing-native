@@ -1,4 +1,4 @@
-# 数镜 Native(shujing-native)
+# 数镜(shujing-native)
 
 数镜的 Rust 原生版本:egui + eframe,无 WebView。目标:低内存(数据量增大时占用有上界)、原生渲染。
 
@@ -32,3 +32,9 @@ v0.4.0 起界面按高保真原型重做,统一设计令牌(深浅双主题):
 - M0 ✓ workspace + core 抽取(12 测试)
 - M1 ✓ 连接管理、库/表树、虚拟化数据网格 + 分页 + 排序、CSV 导入/导出、编辑回写
 - M2 ✓ UI 全面对齐原型(设计令牌 / 深浅主题 / 侧栏 / 标签 / 工具条 / 状态栏 / 弹窗)
+- v0.5–v0.9 ✓ ER 图、表设计器、Redis 面板、筛选栏、SQL 导入/导出、外观强调色等扩展页(沿用同一设计令牌)
+
+## 验收
+
+- `cargo test -p shujing-app` 覆盖离屏渲染 + 关键交互(翻页/拖拽/关闭标签/会话恢复等)
+- 当前 v0.9.1 的界面截图与原型对比见 `docs/ui/compare_dark.png`、`compare_light.png`

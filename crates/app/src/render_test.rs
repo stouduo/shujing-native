@@ -154,6 +154,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         confirm: None,
         snippets: vec![],
         settings_open: false,
+        theme_toggle_requested: false,
         session_dirty: false,
         last_session_save: None,
         session_restored: false,
@@ -731,31 +732,73 @@ fn render_er_diagram() {
             "products".into(),
         ];
         e.fks = vec![
-            FkMeta { table: "orders".into(), column: "user_id".into(), ref_table: "users".into(), ref_column: "id".into() },
-            FkMeta { table: "order_items".into(), column: "order_id".into(), ref_table: "orders".into(), ref_column: "id".into() },
-            FkMeta { table: "order_items".into(), column: "product_id".into(), ref_table: "products".into(), ref_column: "id".into() },
+            FkMeta {
+                table: "orders".into(),
+                column: "user_id".into(),
+                ref_table: "users".into(),
+                ref_column: "id".into(),
+            },
+            FkMeta {
+                table: "order_items".into(),
+                column: "order_id".into(),
+                ref_table: "orders".into(),
+                ref_column: "id".into(),
+            },
+            FkMeta {
+                table: "order_items".into(),
+                column: "product_id".into(),
+                ref_table: "products".into(),
+                ref_column: "id".into(),
+            },
         ];
         e.structures = std::collections::HashMap::from([
-            ("users".to_string(), shujing_core::TableStructure {
-                columns: vec![col("id", "PRI"), col("name", ""), col("email", ""), col("created", "")],
-                indexes: vec![],
-                ddl: String::new(),
-            }),
-            ("orders".to_string(), shujing_core::TableStructure {
-                columns: vec![col("id", "PRI"), col("user_id", ""), col("total", ""), col("status", "")],
-                indexes: vec![],
-                ddl: String::new(),
-            }),
-            ("order_items".to_string(), shujing_core::TableStructure {
-                columns: vec![col("id", "PRI"), col("order_id", ""), col("product_id", ""), col("qty", "")],
-                indexes: vec![],
-                ddl: String::new(),
-            }),
-            ("products".to_string(), shujing_core::TableStructure {
-                columns: vec![col("id", "PRI"), col("title", ""), col("price", "")],
-                indexes: vec![],
-                ddl: String::new(),
-            }),
+            (
+                "users".to_string(),
+                shujing_core::TableStructure {
+                    columns: vec![
+                        col("id", "PRI"),
+                        col("name", ""),
+                        col("email", ""),
+                        col("created", ""),
+                    ],
+                    indexes: vec![],
+                    ddl: String::new(),
+                },
+            ),
+            (
+                "orders".to_string(),
+                shujing_core::TableStructure {
+                    columns: vec![
+                        col("id", "PRI"),
+                        col("user_id", ""),
+                        col("total", ""),
+                        col("status", ""),
+                    ],
+                    indexes: vec![],
+                    ddl: String::new(),
+                },
+            ),
+            (
+                "order_items".to_string(),
+                shujing_core::TableStructure {
+                    columns: vec![
+                        col("id", "PRI"),
+                        col("order_id", ""),
+                        col("product_id", ""),
+                        col("qty", ""),
+                    ],
+                    indexes: vec![],
+                    ddl: String::new(),
+                },
+            ),
+            (
+                "products".to_string(),
+                shujing_core::TableStructure {
+                    columns: vec![col("id", "PRI"), col("title", ""), col("price", "")],
+                    indexes: vec![],
+                    ddl: String::new(),
+                },
+            ),
         ]);
     }
     let app = std::cell::RefCell::new(app);
@@ -764,7 +807,6 @@ fn render_er_diagram() {
         draw_app(&mut b, ctx);
     });
 }
-
 
 #[test]
 fn render_filter_bar() {
@@ -782,6 +824,43 @@ fn render_filter_bar() {
         let mut b = app.borrow_mut();
         draw_app(&mut b, ctx);
     });
+}
+
+#[test]
+fn close_tab_keeps_active_tab() {
+    let mut app = test_app(
+        vec![
+            stub_tab("a", "ads_report_youni"),
+            stub_tab("b", "campaign_report"),
+            stub_tab("c", "backend_role_privilege"),
+        ],
+        2,
+    );
+    let active_id = app.tabs[app.active_tab].id.clone();
+    app.close_tab(0);
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(app.tabs[app.active_tab].id, active_id);
+}
+
+#[test]
+fn deleted_badge_is_inverted() {
+    use crate::table_view::badge_value;
+    assert_eq!(
+        badge_value("deleted", &Some("1".into())),
+        Some(("1".to_string(), false))
+    );
+    assert_eq!(
+        badge_value("deleted", &Some("0".into())),
+        Some(("0".to_string(), true))
+    );
+    assert_eq!(
+        badge_value("status", &Some("2".into())),
+        Some(("2".to_string(), false))
+    );
+    assert_eq!(
+        badge_value("status", &Some("1".into())),
+        Some(("1".to_string(), true))
+    );
 }
 
 #[test]
@@ -816,11 +895,7 @@ fn session_save_restore_roundtrip() {
     });
     app.tabs.push(stub_tab("role", "backend_role_privilege"));
     app.active_tab = 1;
-    app
-        .trees
-        .entry("c1".to_string())
-        .or_default()
-        .online = true;
+    app.trees.entry("c1".to_string()).or_default().online = true;
     app.save_session();
     assert!(dir.join("session.json").exists());
 
@@ -884,19 +959,17 @@ fn data_grid_hscroll_works() {
         .events
         .push(egui::Event::PointerMoved(center));
     harness.step();
-    harness
-        .input_mut()
-        .events
-        .push(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(-400.0, 0.0),
-            modifiers: Default::default(),
-        });
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-400.0, 0.0),
+        modifiers: Default::default(),
+    });
     harness.step();
     harness.step();
     let after = harness.render().expect("render after");
     assert_ne!(
-        before.into_raw(), after.into_raw(),
+        before.into_raw(),
+        after.into_raw(),
         "横向滚轮后画面应发生变化(能左右滚动)"
     );
 
@@ -951,7 +1024,8 @@ fn data_grid_hscroll_works() {
     harness.step();
     let after2 = harness.render().expect("render after drag");
     assert_ne!(
-        before2.into_raw(), after2.into_raw(),
+        before2.into_raw(),
+        after2.into_raw(),
         "按住拖动后画面应平移(能左右滑动)"
     );
 }

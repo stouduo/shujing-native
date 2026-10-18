@@ -7,8 +7,19 @@ use egui::{Align, Color32, Layout, RichText, Sense};
 
 /// 常用类型(与 dbclient typeOptions 一致)
 const TYPE_OPTIONS: &[&str] = &[
-    "INTEGER", "BIGINT", "TEXT", "VARCHAR", "REAL", "DOUBLE", "DECIMAL", "BOOLEAN", "DATE",
-    "DATETIME", "TIMESTAMP", "BLOB", "JSON",
+    "INTEGER",
+    "BIGINT",
+    "TEXT",
+    "VARCHAR",
+    "REAL",
+    "DOUBLE",
+    "DECIMAL",
+    "BOOLEAN",
+    "DATE",
+    "DATETIME",
+    "TIMESTAMP",
+    "BLOB",
+    "JSON",
 ];
 
 pub fn draw_designer_view(
@@ -38,9 +49,11 @@ pub fn draw_designer_view(
                 } else {
                     ("新建表", p.green, theme::tint(p.green, 30))
                 };
-                let badge_g = ui
-                    .painter()
-                    .layout_no_wrap(label.to_string(), theme::bold(11.0), Color32::PLACEHOLDER);
+                let badge_g = ui.painter().layout_no_wrap(
+                    label.to_string(),
+                    theme::bold(11.0),
+                    Color32::PLACEHOLDER,
+                );
                 let badge_rect = egui::Rect::from_center_size(
                     ui.cursor().left_center() + egui::vec2(badge_g.size().x / 2.0 + 10.0, 0.0),
                     egui::vec2(badge_g.size().x + 20.0, 20.0),
@@ -154,7 +167,8 @@ pub fn draw_designer_view(
                         egui::FontId::proportional(12.0),
                         p.text2,
                     );
-                    let add_resp = ui.interact(add_rect, egui::Id::new("designer-add"), Sense::click());
+                    let add_resp =
+                        ui.interact(add_rect, egui::Id::new("designer-add"), Sense::click());
                     if add_resp.hovered() {
                         ui.painter().rect_stroke(
                             add_rect,
@@ -167,7 +181,11 @@ pub fn draw_designer_view(
                         d.columns.push(DesignerColumn {
                             name: String::new(),
                             data_type: "VARCHAR".into(),
-                            length: if is_mysql(ctx) { "255".into() } else { String::new() },
+                            length: if is_mysql(ctx) {
+                                "255".into()
+                            } else {
+                                String::new()
+                            },
                             nullable: true,
                             ..Default::default()
                         });
@@ -211,24 +229,29 @@ fn section_label(ui: &mut egui::Ui, label: &str) {
 fn draw_grid_header(ui: &mut egui::Ui, _is_edit: bool) {
     let p = theme::c();
     let widths = col_widths(ui);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        for (h, w) in [
-            ("字段名", widths.0),
-            ("类型", widths.1),
-            ("长度", widths.2),
-            ("NOT NULL", widths.3),
-            ("PK", widths.4),
-            ("自增", widths.5),
-            ("默认值", widths.6),
-            ("注释", widths.7),
-        ] {
-            ui.add_sized(
-                [w, 20.0],
-                egui::Label::new(RichText::new(h).size(11.0).color(p.muted)),
-            );
-        }
-    });
+    let xs = col_x(&widths);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), Sense::hover());
+    for (i, h) in [
+        "字段名",
+        "类型",
+        "长度",
+        "NOT NULL",
+        "PK",
+        "自增",
+        "默认值",
+        "注释",
+    ]
+    .iter()
+    .enumerate()
+    {
+        ui.painter().text(
+            egui::pos2(rect.left() + xs[i], rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            h,
+            egui::FontId::proportional(11.0),
+            p.muted,
+        );
+    }
     theme::hairline_bottom(ui);
     ui.add_space(3.0);
 }
@@ -237,15 +260,16 @@ fn draw_column_row(ui: &mut egui::Ui, d: &mut DesignerTab, i: usize, is_edit: bo
     let p = theme::c();
     let widths = col_widths(ui);
     let row_h = 30.0;
-    let (row_rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), row_h),
-        Sense::hover(),
-    );
+    let (row_rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), row_h), Sense::hover());
     let lock_existing = is_edit && d.columns[i].existing;
     if lock_existing {
         // 已有列轻微压暗,提示不可删/不可改名
-        ui.painter()
-            .rect_filled(row_rect, egui::CornerRadius::same(6), theme::tint(p.panel, 60));
+        ui.painter().rect_filled(
+            row_rect,
+            egui::CornerRadius::same(6),
+            theme::tint(p.panel, 60),
+        );
     } else if ui.rect_contains_pointer(row_rect) {
         ui.painter()
             .rect_filled(row_rect, egui::CornerRadius::same(6), p.row_hover);
@@ -271,25 +295,56 @@ fn draw_column_row(ui: &mut egui::Ui, d: &mut DesignerTab, i: usize, is_edit: bo
             egui::pos2(row_rect.left() + widths.0 + 6.0, top),
             egui::vec2(widths.1, row_h),
         )));
-        tiny_field(&mut f, &mut c.data_type, "type", !(lock_existing && sqlite), p.text2);
+        tiny_field(
+            &mut f,
+            &mut c.data_type,
+            "type",
+            !(lock_existing && sqlite),
+            p.text2,
+        );
         let mut f = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
             egui::pos2(row_rect.left() + widths.0 + widths.1 + 12.0, top),
             egui::vec2(widths.2, row_h),
         )));
-        tiny_field(&mut f, &mut c.length, "len", !(lock_existing && sqlite), p.text2);
+        tiny_field(
+            &mut f,
+            &mut c.length,
+            "len",
+            !(lock_existing && sqlite),
+            p.text2,
+        );
         // NOT NULL / PK / 自增 复选框
-        let mut bx = |ui: &mut egui::Ui, x: f32, w: f32, checked: bool, enabled: bool| -> Option<bool> {
-            let mut v = checked;
-            let r = egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(w, row_h));
-            let mut b = ui.new_child(egui::UiBuilder::new().max_rect(r));
-            b.add_enabled(enabled, egui::Checkbox::new(&mut v, ""));
-            (enabled && v != checked).then_some(v)
-        };
+        let mut bx =
+            |ui: &mut egui::Ui, x: f32, w: f32, checked: bool, enabled: bool| -> Option<bool> {
+                let mut v = checked;
+                let r = egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(w, row_h));
+                let mut b = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(r)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                let _ = b.add_enabled_ui(enabled, |ui| {
+                    crate::theme::checkbox(ui, &mut v, "");
+                });
+                (enabled && v != checked).then_some(v)
+            };
         let left0 = row_rect.left() + widths.0 + widths.1 + widths.2 + 18.0;
-        if let Some(v) = bx(&mut ui, left0, widths.3, !c.nullable, !(lock_existing && sqlite)) {
+        if let Some(v) = bx(
+            &mut ui,
+            left0,
+            widths.3,
+            !c.nullable,
+            !(lock_existing && sqlite),
+        ) {
             c.nullable = !v;
         }
-        if let Some(v) = bx(&mut ui, left0 + widths.3 + 6.0, widths.4, c.pk, !lock_existing) {
+        if let Some(v) = bx(
+            &mut ui,
+            left0 + widths.3 + 6.0,
+            widths.4,
+            c.pk,
+            !lock_existing,
+        ) {
             c.pk = v;
         }
         if let Some(v) = bx(
@@ -306,7 +361,13 @@ fn draw_column_row(ui: &mut egui::Ui, d: &mut DesignerTab, i: usize, is_edit: bo
             egui::pos2(dx, top),
             egui::vec2(widths.6, row_h),
         )));
-        tiny_field(&mut f, &mut c.default, "default", !(lock_existing && sqlite), p.text2);
+        tiny_field(
+            &mut f,
+            &mut c.default,
+            "default",
+            !(lock_existing && sqlite),
+            p.text2,
+        );
         let mut f = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
             egui::pos2(dx + widths.6 + 6.0, top),
             egui::vec2(widths.7, row_h),
@@ -360,7 +421,11 @@ fn tiny_field(ui: &mut egui::Ui, val: &mut String, ph: &str, enabled: bool, colo
     ui.add_sized(
         [ui.available_width(), 24.0],
         egui::TextEdit::singleline(val)
-            .hint_text(RichText::new(ph).font(theme::mono(10.5)).color(p.muted.gamma_multiply(0.7)))
+            .hint_text(
+                RichText::new(ph)
+                    .font(theme::mono(10.5))
+                    .color(p.muted.gamma_multiply(0.7)),
+            )
             .font(theme::mono(11.5))
             .text_color(color)
             .interactive(enabled),
@@ -368,11 +433,28 @@ fn tiny_field(ui: &mut egui::Ui, val: &mut String, ph: &str, enabled: bool, colo
 }
 
 fn col_widths(ui: &egui::Ui) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
-    let total = ui.available_width().max(760.0) - 60.0;
-    // 名称/类型/长度/NOT NULL/PK/自增/默认/注释
+    // 名称/类型/长度/NOT NULL/PK/自增/默认/注释;把间距与删除按钮的真实宽度预留出来,
+    // 否则窄窗口下最后一列的删除按钮会被挤出可视区。
+    let total = ui.available_width().max(800.0);
     let fixed = 170.0 + 130.0 + 56.0 + 58.0 + 40.0 + 46.0 + 110.0;
-    let comment = (total - fixed).max(80.0);
+    let gaps = 6.0 + 12.0 + 18.0 + 6.0 + 12.0 + 18.0 + 6.0 + 12.0;
+    let delete_w = 20.0;
+    let comment = (total - fixed - gaps - delete_w).max(80.0);
     (170.0, 130.0, 56.0, 58.0, 40.0, 46.0, 110.0, comment)
+}
+
+/// 与 draw_column_row 完全一致的列 x 偏移(表头必须共用,否则列头错位)
+fn col_x(w: &(f32, f32, f32, f32, f32, f32, f32, f32)) -> [f32; 9] {
+    let x0 = 0.0;
+    let x1 = x0 + w.0 + 6.0;
+    let x2 = x1 + w.1 + 12.0;
+    let x3 = x2 + w.2 + 18.0;
+    let x4 = x3 + w.3 + 6.0;
+    let x5 = x4 + w.4 + 12.0;
+    let x6 = x5 + w.5 + 18.0;
+    let x7 = x6 + w.6 + 6.0;
+    let x8 = x7 + w.7 + 12.0;
+    [x0, x1, x2, x3, x4, x5, x6, x7, x8]
 }
 
 fn is_mysql(ctx: &egui::Context) -> bool {
@@ -380,7 +462,10 @@ fn is_mysql(ctx: &egui::Context) -> bool {
 }
 
 fn is_sqlite(ctx: &egui::Context) -> bool {
-    ctx.data_mut(|d| d.get_temp::<bool>("designer-sqlite".into()).unwrap_or(false))
+    ctx.data_mut(|d| {
+        d.get_temp::<bool>("designer-sqlite".into())
+            .unwrap_or(false)
+    })
 }
 
 /// 设计器将要执行的 SQL(与保存共用一份)
@@ -389,7 +474,8 @@ fn preview_sql(ctx: &egui::Context, d: &DesignerTab) -> String {
         m.get_temp::<shujing_core::DbType>("designer-dbtype".into())
             .unwrap_or(shujing_core::DbType::MySql)
     });
-    let out = shujing_core::designer::designer_sql(db_type, d.is_create(), &d.table_name, &d.columns);
+    let out =
+        shujing_core::designer::designer_sql(db_type, d.is_create(), &d.table_name, &d.columns);
     let mut parts: Vec<String> = Vec::new();
     if let Some(create) = &out.create {
         parts.push(create.clone());
