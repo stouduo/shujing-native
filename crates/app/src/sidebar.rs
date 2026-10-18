@@ -98,15 +98,14 @@ impl ShujingApp {
                 });
             },
         );
-        theme::hairline_bottom(ui);
-        ui.add_space(8.0);
+        ui.add_space(5.0);
 
         // 表搜索(原型常驻)
         theme::search_box(ui, "side-table-search", &mut self.table_filter, "搜索表", w);
-        ui.add_space(14.0);
+        ui.add_space(10.0);
 
         // 底部栏(版本+主题)固定高度,滚动区让出空间
-        let bottom_bar_h = 34.0;
+        let bottom_bar_h = 30.0;
         egui::ScrollArea::vertical()
             .id_salt("sidebar-scroll")
             .auto_shrink([false, false])
@@ -130,9 +129,7 @@ impl ShujingApp {
             });
 
         // 底部栏:版本号 + 黑白主题切换
-        ui.add_space(6.0);
-        theme::hairline_top(ui);
-        ui.add_space(6.0);
+        ui.add_space(3.0);
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
@@ -228,11 +225,7 @@ impl ShujingApp {
             egui::vec2(name_galley.size().x + 12.0, rect.height()),
         );
         let name_resp = ui.allocate_rect(name_rect, Sense::click());
-        let tip = if online {
-            "已连接"
-        } else {
-            "点击连接"
-        };
+        let tip = if online { "已连接" } else { "点击连接" };
         name_resp.clone().on_hover_text(tip);
         // 只有离线时点击才连接;在线时点击不做任何事(防止误触断开)
         if name_resp.clicked() && !online {

@@ -478,6 +478,19 @@ fn render_data_table() {
 }
 
 #[test]
+fn render_data_table_narrow() {
+    // 窄视口 + 长 access_urls:验证表格整体溢出时底部出现横向滚动条
+    let tab = role_tab();
+    let cell = std::cell::RefCell::new(Some(tab));
+    let conns: Vec<shujing_core::ConnInfo> = vec![];
+    render("data_table_narrow", 760.0, 700.0, true, move |ctx| {
+        let mut b = cell.borrow_mut();
+        let tab = b.as_mut().unwrap();
+        let _ = table_view::draw_table_view(ctx, "t1", tab, &conns);
+    });
+}
+
+#[test]
 fn render_row_detail() {
     let mut tab = role_tab();
     tab.detail = true;
@@ -918,6 +931,63 @@ fn session_save_restore_roundtrip() {
 }
 
 #[test]
+fn tabbar_wheel_ignored_when_pointer_over_table() {
+    // 标签栏的“滚轮横滚”只能在指针位于标签栏时生效;
+    // 否则滚表格时标签栏也会跟着横移(用户反馈的问题)。
+    let mut app = full_app("role");
+    for i in 0..8 {
+        app.tabs.push(stub_tab(
+            &format!("辅助表 {i}"),
+            &format!("extra_table_{i}"),
+        ));
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let before = harness.render().expect("render before");
+    let width = before.width() as usize;
+    let top_len = (crate::theme::TABBAR_H * 2.0) as usize * width * 4;
+    let before_top = before.as_raw()[..top_len].to_vec();
+
+    // 指针放到表格内容上,注入纵向滚轮(标签栏不应响应)
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(600.0, 380.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -400.0),
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    let after = harness.render().expect("render after");
+    assert_eq!(
+        before_top,
+        &after.as_raw()[..top_len],
+        "滚动表格时标签栏不应跟着横移"
+    );
+}
+
+#[test]
 fn data_grid_hscroll_works() {
     // 宽表:每个格塞长内容,总宽远超视口
     let mut app = full_app("role");
@@ -1036,14 +1106,11 @@ fn data_grid_hscroll_works() {
         .events
         .push(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
     harness.step();
-    harness
-        .input_mut()
-        .events
-        .push(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(-300.0, 90.0),
-            modifiers: Default::default(),
-        });
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-300.0, 90.0),
+        modifiers: Default::default(),
+    });
     harness.step();
     harness.step();
     let x_after_combined = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);

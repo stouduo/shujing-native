@@ -235,10 +235,13 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 .auto_shrink([false, true])
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
-                    // 鼠标滚轮在标签栏上 = 横向滚动
-                    let wheel_y = ui.input(|i| i.smooth_scroll_delta.y);
-                    if wheel_y.abs() > 0.1 {
-                        ui.scroll_with_delta(egui::vec2(wheel_y, 0.0));
+                    // 鼠标滚轮在标签栏上 = 横向滚动;必须判断指针是否真的在标签栏内,
+                    // 否则滚表格时标签栏也会跟着横滚。
+                    if ui.rect_contains_pointer(ui.max_rect()) {
+                        let wheel_y = ui.input(|i| i.smooth_scroll_delta.y);
+                        if wheel_y.abs() > 0.1 {
+                            ui.scroll_with_delta(egui::vec2(wheel_y, 0.0));
+                        }
                     }
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
@@ -309,22 +312,28 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                         ui.add_space(4.0);
                         // 全部标签(溢出时可下拉直达)
                         if app.tabs.len() > 4 {
-                            ui.menu_button(RichText::new("▾ 全部标签").size(11.0).color(p.text2), |ui| {
-                                ui.set_min_width(220.0);
-                                for (i, t) in app.tabs.iter().enumerate() {
-                                    let sel = i == app.active_tab;
-                                    ui.horizontal(|ui| {
-                                        let lbl = ui.selectable_label(
-                                            sel,
-                                            RichText::new(&t.title).size(12.0).color(if sel { p.text } else { p.text2 }),
-                                        );
-                                        if lbl.clicked() {
-                                            activate = Some(i);
-                                            ui.close_menu();
-                                        }
-                                    });
-                                }
-                            });
+                            ui.menu_button(
+                                RichText::new("▾ 全部标签").size(11.0).color(p.text2),
+                                |ui| {
+                                    ui.set_min_width(220.0);
+                                    for (i, t) in app.tabs.iter().enumerate() {
+                                        let sel = i == app.active_tab;
+                                        ui.horizontal(|ui| {
+                                            let lbl =
+                                                ui.selectable_label(
+                                                    sel,
+                                                    RichText::new(&t.title)
+                                                        .size(12.0)
+                                                        .color(if sel { p.text } else { p.text2 }),
+                                                );
+                                            if lbl.clicked() {
+                                                activate = Some(i);
+                                                ui.close_menu();
+                                            }
+                                        });
+                                    }
+                                },
+                            );
                             ui.add_space(2.0);
                         }
                         let (rect, resp) = ui.allocate_exact_size(
@@ -1244,16 +1253,22 @@ pub(crate) fn draw_table_view(
                 let col_widths = fitted_widths(&vis_rows, &vis_cols, ui.available_width());
                 let desired_w =
                     if tab.show_rowno { 48.0 } else { 0.0 } + col_widths.iter().sum::<f32>();
+                // 注意:必须在外层 ui 上设置,ScrollArea 自己的滚动条不会读取闭包内 ui 的 spacing。
+                // 主题默认是 floating + dormant 全透明,不显式改就会“看不见横向滚动条”。
+                ui.spacing_mut().scroll.floating = false;
+                // 常驻、足够显眼:用户反馈“表格没有横向滚动条”,不能再用静止透明样式
+                ui.spacing_mut().scroll.dormant_handle_opacity = 0.9;
+                ui.spacing_mut().scroll.dormant_background_opacity = 0.15;
+                ui.spacing_mut().scroll.interact_handle_opacity = 1.0;
+                ui.spacing_mut().scroll.active_handle_opacity = 1.0;
+                ui.spacing_mut().scroll.bar_width = 12.0;
+                ui.spacing_mut().scroll.bar_inner_margin = 2.0;
                 let hout = egui::ScrollArea::horizontal()
                     .id_salt(format!("data-hscroll-{tab_id_s}"))
                     .auto_shrink([false, false])
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+                    // 常驻横向滚动条:即便没有溢出也显示,用户能明确知道表格可横向滚动
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
-                        // 数据网格用实体常驻滚动条:主题默认是悬浮+静止全透明,等于不可发现
-                        ui.spacing_mut().scroll.floating = false;
-                        ui.spacing_mut().scroll.dormant_handle_opacity = 0.4;
-                        ui.spacing_mut().scroll.bar_width = 10.0;
-                        ui.spacing_mut().scroll.bar_inner_margin = 3.0;
                         ui.set_min_width(ui.available_width().max(desired_w));
                         // 拖拽平移:按住网格区域左右拖 = 横向滚动(非编辑态)
                         if editing.is_none() {
@@ -1301,7 +1316,10 @@ pub(crate) fn draw_table_view(
                             actions.push(a);
                         }
                     });
-                    LAST_HSCROLL_X.store(hout.state.offset.x as i32, std::sync::atomic::Ordering::Relaxed);
+                LAST_HSCROLL_X.store(
+                    hout.state.offset.x as i32,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
             // 列头右键动作落地
             if let Some((c2, asc)) = col_set_sort {
@@ -1522,7 +1540,7 @@ pub(crate) fn suggested_widths(rows: &[Vec<Option<String>>], columns: &[String])
                 .filter_map(|r| r.get(i).and_then(|v| v.as_deref()))
                 .map(text_width)
                 .fold(0.0_f32, f32::max);
-            (head.max(data) + 26.0).clamp(72.0, 380.0)
+            (head.max(data) + 26.0).clamp(72.0, 720.0)
         })
         .collect()
 }
@@ -1541,7 +1559,7 @@ pub(crate) fn fitted_widths(
     let total = 48.0 + sum;
     if available > total + 1.0 {
         let scale = (available - 48.0) / sum;
-        base.iter().map(|w| (w * scale).min(620.0)).collect()
+        base.iter().map(|w| (w * scale).min(720.0)).collect()
     } else {
         base
     }
@@ -1549,7 +1567,7 @@ pub(crate) fn fitted_widths(
 
 fn text_width(s: &str) -> f32 {
     s.chars()
-        .take(64)
+        .take(160)
         .map(|c| {
             if c.is_ascii() && !c.is_ascii_control() {
                 7.2
@@ -1608,17 +1626,14 @@ fn draw_data_table(
     } else {
         builder
     };
+    // 所有真实列都按内容宽度布局,末尾再补一个 remainder 占位列:
+    // 内容窄时占位列把右侧铺满;内容宽时占位列收缩为 0,表格整体溢出并出现横向滚动条。
     for (i, _c) in columns.iter().enumerate() {
-        tb = tb.column(if i + 1 == columns.len() {
-            Column::remainder().clip(true)
-        } else {
-            Column::auto_with_initial_suggestion(col_widths[i])
-                .at_least(64.0)
-                .at_most(380.0)
-                .resizable(true)
-                .clip(true)
-        });
+        // 用 exact 固定内容宽度;auto 列会被 TableBuilder 压缩到视口内,永远不会溢出,
+        // 横向滚动条也就不会出现。末尾 remainder 列负责在窄表时把右侧铺满。
+        tb = tb.column(Column::exact(col_widths[i]).resizable(true).clip(true));
     }
+    tb = tb.column(Column::remainder().at_least(0.0));
     tb.header(theme::HEADER_H, |mut header| {
         if show_rowno {
             header.col(|ui| {
@@ -1767,6 +1782,12 @@ fn draw_data_table(
                 header_bottom_line(ui);
             });
         }
+        // 末尾占位列表头:保持表头背景和底边线连续
+        header.col(|ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0, p.panel);
+            header_bottom_line(ui);
+        });
     })
     .body(|body| {
         // 行悬停:由行号列的 y 波段判定,整行单元格共享
@@ -1887,6 +1908,19 @@ fn draw_data_table(
                     });
                 }
             }
+            // 末尾占位列:延续行背景/悬停/选中和行线
+            row.col(|ui| {
+                let rect = ui.max_rect();
+                if row_selected {
+                    ui.painter().rect_filled(rect, 0, p.selected_row);
+                } else if hovered {
+                    ui.painter().rect_filled(rect, 0, p.row_hover);
+                }
+                row_bottom_line(ui);
+                if ui.allocate_rect(rect, Sense::click()).clicked() {
+                    *new_selection = Some(Some((ri, 0)));
+                }
+            });
             let _ = is_editing_row;
         });
     });

@@ -26,11 +26,16 @@ fn main() {
         ensure_installed_from_dmg();
         force_appearance(true);
     }
+    // 不设置时 eframe 会使用默认的 egui “e” 图标(就是 Dock 里看到的那个)
+    let app_icon =
+        eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/AppIcon-128.png"))
+            .expect("加载应用图标失败");
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1360.0, 860.0])
             .with_min_inner_size([1024.0, 640.0])
-            .with_title("数镜"),
+            .with_title("数镜")
+            .with_icon(std::sync::Arc::new(app_icon)),
         ..Default::default()
     };
     eframe::run_native(
