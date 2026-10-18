@@ -704,3 +704,71 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
         app.global_search = None;
     }
 }
+
+
+/// 危险操作确认弹窗(重命名/清空/删除表/复制表)
+pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.confirm.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut cancel = false;
+    let mut proceed = false;
+    let modal = egui::Modal::new(egui::Id::new("confirm-modal"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(420.0);
+            let c = app.confirm.as_ref().unwrap();
+            theme::modal_title(ui, &c.title);
+            ui.spacing_mut().item_spacing.y = 10.0;
+            ui.label(RichText::new(&c.message).size(12.5).color(p.text));
+            let need_input = c.expect.is_some();
+            let c = app.confirm.as_mut().unwrap();
+            if need_input {
+                ui.add_space(2.0);
+                let resp = ui.add_sized(
+                    [420.0, 28.0],
+                    egui::TextEdit::singleline(&mut c.input)
+                        .hint_text(RichText::new("输入名称以确认").size(12.0).color(p.muted))
+                        .font(theme::mono(12.5)),
+                );
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    proceed = true;
+                }
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, "确认", theme::BtnKind::Primary).clicked() {
+                    proceed = true;
+                }
+                ui.add_space(6.0);
+                if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                    cancel = true;
+                }
+            });
+        });
+    if proceed {
+        let c = app.confirm.as_ref().unwrap();
+        let ok = match &c.expect {
+            Some(expect) => c.input.trim() == expect.as_str(),
+            None => true,
+        };
+        if ok {
+            let conn_id = c.conn_id.clone();
+            let sql = c.resolved_sql();
+            app.confirm = None;
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            net::spawn(async move {
+                let result = service
+                    .run_sql(&conn_id, sql, Some(1))
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e);
+                let _ = tx.send(BgEvent::DdlDone { result });
+            });
+        }
+    } else if cancel || modal.should_close() {
+        app.confirm = None;
+    }
+}

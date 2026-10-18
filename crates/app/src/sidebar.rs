@@ -575,6 +575,42 @@ impl ShujingApp {
                     .copy_text(format!("SELECT * FROM {ident} LIMIT 100;"));
                 ui.close_menu();
             }
+            if ui.button("插入表名到查询").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "insname".to_string()));
+                ui.close_menu();
+            }
+            if ui.button("导出 SQL(结构+数据)").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "exportsql".to_string()));
+                ui.close_menu();
+            }
+            if ui.button("复制表为…").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "copytable".to_string()));
+                ui.close_menu();
+            }
+            if ui.button("维护:更新统计 (ANALYZE)").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "analyze".to_string()));
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("重命名…").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "rename".to_string()));
+                ui.close_menu();
+            }
+            if ui.button("清空表数据…").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "truncate".to_string()));
+                ui.close_menu();
+            }
+            if ui.button("删除表…").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "drop".to_string()));
+                ui.close_menu();
+            }
         });
         if resp.clicked() {
             self.open_table(conn_id, name, Some(db.to_string()));
@@ -589,6 +625,76 @@ impl ShujingApp {
                 "struct" => self.open_structure(conn_id, name, Some(db.to_string())),
                 "design" => self.open_designer(conn_id, Some(name), Some(db.to_string())),
                 "query" => self.open_query_tab(Some(conn_id.to_string())),
+                "insname" => self.insert_name_to_query(conn_id, name),
+                "exportsql" => self.export_table_sql(conn_id, db, name),
+                "copytable" => {
+                    let mysql = crate::app::mysql_quote(&self.conns, conn_id);
+                    let ident = crate::app::quote_ident_by(name, mysql);
+                    self.open_confirm(
+                        conn_id,
+                        "复制表",
+                        &format!("把表 {name} 复制为新表(结构+数据)。输入新表名:"),
+                        None,
+                        format!("CREATE TABLE {{v}} AS SELECT * FROM {ident};"),
+                    );
+                }
+                "analyze" => {
+                    let mysql = crate::app::mysql_quote(&self.conns, conn_id);
+                    let ident = crate::app::quote_ident_by(name, mysql);
+                    self.open_confirm(
+                        conn_id,
+                        "更新统计信息",
+                        &format!("对表 {name} 执行 ANALYZE 更新优化器统计?"),
+                        None,
+                        format!("ANALYZE {ident};"),
+                    );
+                }
+                "rename" => {
+                    let mysql = crate::app::mysql_quote(&self.conns, conn_id);
+                    let ident = crate::app::quote_ident_by(name, mysql);
+                    let sql = if mysql {
+                        format!("RENAME TABLE {ident} TO {{v}};")
+                    } else {
+                        format!("ALTER TABLE {ident} RENAME TO {{v}};")
+                    };
+                    self.open_confirm(
+                        conn_id,
+                        "重命名表",
+                        &format!("把表 {name} 重命名为(输入新表名):"),
+                        None,
+                        sql,
+                    );
+                }
+                "truncate" => {
+                    let mysql = crate::app::mysql_quote(&self.conns, conn_id);
+                    let ident = crate::app::quote_ident_by(name, mysql);
+                    let sql = if mysql {
+                        format!("TRUNCATE TABLE {ident};")
+                    } else {
+                        format!("DELETE FROM {ident};")
+                    };
+                    self.open_confirm(
+                        conn_id,
+                        "清空表数据",
+                        &format!(
+                            "确认清空表 {name} 的全部数据?{}",
+                            if mysql { "" } else { "(SQLite 用 DELETE 逐行清空)" }
+                        ),
+                        None,
+                        sql,
+                    );
+                }
+                "drop" => {
+                    let mysql = crate::app::mysql_quote(&self.conns, conn_id);
+                    let ident = crate::app::quote_ident_by(name, mysql);
+                    self.open_confirm(
+                        conn_id,
+                        "删除表",
+                        &format!("即将删除表 {name} 及其全部数据,不可恢复!\n输入表名以确认:"),
+                        Some(name.to_string()),
+                        format!("DROP TABLE {ident};"),
+                    );
+                }
                 _ => {}
             }
         }

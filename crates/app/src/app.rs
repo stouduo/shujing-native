@@ -248,6 +248,23 @@ pub struct OptimizeState {
     pub error: Option<String>,
 }
 
+/// 危险操作确认弹窗(sql 中 {v} 会被替换为用户输入)
+pub struct ConfirmState {
+    pub title: String,
+    pub message: String,
+    /// 需要输入完全匹配才能确认(删除表=表名)
+    pub expect: Option<String>,
+    pub input: String,
+    pub conn_id: String,
+    pub sql: String,
+}
+
+impl ConfirmState {
+    pub fn resolved_sql(&self) -> String {
+        self.sql.replace("{v}", self.input.trim())
+    }
+}
+
 /// 全局数据搜索(⌘⇧F)
 pub struct GlobalSearchState {
     pub conn_id: String,
@@ -475,6 +492,7 @@ pub struct ShujingApp {
     pub import: Option<ImportState>,
     pub new_table: Option<NewTableState>,
     pub global_search: Option<GlobalSearchState>,
+    pub confirm: Option<ConfirmState>,
 }
 
 pub enum PendingAction {
@@ -532,6 +550,7 @@ impl ShujingApp {
             import: None,
             new_table: None,
             global_search: None,
+            confirm: None,
             dark_mode: dark,
             auto_connect_done: false,
             shot: std::env::var("SHUJING_SCREENSHOT")
@@ -1343,6 +1362,79 @@ impl ShujingApp {
                 }]
             });
             let _ = tx.send(BgEvent::QueryDone { tab_id, result });
+        });
+    }
+
+    /// 把表名插入到该连接的查询标签(没有则新建)
+    pub fn insert_name_to_query(&mut self, conn_id: &str, name: &str) {
+        let mysql = mysql_quote(self.conns.as_slice(), conn_id);
+        let ident = quote_ident_by(name, mysql);
+        // 已有该连接的查询标签就用它
+        let existing = self.tabs.iter().position(|t| {
+            matches!(&t.kind, TabKind::Query(q) if q.conn_id == conn_id)
+        });
+        let idx = match existing {
+            Some(i) => {
+                self.active_tab = i;
+                i
+            }
+            None => {
+                self.open_query_tab(Some(conn_id.to_string()));
+                self.tabs.len() - 1
+            }
+        };
+        if let Some(t) = self.tabs.get_mut(idx) {
+            if let TabKind::Query(q) = &mut t.kind {
+                if !q.sql.trim().is_empty() {
+                    q.sql.push(' ');
+                }
+                q.sql.push_str(&ident);
+            }
+        }
+    }
+
+    /// 侧栏触发的单表 SQL 导出(结构与数据)
+    pub fn export_table_sql(&mut self, conn_id: &str, _db: &str, table: &str) {
+        let default_name = format!("{table}_schema.sql");
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("SQL", &["sql"])
+            .save_file()
+        else {
+            return;
+        };
+        let conn_id = conn_id.to_string();
+        let table = table.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        crate::net::spawn(async move {
+            let result = service
+                .export_table_sql(&conn_id, &table, true)
+                .await
+                .and_then(|(sql, _)| {
+                    std::fs::write(&path, sql).map_err(|e| format!("写入失败: {e}"))
+                })
+                .map(|_| path.display().to_string());
+            let _ = tx.send(BgEvent::ExportDone { result });
+        });
+    }
+
+    /// 打开危险操作确认弹窗
+    pub fn open_confirm(
+        &mut self,
+        conn_id: &str,
+        title: &str,
+        message: &str,
+        expect: Option<String>,
+        sql: String,
+    ) {
+        self.confirm = Some(ConfirmState {
+            title: title.to_string(),
+            message: message.to_string(),
+            expect,
+            input: String::new(),
+            conn_id: conn_id.to_string(),
+            sql,
         });
     }
 
