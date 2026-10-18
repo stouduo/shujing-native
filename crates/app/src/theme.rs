@@ -142,6 +142,26 @@ pub static LIGHT: Palette = Palette {
 };
 
 static DARK_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static ACCENT_IDX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// 强调色板(与 dbclient 外观设置一致;index 0 = 默认)
+pub const ACCENTS: &[&str] = &["Indigo", "Violet", "Cyan", "Emerald", "Amber", "Rose"];
+const ACCENT_DARK: [Color32; 6] = [
+    Color32::from_rgb(0x8a, 0x8c, 0xfa),
+    Color32::from_rgb(0xA7, 0x8B, 0xFA),
+    Color32::from_rgb(0x4D, 0xD0, 0xE1),
+    Color32::from_rgb(0x4E, 0xC9, 0x8A),
+    Color32::from_rgb(0xEE, 0xC1, 0x7E),
+    Color32::from_rgb(0xF2, 0x77, 0x8C),
+];
+const ACCENT_LIGHT: [Color32; 6] = [
+    Color32::from_rgb(0x5E, 0x5F, 0xE0),
+    Color32::from_rgb(0x7C, 0x5C, 0xE0),
+    Color32::from_rgb(0x08, 0x91, 0xB2),
+    Color32::from_rgb(0x16, 0x80, 0x3F),
+    Color32::from_rgb(0xB4, 0x5A, 0x09),
+    Color32::from_rgb(0xD8, 0x3B, 0x54),
+];
 
 pub fn set_dark(dark: bool) {
     DARK_MODE.store(dark, std::sync::atomic::Ordering::Relaxed);
@@ -151,13 +171,34 @@ pub fn is_dark() -> bool {
     DARK_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// 当前调色板(即时模式每帧读取,切换即时生效)
-pub fn c() -> &'static Palette {
-    if is_dark() {
-        &DARK
-    } else {
-        &LIGHT
+pub fn accent_color_dark(i: usize) -> Color32 {
+    ACCENT_DARK[i.min(ACCENT_DARK.len() - 1)]
+}
+
+pub fn accent_color_light(i: usize) -> Color32 {
+    ACCENT_LIGHT[i.min(ACCENT_LIGHT.len() - 1)]
+}
+
+pub fn set_accent(idx: usize) {
+    ACCENT_IDX.store(idx.min(ACCENTS.len() - 1), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn accent_idx() -> usize {
+    ACCENT_IDX.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 当前调色板(即时模式每帧读取,切换即时生效;按值返回以支持强调色替换)
+pub fn c() -> Palette {
+    let mut pal = if is_dark() { DARK } else { LIGHT };
+    let idx = ACCENT_IDX.load(std::sync::atomic::Ordering::Relaxed);
+    if idx > 0 {
+        pal.accent = if is_dark() {
+            ACCENT_DARK[idx.min(ACCENT_DARK.len() - 1)]
+        } else {
+            ACCENT_LIGHT[idx.min(ACCENT_LIGHT.len() - 1)]
+        };
     }
+    pal
 }
 
 /// 语义色淡底(徽章/选中);保持与原型一致的 16~20% 透明度
@@ -247,7 +288,7 @@ pub fn apply(ctx: &egui::Context) {
     style.spacing.button_padding = egui::vec2(10.0, 5.0);
     style.spacing.menu_margin = egui::Margin::symmetric(6, 5);
     style.spacing.interact_size.y = 26.0;
-    style.spacing.scroll = thin_scroll(p);
+    style.spacing.scroll = thin_scroll(&p);
     style.spacing.text_edit_width = 220.0;
 
     style.text_styles = [

@@ -11,6 +11,7 @@ pub fn draw_query_view(
     ctx: &egui::Context,
     tab_id: &str,
     q: &mut QueryTab,
+    snippets: &[String],
 ) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let p = theme::c();
@@ -102,6 +103,49 @@ pub fn draw_query_view(
                             tab_id: tab_id.to_string(),
                         });
                     }
+                    if !is_redis
+                        && theme::button(ui, "格式化", theme::BtnKind::Secondary)
+                            .on_hover_text("美化 SQL(关键字大写+换行缩进)")
+                            .clicked()
+                        && !q.sql.trim().is_empty()
+                    {
+                        q.sql = shujing_core::sql_format::format_sql(&q.sql);
+                    }
+                    ui.menu_button(RichText::new("片段").size(12.5).color(p.text2), |ui| {
+                            ui.set_min_width(300.0);
+                            if !is_redis && !q.sql.trim().is_empty() {
+                                if ui.button("☆ 保存当前 SQL 为片段").clicked() {
+                                    actions.push(TabAction::SnippetSave {
+                                        sql: q.sql.clone(),
+                                    });
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                            }
+                            if snippets.is_empty() {
+                                ui.label(RichText::new("暂无片段").size(12.0).color(p.muted));
+                            }
+                            for (i, snip) in snippets.iter().enumerate() {
+                                let preview: String = snip.chars().take(56).collect();
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .button(RichText::new(preview).font(theme::mono(11.5)))
+                                        .on_hover_text(snip)
+                                        .clicked()
+                                    {
+                                        if !q.sql.trim().is_empty() {
+                                            q.sql.push('\n');
+                                        }
+                                        q.sql.push_str(snip);
+                                        ui.close_menu();
+                                    }
+                                    if ui.small_button(RichText::new("删").size(10.0)).clicked() {
+                                        actions.push(TabAction::SnippetDelete { idx: i });
+                                        ui.close_menu();
+                                    }
+                                });
+                            }
+                        });
                     if !is_redis
                         && theme::button(ui, "计划", theme::BtnKind::Secondary)
                             .on_hover_text("EXPLAIN 执行计划(结果进结果区,不进历史)")

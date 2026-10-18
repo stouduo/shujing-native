@@ -889,3 +889,74 @@ pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         }
     }
 }
+
+
+/// 外观设置弹窗(强调色)
+pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if !app.settings_open {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::new("settings-modal"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(360.0);
+            theme::modal_title(ui, "外观设置");
+            ui.spacing_mut().item_spacing.y = 10.0;
+            ui.label(RichText::new("强调色").size(11.0).color(p.muted));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                for (i, name) in theme::ACCENTS.iter().enumerate() {
+                    let sw = egui::Rect::from_center_size(
+                        egui::pos2(ui.cursor().left() + 13.0, ui.cursor().center().y),
+                        egui::vec2(26.0, 26.0),
+                    );
+                    let _ = ui.allocate_space(egui::vec2(26.0, 26.0));
+                    let resp =
+                        ui.interact(sw, egui::Id::new(("accent", i)), Sense::click());
+                    let c2 = if theme::is_dark() {
+                        theme::accent_color_dark(i)
+                    } else {
+                        theme::accent_color_light(i)
+                    };
+                    ui.painter().rect_filled(sw, egui::CornerRadius::same(13), c2);
+                    if theme::accent_idx() == i {
+                        ui.painter().rect_stroke(
+                            sw.expand(2.0),
+                            egui::CornerRadius::same(15),
+                            egui::Stroke::new(1.5, p.text),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    resp.clone().on_hover_text(*name);
+                    if resp.clicked() {
+                        theme::set_accent(i);
+                        // 持久化
+                        let json = serde_json::json!({
+                            "dark": theme::is_dark(),
+                            "accent": i,
+                        });
+                        let _ = std::fs::write(
+                            app.config_dir.join("settings.json"),
+                            json.to_string(),
+                        );
+                    }
+                }
+            });
+            ui.label(
+                RichText::new("主题切换在侧栏顶部 ☀/☾")
+                    .size(11.0)
+                    .color(p.muted),
+            );
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, "完成", theme::BtnKind::Primary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close || modal.should_close() {
+        app.settings_open = false;
+    }
+}

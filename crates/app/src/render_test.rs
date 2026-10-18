@@ -152,6 +152,8 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         new_table: None,
         global_search: None,
         confirm: None,
+        snippets: vec![],
+        settings_open: false,
         session_dirty: false,
         last_session_save: None,
         session_restored: false,
@@ -374,7 +376,7 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         }
         TabKind::Query(q) => {
             let conns = app.conns.clone();
-            let _ = query::draw_query_view(&conns, ctx, &tab_id, q);
+            let _ = query::draw_query_view(&conns, ctx, &tab_id, q, &[]);
         }
         TabKind::Designer(d) => {
             crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
@@ -585,7 +587,7 @@ fn render_query_view() {
     render("query", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
-        let _ = query::draw_query_view(&conns, ctx, "q1", q);
+        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[]);
     });
 }
 

@@ -11,6 +11,7 @@ pub mod redis_ops;
 pub mod schema;
 mod search;
 pub mod sql_advisor;
+pub mod sql_format;
 pub mod store;
 
 pub use search::SearchHit;

@@ -83,12 +83,15 @@ pub enum TabAction {
     ExplainQuery { tab_id: String },
     /// 执行指定 SQL(⌘↵ 选区)
     RunQuerySql { tab_id: String, sql: String },
+    SnippetSave { sql: String },
+    SnippetDelete { idx: usize },
     /// 保存查询结果集的修改(按主键 UPDATE 后重跑)
     SaveQueryChanges { tab_id: String },
     ApplyFilterBar { tab_id: String },
     ClearFilterBar { tab_id: String },
     Toast { msg: String },
     CopyToClipboard { text: String, toast: String },
+    OpenSettings,
     ReloadDdl { tab_id: String },
     /// SQL 优化分析(当前查询页 SQL)
     OptimizeQuery { tab_id: String },
@@ -123,6 +126,12 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
     let mut close: Option<usize> = None;
     let mut close_set: Vec<usize> = Vec::new();
     let mut new_query = false;
+    // 拖拽排序:(拖拽标签索引, 累计水平位移)
+    let mut drag: Option<(usize, f32)> =
+        ctx.memory(|m| m.data.get_temp::<(usize, f32)>(egui::Id::new("tab-drag")));
+    // 双击重命名:(索引, 草稿)
+    let mut rename: Option<(usize, String)> =
+        ctx.memory(|m| m.data.get_temp::<(usize, String)>(egui::Id::new("tab-rename")));
 
     egui::TopBottomPanel::top("tabbar")
         .show_separator_line(false)
@@ -151,20 +160,58 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Er(_) => 5,
                                 TabKind::Ddl(_) => 6,
                             };
-                            let (a, c, m) = draw_one_tab(ui, i == app.active_tab, &title, glyph);
-                            if a {
+                            let renaming_now =
+                                rename.as_ref().map(|(ri, _)| *ri == i).unwrap_or(false);
+                            let mut draft_owned: Option<String> = if renaming_now {
+                                rename.as_ref().map(|(_, d)| d.clone())
+                            } else {
+                                None
+                            };
+                            let (ev, tab_rect) = draw_one_tab(
+                                ui,
+                                i == app.active_tab,
+                                &title,
+                                glyph,
+                                draft_owned.as_mut(),
+                            );
+                            if renaming_now {
+                                rename = Some((i, draft_owned.unwrap_or_default()));
+                                if ev.rename_commit {
+                                    if let Some(t) = app.tabs.get_mut(i) {
+                                        t.title = rename.clone().unwrap().1;
+                                    }
+                                    rename = None;
+                                    app.mark_session_dirty();
+                                } else if ev.rename_cancel {
+                                    rename = None;
+                                }
+                            }
+                            if ev.activated {
                                 activate = Some(i);
                             }
-                            if c {
+                            if ev.closed {
                                 close = Some(i);
                             }
-                            if let Some(m) = m {
+                            if ev.double_clicked && !renaming_now {
+                                rename = Some((i, title.clone()));
+                                activate = None;
+                            }
+                            if let Some(m) = ev.menu {
                                 match m {
                                     0 => close_set.extend((0..app.tabs.len()).filter(|j| *j != i)),
                                     1 => close_set.extend(0..i),
                                     _ => close_set.extend(i + 1..app.tabs.len()),
                                 }
                             }
+                            // 拖拽排序累计
+                            if ev.drag_delta != 0.0 {
+                                match &mut drag {
+                                    Some((di, acc)) if *di == i => *acc += ev.drag_delta,
+                                    None => drag = Some((i, ev.drag_delta)),
+                                    _ => {}
+                                }
+                            }
+                            let _ = tab_rect;
                         }
                         ui.add_space(4.0);
                         let (rect, resp) = ui.allocate_exact_size(
@@ -181,6 +228,45 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 });
         });
 
+    // 拖拽:累计位移超过 48px 与相邻标签交换(一帧一次,余量下一帧继续)
+    if let Some((mut di, mut acc)) = drag {
+        let threshold = 48.0f32;
+        if acc.abs() >= threshold {
+            let dir = acc.signum();
+            let target = di as i64 + dir as i64;
+            if target >= 0 && (target as usize) < app.tabs.len() {
+                let t = target as usize;
+                app.tabs.swap(di, t);
+                if di == app.active_tab {
+                    app.active_tab = t;
+                } else if t == app.active_tab {
+                    app.active_tab = di;
+                }
+                acc -= threshold * dir;
+                di = t;
+                app.mark_session_dirty();
+            } else {
+                acc = 0.0;
+            }
+        }
+        if acc.abs() > 1.0 {
+            let di = di.min(app.tabs.len().saturating_sub(1));
+            ctx.memory_mut(|m| {
+                m.data
+                    .insert_temp(egui::Id::new("tab-drag"), (di, acc))
+            });
+        } else {
+            ctx.memory_mut(|m| m.data.remove_temp::<(usize, f32)>(egui::Id::new("tab-drag")));
+        }
+    }
+    // 重命名状态存回 temp(下一帧继续编辑)
+    if let Some(st) = &rename {
+        ctx.memory_mut(|m| {
+            m.data.insert_temp(egui::Id::new("tab-rename"), st.clone())
+        });
+    } else {
+        ctx.memory_mut(|m| m.data.remove_temp::<(usize, String)>(egui::Id::new("tab-rename")));
+    }
     if !close_set.is_empty() {
         for i in close_set.into_iter().rev() {
             app.close_tab(i);
@@ -196,9 +282,24 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 }
 
+pub struct TabEvents {
+    pub activated: bool,
+    pub closed: bool,
+    pub menu: Option<u8>,
+    pub drag_delta: f32,
+    pub double_clicked: bool,
+    pub rename_commit: bool,
+    pub rename_cancel: bool,
+}
+
 /// 自绘单个标签:激活态与工具条同色、上圆角并向下与内容连通
-/// 返回 (激活, 关闭, 右键菜单动作 0=关闭其他 1=关闭左侧 2=关闭右侧)
-fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (bool, bool, Option<u8>) {
+fn draw_one_tab(
+    ui: &mut egui::Ui,
+    active: bool,
+    title: &str,
+    glyph: u8,
+    mut rename_draft: Option<&mut String>,
+) -> (TabEvents, egui::Rect) {
     let p = theme::c();
     let h = theme::TABBAR_H - 5.0;
     let font = egui::FontId::proportional(theme::FS_TAB);
@@ -213,9 +314,13 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (boo
         Color32::PLACEHOLDER,
         w - 76.0,
     );
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), Sense::click_and_drag());
     let mut activated = resp.clicked();
     let mut closed = resp.middle_clicked();
+    let drag_delta = if resp.dragged() { resp.drag_delta().x } else { 0.0 };
+    let double_clicked = resp.double_clicked();
+    let mut rename_commit = false;
+    let mut rename_cancel = false;
     let mut menu: Option<u8> = None;
     let _ = resp.clone().context_menu(|ui| {
         if ui.button("关闭其他").clicked() {
@@ -270,15 +375,37 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (boo
         rect.center().y,
     );
     let tcol = if active { p.text } else { p.text2 };
-    let text_painter = ui.painter().with_clip_rect(egui::Rect::from_min_max(
-        egui::pos2(rect.left() + 32.0, rect.top()),
-        egui::pos2(rect.right() - 30.0, rect.bottom()),
-    ));
-    text_painter.galley(
-        egui::pos2(rect.left() + 32.0, rect.center().y - title_g.size().y / 2.0),
-        title_g,
-        tcol,
-    );
+    if let Some(draft) = rename_draft.as_deref_mut() {
+        let iren = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 30.0, rect.center().y - 11.0),
+            egui::pos2(rect.right() - 28.0, rect.center().y + 11.0),
+        );
+        let mut rui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(iren)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        let r = rui.add(
+            egui::TextEdit::singleline(draft)
+                .font(egui::FontId::proportional(theme::FS_TAB))
+                .frame(false)
+                .desired_width(iren.width()),
+        );
+        r.request_focus();
+        rename_commit =
+            r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        rename_cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    } else {
+        let text_painter = ui.painter().with_clip_rect(egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 32.0, rect.top()),
+            egui::pos2(rect.right() - 30.0, rect.bottom()),
+        ));
+        text_painter.galley(
+            egui::pos2(rect.left() + 32.0, rect.center().y - title_g.size().y / 2.0),
+            title_g,
+            tcol,
+        );
+    }
 
     let crect = egui::Rect::from_center_size(
         egui::pos2(rect.right() - 16.0, rect.center().y),
@@ -301,7 +428,18 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (boo
         closed = true;
         activated = false;
     }
-    (activated, closed, menu)
+    (
+        TabEvents {
+            activated,
+            closed,
+            menu,
+            drag_delta,
+            double_clicked,
+            rename_commit,
+            rename_cancel,
+        },
+        rect,
+    )
 }
 
 // ---------------------------------------------------------------- 表数据视图
@@ -318,6 +456,7 @@ pub(crate) fn draw_table_view(
     let mysql_quote_flag = crate::app::mysql_quote(conns, &tab.conn_id);
 
     let mut toolbar_copy: Option<String> = None;
+    let mut toolbar_menu: Option<TabAction> = None;
     // ---- 工具条(44pt):表名 + 库 chip + 状态;右侧 保存/丢弃/更多/刷新/筛选
     egui::TopBottomPanel::top("table_toolbar")
         .show_separator_line(false)
@@ -466,6 +605,22 @@ pub(crate) fn draw_table_view(
                                 ui.close_menu();
                             }
                             ui.separator();
+                            ui.label(RichText::new("显示列").size(10.5).color(p.muted));
+                            for c in tab.columns.clone() {
+                                let mut shown = !tab.hidden_cols.contains(&c);
+                                if ui.checkbox(&mut shown, &c).changed() {
+                                    if shown {
+                                        tab.hidden_cols.retain(|h| h != &c);
+                                    } else {
+                                        tab.hidden_cols.push(c.clone());
+                                    }
+                                }
+                            }
+                            ui.checkbox(&mut tab.show_rowno, "行号");
+                            if ui.small_button("显示全部列").clicked() {
+                                tab.hidden_cols.clear();
+                            }
+                            ui.separator();
                             if ui
                                 .button(if theme::is_dark() {
                                     "浅色外观"
@@ -475,6 +630,11 @@ pub(crate) fn draw_table_view(
                                 .clicked()
                             {
                                 actions.push(TabAction::ToggleTheme);
+                                ui.close_menu();
+                            }
+                            if ui.button("外观设置…").clicked() {
+                                // 经动作中转(draw_table_view 无 self)
+                                toolbar_menu = Some(TabAction::OpenSettings);
                                 ui.close_menu();
                             }
                             ui.menu_button("每页行数", |ui| {
@@ -546,6 +706,9 @@ pub(crate) fn draw_table_view(
             theme::hairline_bottom(ui);
         });
 
+    if let Some(a) = toolbar_menu {
+        actions.push(a);
+    }
     if toolbar_copy.is_some() {
         actions.push(TabAction::CopyToClipboard {
             text: toolbar_copy.take().unwrap_or_default(),
@@ -959,8 +1122,22 @@ pub(crate) fn draw_table_view(
                 let sc = &mut sort_click;
                 let cr = &mut commit;
                 let pointer = ui.input(|i| i.pointer.latest_pos());
-                let col_widths = fitted_widths(rows, columns, ui.available_width());
-                let desired_w = 48.0 + col_widths.iter().sum::<f32>();
+                // 列选择器:隐藏列从显示中剔除(数据与编辑索引按全列)
+                let vis_idx: Vec<usize> = columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| !tab.hidden_cols.contains(c))
+                    .map(|(i, _)| i)
+                    .collect();
+                let vis_cols: Vec<String> =
+                    vis_idx.iter().map(|&i| columns[i].clone()).collect();
+                let vis_rows: Vec<Vec<Option<String>>> = rows
+                    .iter()
+                    .map(|r| vis_idx.iter().map(|&i| r[i].clone()).collect())
+                    .collect();
+                let col_widths = fitted_widths(&vis_rows, &vis_cols, ui.available_width());
+                let desired_w = if tab.show_rowno { 48.0 } else { 0.0 }
+                    + col_widths.iter().sum::<f32>();
                 egui::ScrollArea::horizontal()
                     .id_salt(format!("data-hscroll-{tab_id_s}"))
                     .auto_shrink([false, false])
@@ -972,8 +1149,8 @@ pub(crate) fn draw_table_view(
                             ui,
                             pointer,
                             &tab_id_s,
-                            rows,
-                            columns,
+                            &vis_rows,
+                            &vis_cols,
                             editing,
                             draft,
                             changes,
@@ -994,6 +1171,7 @@ pub(crate) fn draw_table_view(
                             &mut col_where_out,
                             &mut col_stat_col,
                             mysql_quote_flag,
+                            tab.show_rowno,
                         );
                         if let Some(a) = menu_action {
                             actions.push(a);
@@ -1277,6 +1455,7 @@ fn draw_data_table(
     col_where_out: &mut Option<String>,
     col_stat_col: &mut Option<String>,
     mysql_q: bool,
+    show_rowno: bool,
 ) {
     let p = theme::c();
     // TableBuilder 的行/列间距取自 item_spacing:清零才能得到原型的连续表头与 32pt 行高
@@ -1284,14 +1463,18 @@ fn draw_data_table(
     let srt = &*sort;
     let table_left = ui.max_rect().left();
     let table_right = ui.max_rect().right();
-    let mut tb = egui_extras::TableBuilder::new(ui)
+    let builder = egui_extras::TableBuilder::new(ui)
         .id_salt(format!("data-table-{tab_id}"))
         .striped(false)
         .sense(Sense::hover())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .vscroll(true)
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-        .column(Column::exact(48.0));
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+    let mut tb = if show_rowno {
+        builder.column(Column::exact(48.0))
+    } else {
+        builder
+    };
     for (i, _c) in columns.iter().enumerate() {
         tb = tb.column(if i + 1 == columns.len() {
             Column::remainder().clip(true)
@@ -1304,18 +1487,20 @@ fn draw_data_table(
         });
     }
     tb.header(theme::HEADER_H, |mut header| {
-        header.col(|ui| {
-            let rect = ui.max_rect();
-            ui.painter().rect_filled(rect, 0, p.panel);
-            ui.painter().text(
-                egui::pos2(rect.right() - 14.0, rect.center().y),
-                egui::Align2::RIGHT_CENTER,
-                "#",
-                egui::FontId::proportional(11.0),
-                p.muted,
-            );
-            header_bottom_line(ui);
-        });
+        if show_rowno {
+            header.col(|ui| {
+                let rect = ui.max_rect();
+                ui.painter().rect_filled(rect, 0, p.panel);
+                ui.painter().text(
+                    egui::pos2(rect.right() - 14.0, rect.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    "#",
+                    egui::FontId::proportional(11.0),
+                    p.muted,
+                );
+                header_bottom_line(ui);
+            });
+        }
         for c in columns.iter() {
             let sorted = srt
                 .as_ref()
@@ -1460,37 +1645,40 @@ fn draw_data_table(
             let row_selected = matches!(*selected, Some((sr, _)) if sr == ri);
             let row_no = ri + 1;
             let mut hovered = false;
-            row.col(|ui| {
-                let band = row_band.get_or_insert((ui.max_rect().top(), ui.max_rect().bottom()));
-                band.0 = band.0.min(ui.max_rect().top());
-                band.1 = band.1.max(ui.max_rect().bottom());
-                hovered = pointer
-                    .map(|pt| {
-                        pt.y >= band.0 && pt.y < band.1 && pt.x >= table_left && pt.x <= table_right
-                    })
-                    .unwrap_or(false);
-                let rect = ui.max_rect();
-                if row_selected {
-                    ui.painter().rect_filled(rect, 0, p.selected_row);
-                } else if hovered {
-                    ui.painter().rect_filled(rect, 0, p.row_hover);
-                }
-                ui.painter().text(
-                    egui::pos2(rect.right() - 14.0, rect.center().y),
-                    egui::Align2::RIGHT_CENTER,
-                    format!("{row_no}"),
-                    egui::FontId::proportional(11.0),
-                    if row_selected { p.accent } else { p.muted },
-                );
-                row_bottom_line(ui);
-                let resp = ui.allocate_rect(rect, Sense::click());
-                if resp.clicked() {
-                    *new_selection = Some(Some((ri, 0)));
-                }
-                if resp.double_clicked() && !pk_cols.is_empty() {
-                    *detail = true;
-                }
-            });
+            if show_rowno {
+                row.col(|ui| {
+                    let band =
+                        row_band.get_or_insert((ui.max_rect().top(), ui.max_rect().bottom()));
+                    band.0 = band.0.min(ui.max_rect().top());
+                    band.1 = band.1.max(ui.max_rect().bottom());
+                    hovered = pointer
+                        .map(|pt| {
+                            pt.y >= band.0 && pt.y < band.1 && pt.x >= table_left && pt.x <= table_right
+                        })
+                        .unwrap_or(false);
+                    let rect = ui.max_rect();
+                    if row_selected {
+                        ui.painter().rect_filled(rect, 0, p.selected_row);
+                    } else if hovered {
+                        ui.painter().rect_filled(rect, 0, p.row_hover);
+                    }
+                    ui.painter().text(
+                        egui::pos2(rect.right() - 14.0, rect.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        format!("{row_no}"),
+                        egui::FontId::proportional(11.0),
+                        if row_selected { p.accent } else { p.muted },
+                    );
+                    row_bottom_line(ui);
+                    let resp = ui.allocate_rect(rect, Sense::click());
+                    if resp.clicked() {
+                        *new_selection = Some(Some((ri, 0)));
+                    }
+                    if resp.double_clicked() && !pk_cols.is_empty() {
+                        *detail = true;
+                    }
+                });
+            }
 
             for (ci, col_name) in columns.iter().enumerate() {
                 let cell_editing = matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
@@ -2197,6 +2385,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             ctx.copy_text(text);
             app.toast_error(toast);
         }
+        TabAction::OpenSettings => app.settings_open = true,
         TabAction::ReloadDdl { tab_id } => app.load_ddl(&tab_id),
         TabAction::ClearFilterBar { tab_id } => app.clear_filter_bar(&tab_id),
         TabAction::SaveQueryChanges { tab_id } => {
@@ -2259,6 +2448,8 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             });
         }
         TabAction::ExplainQuery { tab_id } => app.run_explain(&tab_id),
+        TabAction::SnippetSave { sql } => app.snippet_save(sql),
+        TabAction::SnippetDelete { idx } => app.snippet_delete(idx),
         TabAction::RunQuerySql { tab_id, sql } => app.run_query_sql(&tab_id, sql),
         TabAction::CancelQuery { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
@@ -2854,7 +3045,8 @@ impl eframe::App for ShujingApp {
                 TabKind::Structure(s) => structure::draw_structure_view(ctx, &tab_id, s),
                 TabKind::Query(q) => {
                     let conns = self.conns.clone();
-                    query::draw_query_view(&conns, ctx, &tab_id, q)
+                    let snippets = self.snippets.clone();
+                    query::draw_query_view(&conns, ctx, &tab_id, q, &snippets)
                 }
                 TabKind::Designer(d) => {
                     // 方言信息给设计器(SQL 生成用)
@@ -2888,6 +3080,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_global_search(self, ctx);
         crate::modals::draw_confirm_modal(self, ctx);
         crate::modals::draw_col_stats_modal(self, ctx);
+        crate::modals::draw_settings_modal(self, ctx);
 
         if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {
             self.conn_modal = Some(ConnModal::new());

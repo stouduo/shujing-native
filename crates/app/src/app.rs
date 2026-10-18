@@ -265,6 +265,10 @@ pub struct TableTab {
     pub filter_error: Option<String>,
     /// 列统计弹窗:(列名, [(指标, 值)])
     pub col_stats: Option<(String, Vec<(String, String)>)>,
+    /// 隐藏的列(列选择器)
+    pub hidden_cols: Vec<String>,
+    /// 显示行号列
+    pub show_rowno: bool,
     /// 最近一次查询耗时
     pub last_elapsed_ms: Option<u64>,
     /// 查看完整内容弹窗 (列名, 全文)
@@ -308,6 +312,8 @@ impl TableTab {
             applied_where: None,
             filter_error: None,
             col_stats: None,
+            hidden_cols: vec![],
+            show_rowno: true,
         }
     }
 }
@@ -698,6 +704,8 @@ pub struct ShujingApp {
     pub global_search: Option<GlobalSearchState>,
     pub confirm: Option<ConfirmState>,
     /// 会话持久化
+    pub snippets: Vec<String>,
+    pub settings_open: bool,
     pub session_dirty: bool,
     pub last_session_save: Option<std::time::Instant>,
     pub session_restored: bool,
@@ -742,10 +750,17 @@ impl ShujingApp {
         );
         let (event_tx, events) = std::sync::mpsc::channel();
         let dark = Self::load_dark_pref(&config_dir);
+        let accent = std::fs::read_to_string(config_dir.join("settings.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("accent").and_then(|a| a.as_u64()))
+            .unwrap_or(0) as usize;
+        crate::theme::set_accent(accent);
         crate::theme::set_dark(dark);
         crate::theme::apply(&cc.egui_ctx);
         #[cfg(target_os = "macos")]
         crate::force_appearance(dark);
+        let snippets = Self::load_snippets(&config_dir);
         let mut app = Self {
             service,
             config_dir,
@@ -768,6 +783,8 @@ impl ShujingApp {
             new_table: None,
             global_search: None,
             confirm: None,
+            snippets,
+            settings_open: false,
             session_dirty: false,
             last_session_save: None,
             session_restored: false,
@@ -995,7 +1012,8 @@ impl ShujingApp {
         crate::theme::set_dark(dark);
         crate::theme::apply(ctx);
         let path = self.config_dir.join("settings.json");
-        let json = serde_json::json!({ "dark": dark }).to_string();
+        let json = serde_json::json!({ "dark": dark, "accent": crate::theme::accent_idx() })
+            .to_string();
         let _ = std::fs::write(path, json);
         #[cfg(target_os = "macos")]
         crate::force_appearance(dark);
@@ -1919,6 +1937,41 @@ impl ShujingApp {
     }
 
     // ---------------------------------------------------------------- 会话
+
+    fn snippets_path(config_dir: &std::path::Path) -> std::path::PathBuf {
+        config_dir.join("snippets.json")
+    }
+
+    fn load_snippets(config_dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(Self::snippets_path(config_dir))
+            .ok()
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_snippets(&self) {
+        if let Ok(j) = serde_json::to_string_pretty(&self.snippets) {
+            let _ = std::fs::write(Self::snippets_path(&self.config_dir), j);
+        }
+    }
+
+    pub fn snippet_save(&mut self, sql: String) {
+        let sql = sql.trim().to_string();
+        if sql.is_empty() {
+            return;
+        }
+        self.snippets.retain(|s| s != &sql);
+        self.snippets.insert(0, sql);
+        self.snippets.truncate(50);
+        self.save_snippets();
+    }
+
+    pub fn snippet_delete(&mut self, idx: usize) {
+        if idx < self.snippets.len() {
+            self.snippets.remove(idx);
+            self.save_snippets();
+        }
+    }
 
     pub fn mark_session_dirty(&mut self) {
         self.session_dirty = true;
