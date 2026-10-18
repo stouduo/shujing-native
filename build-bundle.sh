@@ -23,7 +23,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key><string>数镜</string>
     <key>CFBundleDisplayName</key><string>数镜</string>
-    <key>CFBundleIdentifier</key><string>com.shujing.native</string>
+    <key>CFBundleIdentifier</key><string>com.shujing.desktop</string>
     <key>CFBundleExecutable</key><string>shujing-native</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>

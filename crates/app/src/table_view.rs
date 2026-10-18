@@ -10,6 +10,9 @@ use egui::{Align, Color32, Layout, RichText, Sense};
 use egui_extras::Column;
 use shujing_core::Service;
 
+/// 诊断:数据网格外层横向滚动偏移(kittest 行为测试读取)
+pub static LAST_HSCROLL_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
 /// 取 Redis 标签的 (连接, service, 事件通道);非 Redis 标签返回 None
 fn redis_conn_of(
     app: &ShujingApp,
@@ -1241,11 +1244,16 @@ pub(crate) fn draw_table_view(
                 let col_widths = fitted_widths(&vis_rows, &vis_cols, ui.available_width());
                 let desired_w =
                     if tab.show_rowno { 48.0 } else { 0.0 } + col_widths.iter().sum::<f32>();
-                egui::ScrollArea::horizontal()
+                let hout = egui::ScrollArea::horizontal()
                     .id_salt(format!("data-hscroll-{tab_id_s}"))
                     .auto_shrink([false, false])
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
                     .show(ui, |ui| {
+                        // 数据网格用实体常驻滚动条:主题默认是悬浮+静止全透明,等于不可发现
+                        ui.spacing_mut().scroll.floating = false;
+                        ui.spacing_mut().scroll.dormant_handle_opacity = 0.4;
+                        ui.spacing_mut().scroll.bar_width = 10.0;
+                        ui.spacing_mut().scroll.bar_inner_margin = 3.0;
                         ui.set_min_width(ui.available_width().max(desired_w));
                         // 拖拽平移:按住网格区域左右拖 = 横向滚动(非编辑态)
                         if editing.is_none() {
@@ -1293,6 +1301,7 @@ pub(crate) fn draw_table_view(
                             actions.push(a);
                         }
                     });
+                    LAST_HSCROLL_X.store(hout.state.offset.x as i32, std::sync::atomic::Ordering::Relaxed);
             }
             // 列头右键动作落地
             if let Some((c2, asc)) = col_set_sort {

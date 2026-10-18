@@ -105,9 +105,12 @@ impl ShujingApp {
         theme::search_box(ui, "side-table-search", &mut self.table_filter, "搜索表", w);
         ui.add_space(14.0);
 
+        // 底部栏(版本+主题)固定高度,滚动区让出空间
+        let bottom_bar_h = 34.0;
         egui::ScrollArea::vertical()
             .id_salt("sidebar-scroll")
             .auto_shrink([false, false])
+            .max_height((ui.available_height() - bottom_bar_h).max(80.0))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let _ = ctx;
@@ -226,19 +229,20 @@ impl ShujingApp {
         );
         let name_resp = ui.allocate_rect(name_rect, Sense::click());
         let tip = if online {
-            "已连接 · 点击断开"
+            "已连接"
         } else {
             "点击连接"
         };
         name_resp.clone().on_hover_text(tip);
-        if name_resp.clicked() {
+        // 只有离线时点击才连接;在线时点击不做任何事(防止误触断开)
+        if name_resp.clicked() && !online {
             self.toggle_connect(c);
         }
 
         if row_resp.hovered() {
-            // 悬停:右侧动作替换版本号
+            // 悬停:右侧动作替换版本号(断开/编辑/删除)
             let area =
-                egui::Rect::from_min_max(egui::pos2(rect.right() - 92.0, rect.top()), rect.max);
+                egui::Rect::from_min_max(egui::pos2(rect.right() - 122.0, rect.top()), rect.max);
             ui.allocate_new_ui(
                 egui::UiBuilder::new()
                     .max_rect(area)
@@ -250,6 +254,10 @@ impl ShujingApp {
                     }
                     if theme::mini_text_button(ui, "编辑", p.text2).0 {
                         self.conn_modal = Some(ConnModal::from_conn(c));
+                    }
+                    let conn_label = if online { "断开" } else { "连接" };
+                    if theme::mini_text_button(ui, conn_label, p.text2).0 {
+                        self.toggle_connect(c);
                     }
                 },
             );

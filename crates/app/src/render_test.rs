@@ -1028,4 +1028,27 @@ fn data_grid_hscroll_works() {
         after2.into_raw(),
         "按住拖动后画面应平移(能左右滑动)"
     );
+
+    // 组合 xy 滚轮(模拟触控板斜向滑动):横向分量必须仍然生效
+    let x_before_combined = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+    harness.step();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(-300.0, 90.0),
+            modifiers: Default::default(),
+        });
+    harness.step();
+    harness.step();
+    let x_after_combined = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
+    assert_ne!(
+        x_before_combined, x_after_combined,
+        "组合 xy 滚轮的横向分量应驱动横向滚动(触控板斜滑场景)"
+    );
 }
