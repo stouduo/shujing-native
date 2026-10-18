@@ -1144,6 +1144,19 @@ pub(crate) fn draw_table_view(
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width().max(desired_w));
+                        // 拖拽平移:按住网格区域左右拖 = 横向滚动(非编辑态)
+                        if editing.is_none() {
+                            let drag_pan = ui.input(|i| {
+                                i.pointer.button_down(egui::PointerButton::Primary)
+                                    && i.pointer.is_decidedly_dragging()
+                            });
+                            if drag_pan {
+                                let dx = ui.input(|i| i.pointer.delta().x);
+                                if dx.abs() > 0.1 {
+                                    ui.scroll_with_delta(egui::vec2(-dx, 0.0));
+                                }
+                            }
+                        }
                         let mut menu_action: Option<TabAction> = None;
                         draw_data_table(
                             ui,

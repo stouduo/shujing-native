@@ -841,3 +841,117 @@ fn session_save_restore_roundtrip() {
     assert_eq!(d.tabs[0]["sql"], "SELECT id FROM backend_role_privilege");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn data_grid_hscroll_works() {
+    // 宽表:每个格塞长内容,总宽远超视口
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        let filler = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string();
+        let new_rows: Vec<Vec<Option<String>>> = t
+            .rows
+            .iter()
+            .map(|r| r.iter().map(|_| Some(filler.clone())).collect())
+            .collect();
+        t.rows = new_rows;
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let before = harness.render().expect("render before");
+
+    // 指针移到网格中心,注入横向滚轮
+    let center = egui::pos2(500.0, 350.0);
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(center));
+    harness.step();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(-400.0, 0.0),
+            modifiers: Default::default(),
+        });
+    harness.step();
+    harness.step();
+    let after = harness.render().expect("render after");
+    assert_ne!(
+        before.into_raw(), after.into_raw(),
+        "横向滚轮后画面应发生变化(能左右滚动)"
+    );
+
+    // 拖拽平移:基线 = 指针落网格再移开(无按压,无悬停);按下向左拖 250px 后移开指针
+    // 两者最终都无悬停高亮,像素差只能来自内容平移
+    {
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+        harness.step();
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
+        harness.step();
+        harness.step();
+        let _ = &mut harness;
+    }
+    let before2 = harness.render().expect("render baseline");
+
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(500.0, 350.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    for x in [460.0f32, 420.0, 380.0, 340.0, 300.0, 250.0] {
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(x, 350.0)));
+        harness.step();
+    }
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(250.0, 350.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
+    harness.step();
+    harness.step();
+    let after2 = harness.render().expect("render after drag");
+    assert_ne!(
+        before2.into_raw(), after2.into_raw(),
+        "按住拖动后画面应平移(能左右滑动)"
+    );
+}

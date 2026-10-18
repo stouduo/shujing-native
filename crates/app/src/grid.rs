@@ -26,6 +26,19 @@ pub fn result_rows(
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width().max(desired_w));
+            // 拖拽平移:按住结果网格左右拖 = 横向滚动(只读网格无编辑态)
+            {
+                let drag_pan = ui.input(|i| {
+                    i.pointer.button_down(egui::PointerButton::Primary)
+                        && i.pointer.is_decidedly_dragging()
+                });
+                if drag_pan {
+                    let dx = ui.input(|i| i.pointer.delta().x);
+                    if dx.abs() > 0.1 {
+                        ui.scroll_with_delta(egui::vec2(-dx, 0.0));
+                    }
+                }
+            }
             let mut tb = TableBuilder::new(ui)
                 .id_salt(id_salt)
                 .striped(false)
@@ -194,6 +207,7 @@ pub fn result_rows_editable(
     let col_widths = crate::table_view::fitted_widths(rows, columns, ui.available_width());
     let desired_w = 48.0 + col_widths.iter().sum::<f32>();
     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.command);
+    let editing_active = editing.is_some();
     let table_left = ui.max_rect().left();
     let table_right = ui.max_rect().right();
     egui::ScrollArea::horizontal()
@@ -202,6 +216,19 @@ pub fn result_rows_editable(
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width().max(desired_w));
+            // 拖拽平移(编辑态除外)
+            if !editing_active {
+                let drag_pan = ui.input(|i| {
+                    i.pointer.button_down(egui::PointerButton::Primary)
+                        && i.pointer.is_decidedly_dragging()
+                });
+                if drag_pan {
+                    let dx = ui.input(|i| i.pointer.delta().x);
+                    if dx.abs() > 0.1 {
+                        ui.scroll_with_delta(egui::vec2(-dx, 0.0));
+                    }
+                }
+            }
             let mut tb = TableBuilder::new(ui)
                 .id_salt(id_salt)
                 .striped(false)
