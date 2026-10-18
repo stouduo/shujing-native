@@ -821,19 +821,26 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             None => true,
         };
         if ok {
-            let conn_id = c.conn_id.clone();
-            let sql = c.resolved_sql();
-            app.confirm = None;
-            let tx = app.event_tx.clone();
-            let service = app.service.clone();
-            net::spawn(async move {
-                let result = service
-                    .run_sql(&conn_id, sql, Some(1))
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| e);
-                let _ = tx.send(BgEvent::DdlDone { result });
-            });
+            let action = c.action.clone();
+            let input_ok = c.input.trim().to_string();
+            if let Some(conn_id) = action.as_deref().and_then(|a| a.strip_prefix("delete-conn:")) {
+                app.confirm = None;
+                app.delete_connection(conn_id);
+                app.toast_error(format!("已删除连接 {}", input_ok));
+            } else {
+                let conn_id = c.conn_id.clone();
+                let sql = c.resolved_sql();
+                app.confirm = None;
+                let tx = app.event_tx.clone();
+                let service = app.service.clone();
+                net::spawn(async move {
+                    let result = service
+                        .run_sql(&conn_id, sql, Some(1))
+                        .await
+                        .map(|_| ());
+                    let _ = tx.send(BgEvent::DdlDone { result });
+                });
+            }
         }
     } else if cancel || modal.should_close() {
         app.confirm = None;

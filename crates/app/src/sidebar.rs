@@ -225,36 +225,53 @@ impl ShujingApp {
             egui::vec2(name_galley.size().x + 12.0, rect.height()),
         );
         let name_resp = ui.allocate_rect(name_rect, Sense::click());
-        let tip = if online { "已连接" } else { "点击连接" };
+        let tip = if online {
+            "已连接 · 右键:断开/编辑/删除"
+        } else {
+            "离线 · 点击连接,右键更多操作"
+        };
         name_resp.clone().on_hover_text(tip);
         // 只有离线时点击才连接;在线时点击不做任何事(防止误触断开)
         if name_resp.clicked() && !online {
             self.toggle_connect(c);
         }
 
-        if row_resp.hovered() {
-            // 悬停:右侧动作替换版本号(断开/编辑/删除)
-            let area =
-                egui::Rect::from_min_max(egui::pos2(rect.right() - 122.0, rect.top()), rect.max);
-            ui.allocate_new_ui(
-                egui::UiBuilder::new()
-                    .max_rect(area)
-                    .layout(Layout::right_to_left(Align::Center)),
-                |ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    if theme::mini_text_button(ui, "删除", p.red).0 {
-                        self.delete_connection(&c.id);
-                    }
-                    if theme::mini_text_button(ui, "编辑", p.text2).0 {
-                        self.conn_modal = Some(ConnModal::from_conn(c));
-                    }
-                    let conn_label = if online { "断开" } else { "连接" };
-                    if theme::mini_text_button(ui, conn_label, p.text2).0 {
-                        self.toggle_connect(c);
-                    }
-                },
-            );
-        } else if online && c.db_type != shujing_core::DbType::Sqlite {
+        // 连接操作全部收进右键菜单(悬停按钮易误触断开/删除)
+        let mut menu_act: Option<&str> = None;
+        let _ = row_resp.clone().context_menu(|ui| {
+            let conn_label = if online { "断开连接" } else { "连接" };
+            if ui.button(conn_label).clicked() {
+                menu_act = Some("toggle");
+                ui.close_menu();
+            }
+            if ui.button("编辑连接…").clicked() {
+                menu_act = Some("edit");
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("删除连接…").clicked() {
+                menu_act = Some("delete");
+                ui.close_menu();
+            }
+        });
+        match menu_act {
+            Some("toggle") => self.toggle_connect(c),
+            Some("edit") => self.conn_modal = Some(ConnModal::from_conn(c)),
+            Some("delete") => {
+                self.open_confirm(
+                    &c.id.clone(),
+                    "删除连接",
+                    &format!("删除连接「{}」及其配置?\n输入连接名以确认:", c.name),
+                    Some(c.name.clone()),
+                    String::new(),
+                );
+                if let Some(cf) = self.confirm.as_mut() {
+                    cf.action = Some(format!("delete-conn:{}", c.id));
+                }
+            }
+            _ => {}
+        }
+        if online && c.db_type != shujing_core::DbType::Sqlite {
             let ver = self
                 .trees
                 .get(&c.id)
@@ -1125,6 +1142,13 @@ impl ShujingApp {
             self.trees.remove(&c.id);
             // 断开的连接:相关标签一并关闭,避免残留标签对失效连接报错
             self.close_tabs_for_connection(&c.id);
+            // 底层池同步拆除(此前只删了 UI 树,池里的死连接一直挂着,
+            // 重连时可能拿到同一失效池表现为"经常断联")
+            let service = self.service.clone();
+            let cid = c.id.clone();
+            crate::net::spawn(async move {
+                let _ = service.disconnect(&cid).await;
+            });
             return;
         }
         self.trees
@@ -1181,7 +1205,7 @@ impl ShujingApp {
         });
     }
 
-    fn delete_connection(&mut self, id: &str) {
+    pub(crate) fn delete_connection(&mut self, id: &str) {
         let service = self.service.clone();
         match service.delete_connection(id) {
             Ok(conns) => self.conns = conns,

@@ -460,6 +460,8 @@ pub struct ConfirmState {
     pub input: String,
     pub conn_id: String,
     pub sql: String,
+    /// 非 SQL 动作(如 delete-conn:<id>):确认后交给 app 处理而不执行 sql
+    pub action: Option<String>,
 }
 
 impl ConfirmState {
@@ -2014,6 +2016,7 @@ impl ShujingApp {
             input: String::new(),
             conn_id: conn_id.to_string(),
             sql,
+            action: None,
         });
     }
 
