@@ -1,5 +1,5 @@
 //! 左侧栏:连接 + 库/表树 + 表搜索 + toast。
-//! 严格对齐原型:220pt 宽、顶部"数镜 Native + ＋"、搜索框、
+//! 严格对齐原型:220pt 宽、顶部"数镜 + ＋"、搜索框、
 //! 连接行(绿点/粗体名/版本)、展开库标题、表行(34pt 行高、选中蓝色药丸)。
 
 use crate::app::{BgEvent, ConnModal, ShujingApp};
@@ -81,15 +81,7 @@ impl ShujingApp {
                 );
                 let title_baseline = title_resp.rect.center().y - title_g.size().y / 2.0
                     + icons::baseline_top(&title_g, theme::FS_TABLE_TITLE);
-                ui.add_space(4.0);
-                icons::label_at_baseline(
-                    ui,
-                    "Native",
-                    egui::FontId::proportional(12.0),
-                    p.text2,
-                    title_baseline,
-                    80.0,
-                );
+
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
                     icons::paint_plus(

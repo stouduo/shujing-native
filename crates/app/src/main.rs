@@ -30,11 +30,11 @@ fn main() {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1360.0, 860.0])
             .with_min_inner_size([1024.0, 640.0])
-            .with_title("数镜 Native"),
+            .with_title("数镜"),
         ..Default::default()
     };
     eframe::run_native(
-        "数镜 Native",
+        "数镜",
         native,
         Box::new(|cc| Ok(Box::new(ShujingApp::new(cc)))),
     )
@@ -86,7 +86,11 @@ fn ensure_installed_from_dmg() {
     let Some(src_app) = exe.ancestors().nth(3) else {
         return;
     };
-    let dst = std::path::Path::new("/Applications").join("数镜Native.app");
+    let dst = std::path::Path::new("/Applications").join("数镜.app");
+    // 旧命名清理(历史版本)
+    let _ = std::process::Command::new("rm")
+        .args(["-rf", "/Applications/数镜Native.app"])
+        .status();
     let _ = std::process::Command::new("rm")
         .args(["-rf", &dst.to_string_lossy()])
         .status();

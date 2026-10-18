@@ -2920,7 +2920,7 @@ impl eframe::App for ShujingApp {
         // 每帧强制 style == 当前调色板(切换主题即刻全局生效)
         crate::theme::apply(ctx);
         // 窗口标题与原型一致
-        let title = "数镜 Native".to_string();
+        let title = "数镜".to_string();
         let cur = ctx.input(|i| i.viewport().title.clone());
         if cur.as_deref() != Some(title.as_str()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
