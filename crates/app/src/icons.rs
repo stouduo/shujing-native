@@ -118,6 +118,23 @@ pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_
                 egui::StrokeKind::Inside,
             );
         }
+        6 => {
+            // DDL:文档卷轴(矩形+折角线)
+            let c = rect.center();
+            let st = Stroke::new(1.1, color);
+            p.rect_stroke(
+                egui::Rect::from_min_size(egui::pos2(c.x - 4.0, c.y - 5.5), egui::vec2(8.0, 11.0)),
+                1.5,
+                st,
+                egui::StrokeKind::Inside,
+            );
+            for dy in [-2.5, 0.5, 3.5] {
+                p.line_segment(
+                    [egui::pos2(c.x - 2.0, c.y + dy), egui::pos2(c.x + 2.0, c.y + dy)],
+                    st,
+                );
+            }
+        }
         4 => {
             // Redis:菱形(品牌红钻)
             let c = rect.center();

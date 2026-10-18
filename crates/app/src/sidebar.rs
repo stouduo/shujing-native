@@ -290,12 +290,234 @@ impl ShujingApp {
                     tables_by_db.get(&db).map(|v| v.len()).unwrap_or(0),
                 );
                 let tables = tables_by_db.get(&db).cloned().unwrap_or_default();
-                for t in &tables {
-                    self.draw_table_row(ui, conn_id, &db, &t.name);
+                // 分组:表 / 视图 / 程序对象(触发器·函数·过程)
+                let groups: [(&str, &str, Box<dyn Fn(&shujing_core::TableMeta) -> bool>); 3] = [
+                    ("table", "表", Box::new(|m: &shujing_core::TableMeta| m.kind == "table")),
+                    ("view", "视图", Box::new(|m: &shujing_core::TableMeta| m.kind == "view")),
+                    (
+                        "prog",
+                        "程序对象",
+                        Box::new(|m: &shujing_core::TableMeta| {
+                            matches!(m.kind.as_str(), "trigger" | "function" | "procedure")
+                        }),
+                    ),
+                ];
+                for (gkey, glabel, pred) in groups {
+                    let items: Vec<&shujing_core::TableMeta> =
+                        tables.iter().filter(|m| pred(m)).collect();
+                    if items.is_empty() {
+                        continue;
+                    }
+                    let open_key = format!("{db}|{gkey}");
+                    let open = self
+                        .trees
+                        .get(conn_id)
+                        .and_then(|t| t.groups_open.get(&open_key).copied())
+                        .unwrap_or(gkey == "table");
+                    self.draw_group_header(ui, conn_id, &open_key, glabel, items.len(), open);
+                    if open {
+                        for m in items {
+                            if gkey == "prog" {
+                                self.draw_prog_row(ui, conn_id, &db, &m.name, &m.kind);
+                            } else {
+                                self.draw_table_row(ui, conn_id, &db, &m.name);
+                            }
+                        }
+                    }
                 }
                 ui.add_space(6.0);
             } else {
                 self.draw_db_collapsed(ui, conn_id, &db);
+            }
+        }
+    }
+
+    /// 对象分组头(chevron + 标签 + 数量;程序对象组带"＋新建")
+    fn draw_group_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        conn_id: &str,
+        open_key: &str,
+        label: &str,
+        count: usize,
+        open: bool,
+    ) {
+        let p = theme::c();
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), Sense::click());
+        if resp.hovered() {
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(6), p.row_hover);
+        }
+        icons::paint_triangle(
+            ui.painter(),
+            egui::pos2(rect.left() + 26.0, rect.center().y),
+            open,
+            if resp.hovered() { p.text2 } else { p.muted },
+        );
+        let g = ui.painter().layout_no_wrap(
+            format!("{label} {count}"),
+            egui::FontId::proportional(11.0),
+            Color32::PLACEHOLDER,
+        );
+        ui.painter().galley(
+            egui::pos2(rect.left() + 40.0, rect.center().y - g.size().y / 2.0),
+            g,
+            p.muted,
+        );
+        if resp.clicked() {
+            if let Some(tree) = self.trees.get_mut(conn_id) {
+                let next = !open;
+                tree.groups_open.insert(open_key.to_string(), next);
+            }
+        }
+        // 程序对象组:＋ 新建对象(模板进查询页)
+        if open_key.ends_with("|prog") {
+            let plus_rect = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 14.0, rect.center().y),
+                egui::vec2(20.0, 20.0),
+            );
+            let plus = ui.interact(plus_rect, egui::Id::new("new-obj"), Sense::click());
+            let pc = if plus.hovered() { p.text } else { p.muted };
+            icons::paint_plus(ui.painter(), plus_rect.center(), 5.0, pc);
+            plus.clone().on_hover_text("新建对象(模板)");
+            if plus.clicked() {
+                // 记住待选连接,菜单项直接开模板
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(egui::Id::new("newobj-conn"), conn_id.to_string()));
+            }
+            let _ = plus.context_menu(|ui| {
+                for (kind, label) in [
+                    ("trigger", "触发器"),
+                    ("procedure", "存储过程"),
+                    ("function", "函数"),
+                    ("view", "视图"),
+                ] {
+                    if ui.button(label).clicked() {
+                        ui.ctx().memory_mut(|m| {
+                            m.data.insert_temp(
+                                egui::Id::new("newobj-kind"),
+                                kind.to_string(),
+                            )
+                        });
+                        ui.close_menu();
+                    }
+                }
+            });
+            if let Some(kind) = ui
+                .ctx()
+                .memory(|m| m.data.get_temp::<String>(egui::Id::new("newobj-kind")))
+            {
+                ui.ctx()
+                    .memory_mut(|m| m.data.remove_temp::<String>(egui::Id::new("newobj-kind")));
+                if let Some(conn) = ui
+                    .ctx()
+                    .memory(|m| m.data.get_temp::<String>(egui::Id::new("newobj-conn")))
+                {
+                    ui.ctx()
+                        .memory_mut(|m| m.data.remove_temp::<String>(egui::Id::new("newobj-conn")));
+                    self.open_query_tab(Some(conn));
+                    let idx = self.tabs.len() - 1;
+                    if let Some(t) = self.tabs.get_mut(idx) {
+                        if let crate::app::TabKind::Query(q) = &mut t.kind {
+                            q.sql = object_template(&kind);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 程序对象行(触发器/函数/过程):点击看 DDL,右键 删除
+    fn draw_prog_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        conn_id: &str,
+        db: &str,
+        name: &str,
+        kind: &str,
+    ) {
+        let p = theme::c();
+        let active = self
+            .tabs
+            .get(self.active_tab)
+            .map(|t| matches!(&t.kind, crate::app::TabKind::Ddl(d) if d.conn_id == conn_id && d.name == name))
+            .unwrap_or(false);
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+            Sense::click(),
+        );
+        let hl = egui::Rect::from_min_max(
+            egui::pos2(rect.left() - 4.0, rect.top() + 2.0),
+            egui::pos2(rect.right() + 2.0, rect.bottom() - 2.0),
+        );
+        if active {
+            ui.painter()
+                .rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+        } else if resp.hovered() {
+            ui.painter()
+                .rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+        }
+        let g = icons::text_galley(
+            ui.painter(),
+            name.to_string(),
+            egui::FontId::proportional(theme::FS_TREE),
+            Color32::PLACEHOLDER,
+            rect.width() - 120.0,
+        );
+        ui.painter().galley(
+            egui::pos2(rect.left() + 48.0, rect.center().y - g.size().y / 2.0),
+            g,
+            if active || resp.hovered() { p.text } else { p.text2 },
+        );
+        let tag = match kind {
+            "trigger" => "TRG",
+            "procedure" => "PROC",
+            _ => "FN",
+        };
+        ui.painter().text(
+            egui::pos2(rect.right() - 8.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            tag,
+            theme::bold(8.5),
+            p.muted,
+        );
+        let menu_id = egui::Id::new(format!("progmenu-{conn_id}-{db}-{name}"));
+        let _ = resp.clone().context_menu(|ui| {
+            if ui.button("查看 DDL").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "ddl".to_string()));
+                ui.close_menu();
+            }
+            if ui.button("删除对象…").clicked() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(menu_id, "drop".to_string()));
+                ui.close_menu();
+            }
+        });
+        if resp.clicked() {
+            self.open_ddl(conn_id, Some(db.to_string()), kind, name);
+        }
+        let action: Option<String> = ui.ctx().memory(|m| m.data.get_temp::<String>(menu_id));
+        if let Some(act) = action {
+            ui.ctx()
+                .memory_mut(|m| m.data.remove_temp::<String>(menu_id));
+            if act == "ddl" {
+                self.open_ddl(conn_id, Some(db.to_string()), kind, name);
+            } else if act == "drop" {
+                let stmt = match kind {
+                    "trigger" => format!("DROP TRIGGER IF EXISTS {{v}};"),
+                    "procedure" => format!("DROP PROCEDURE IF EXISTS {{v}};"),
+                    _ => format!("DROP FUNCTION IF EXISTS {{v}};"),
+                };
+                let stmt = stmt.replace("{v}", &crate::app::quote_ident_by(name, crate::app::mysql_quote(&self.conns, conn_id)));
+                self.open_confirm(
+                    conn_id,
+                    "删除对象",
+                    &format!("删除 {name}?此操作不可恢复!\n输入对象名以确认:"),
+                    Some(name.to_string()),
+                    stmt,
+                );
             }
         }
     }
@@ -813,6 +1035,7 @@ impl ShujingApp {
                     crate::app::TabKind::Designer(d) => &d.conn_id == cid,
                     crate::app::TabKind::Redis(r) => &r.conn_id == cid,
                     crate::app::TabKind::Er(e) => &e.conn_id == cid,
+                    crate::app::TabKind::Ddl(d) => &d.conn_id == cid,
                 };
                 if belongs {
                     if i < self.active_tab {
@@ -873,5 +1096,35 @@ impl ShujingApp {
             Err(e) => self.toast_error(e),
         }
         self.trees.remove(id);
+    }
+}
+
+
+/// 新建对象 SQL 模板(与 dbclient ObjectTemplates 同源,通用 MySQL 风格)
+fn object_template(kind: &str) -> String {
+    match kind {
+        "trigger" => r"CREATE TRIGGER `trigger_name`
+AFTER INSERT ON `table_name`
+FOR EACH ROW
+BEGIN
+  -- 触发器逻辑
+  UPDATE `table_name` SET updated_at = NOW() WHERE id = NEW.id;
+END;".to_string(),
+        "procedure" => r"CREATE PROCEDURE `procedure_name`(IN param1 INT)
+BEGIN
+  -- 存储过程逻辑
+  SELECT * FROM `table_name` WHERE id = param1;
+END;".to_string(),
+        "function" => r"CREATE FUNCTION `function_name`(param1 INT)
+RETURNS INT
+DETERMINISTIC
+BEGIN
+  -- 函数逻辑
+  RETURN param1 * 2;
+END;".to_string(),
+        _ => r"CREATE VIEW `view_name` AS
+SELECT *
+FROM `table_name`
+WHERE 1=1;".to_string(),
     }
 }

@@ -43,7 +43,11 @@ pub fn draw_query_view(
                 }
                 if q.running {
                     ui.add(egui::Spinner::new().size(11.0).color(p.muted));
-                    ui.label(RichText::new("执行中…").size(theme::FS_AUX).color(p.muted));
+                    if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                        actions.push(TabAction::CancelQuery {
+                            tab_id: tab_id.to_string(),
+                        });
+                    }
                 }
                 if let Some(err) = &q.error {
                     ui.label(
@@ -267,7 +271,75 @@ pub fn draw_query_view(
             });
             ui.add_space(6.0);
             if !r.columns.is_empty() {
-                grid::result_rows(ui, &format!("query-results-{tab_id}"), &r.columns, &r.rows);
+                // 回写判定:单表 SELECT + 主键齐全 + 非只读连接
+                let read_only = conns
+                    .iter()
+                    .find(|c| c.id == q.conn_id)
+                    .map(|c| c.read_only)
+                    .unwrap_or(false);
+                let editable = !read_only
+                    && q.result_table.is_some()
+                    && q.pk_checked
+                    && !q.result_pk.is_empty()
+                    && q.result_pk.iter().all(|p| r.columns.contains(p));
+                if editable {
+                    if !q.q_changes.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} 处修改(未保存)",
+                                    q.q_changes.len()
+                                ))
+                                .size(11.5)
+                                .color(ORANGE),
+                            );
+                            if theme::button(ui, "保存修改 ⌘S", theme::BtnKind::Primary)
+                                .clicked()
+                            {
+                                actions.push(TabAction::SaveQueryChanges {
+                                    tab_id: tab_id.to_string(),
+                                });
+                            }
+                            if theme::button(ui, "放弃", theme::BtnKind::Secondary).clicked() {
+                                q.q_changes.clear();
+                                q.q_editing = None;
+                            }
+                        });
+                        ui.add_space(4.0);
+                    }
+                    let (start, commit) = grid::result_rows_editable(
+                        ui,
+                        &format!("query-results-{tab_id}"),
+                        &r.columns,
+                        &r.rows,
+                        &q.q_changes,
+                        &mut q.q_editing,
+                        &mut q.q_draft,
+                    );
+                    if let Some((ri, ci, old)) = start {
+                        q.q_editing = Some((ri, ci));
+                        q.q_draft = old;
+                    }
+                    if let Some((ri, ci, val)) = commit {
+                        let col = r.columns[ci].clone();
+                        let orig = r.rows[ri][ci].clone();
+                        let new_v = if val.is_empty() { None } else { Some(val) };
+                        if new_v != orig {
+                            q.q_changes.retain(|(r2, c2, _)| !(*r2 == ri && c2 == &col));
+                            q.q_changes.push((ri, col, new_v));
+                        }
+                    }
+                    // ⌘S 保存(查询标签激活时)
+                    if !q.q_changes.is_empty()
+                        && ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command)
+                    {
+                        actions.push(TabAction::SaveQueryChanges {
+                            tab_id: tab_id.to_string(),
+                        });
+                    }
+                } else {
+                    grid::result_rows(ui, &format!("query-results-{tab_id}"), &r.columns, &r.rows);
+                }
             }
         });
 

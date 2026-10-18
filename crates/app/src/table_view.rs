@@ -77,6 +77,13 @@ pub enum TabAction {
     RedisAnalyze { tab_id: String },
     /// 查询页 Redis 命令行模式运行
     RunRedisCmd { tab_id: String },
+    /// 取消正在执行的查询
+    CancelQuery { tab_id: String },
+    /// 保存查询结果集的修改(按主键 UPDATE 后重跑)
+    SaveQueryChanges { tab_id: String },
+    ApplyFilterBar { tab_id: String },
+    ClearFilterBar { tab_id: String },
+    ReloadDdl { tab_id: String },
     /// SQL 优化分析(当前查询页 SQL)
     OptimizeQuery { tab_id: String },
     /// 全局数据搜索
@@ -135,6 +142,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Designer(_) => 3,
                                 TabKind::Redis(_) => 4,
                                 TabKind::Er(_) => 5,
+                                TabKind::Ddl(_) => 6,
                             };
                             let (a, c) = draw_one_tab(ui, i == app.active_tab, &title, glyph);
                             if a {
@@ -429,6 +437,25 @@ pub(crate) fn draw_table_view(
                         });
                     }
 
+                    // 筛选栏开关(漏斗);应用了字段筛选时点亮
+                    let funnel_on = tab.filter_bar_open || tab.applied_where.is_some();
+                    let (frect, fresp2) = ui.allocate_exact_size(egui::vec2(24.0, 26.0), Sense::click());
+                    if funnel_on {
+                        ui.painter()
+                            .rect_filled(frect, egui::CornerRadius::same(6), theme::tint(p.accent, 40));
+                    } else if fresp2.hovered() {
+                        ui.painter()
+                            .rect_filled(frect, egui::CornerRadius::same(6), p.row_hover);
+                    }
+                    icons::funnel_glyph(
+                        ui.painter(),
+                        frect.center(),
+                        if funnel_on { p.accent } else { p.text2 },
+                    );
+                    fresp2.clone().on_hover_text("筛选栏(字段/自由模式)");
+                    if fresp2.clicked() {
+                        tab.filter_bar_open = !tab.filter_bar_open;
+                    }
                     let fresp =
                         theme::filter_box(ui, "table-filter", &mut tab.filter, "筛选行", 152.0);
                     fresp.clone().on_hover_text("回车应用筛选(全列模糊匹配)");
@@ -634,6 +661,174 @@ pub(crate) fn draw_table_view(
         } else {
             tab.detail = false;
         }
+    }
+
+    // ---- 筛选栏(字段/自由两种模式)
+    if tab.filter_bar_open {
+        egui::TopBottomPanel::top("filter_bar")
+            .show_separator_line(false)
+            .exact_height(96.0)
+            .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin::symmetric(14, 8)))
+            .show(ctx, |ui| {
+                theme::hairline_bottom(ui);
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    // 模式分段
+                    let mode_w = 150.0;
+                    let (mrect, _) = ui.allocate_exact_size(egui::vec2(mode_w, 26.0), Sense::hover());
+                    ui.painter().rect_filled(mrect, egui::CornerRadius::same(7), p.bg);
+                    for (i, label) in ["字段模式", "自由 WHERE"].iter().enumerate() {
+                        let seg = egui::Rect::from_min_size(
+                            egui::pos2(mrect.left() + i as f32 * (mode_w / 2.0), mrect.top()),
+                            egui::vec2(mode_w / 2.0, 26.0),
+                        );
+                        let sel = tab.filter_mode as usize == i;
+                        if sel {
+                            ui.painter().rect_filled(
+                                seg.shrink(2.0),
+                                egui::CornerRadius::same(5),
+                                p.elevated,
+                            );
+                        }
+                        ui.painter().text(
+                            seg.center(),
+                            egui::Align2::CENTER_CENTER,
+                            *label,
+                            if sel { theme::bold(11.0) } else { egui::FontId::proportional(11.0) },
+                            if sel { p.text } else { p.muted },
+                        );
+                        if ui
+                            .interact(seg, egui::Id::new(("filter-mode", i)), Sense::click())
+                            .clicked()
+                        {
+                            tab.filter_mode = i as u8;
+                        }
+                    }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if theme::button(ui, "清除", theme::BtnKind::Secondary).clicked() {
+                        actions.push(TabAction::ClearFilterBar {
+                            tab_id: tab_id_s.clone(),
+                        });
+                    }
+                    if theme::button(ui, "应用", theme::BtnKind::Primary).clicked() {
+                        actions.push(TabAction::ApplyFilterBar {
+                            tab_id: tab_id_s.clone(),
+                        });
+                    }
+                    if let Some(err) = &tab.filter_error {
+                        ui.label(RichText::new(icons::clip(err, 40)).size(11.0).color(p.red));
+                    }
+                    if tab.applied_where.is_some() {
+                        ui.label(RichText::new("已应用").size(11.0).color(p.green));
+                    }
+                });
+                });
+                ui.add_space(6.0);
+                if tab.filter_mode == 0 {
+                    // 字段模式:条件行
+                    let conds_h = (tab.conds.len() as f32 * 30.0 + 38.0).clamp(64.0, 150.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("filter-conds")
+                        .max_height(conds_h)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let cols = tab.columns.clone();
+                            const OPS: &[&str] = &[
+                                "=", "!=", ">", "<", ">=", "<=", "LIKE", "IS NULL", "IS NOT NULL",
+                            ];
+                            let mut remove: Option<usize> = None;
+                            for (i, (col, op, val)) in tab.conds.iter_mut().enumerate() {
+                                ui.horizontal(|ui| {
+                                    if col.is_empty() {
+                                        *col = cols.first().cloned().unwrap_or_default();
+                                    }
+                                    let opts: Vec<(String, String)> =
+                                        cols.iter().map(|c| (c.clone(), c.clone())).collect();
+                                    theme::select(
+                                        ui,
+                                        &format!("fcol-{i}"),
+                                        col,
+                                        &opts,
+                                        150.0,
+                                    );
+                                    let op_opts: Vec<(String, String)> = OPS
+                                        .iter()
+                                        .map(|o| (o.to_string(), o.to_string()))
+                                        .collect();
+                                    if op.is_empty() {
+                                        *op = "=".to_string();
+                                    }
+                                    theme::select(
+                                        ui,
+                                        &format!("fop-{i}"),
+                                        op,
+                                        &op_opts,
+                                        96.0,
+                                    );
+                                    let needs_value = *op != "IS NULL" && *op != "IS NOT NULL";
+                                    if needs_value {
+                                        theme::field(
+                                            ui,
+                                            &format!("fval-{i}"),
+                                            val,
+                                            190.0,
+                                            false,
+                                        );
+                                    }
+                                    if theme::mini_text_button(ui, "删除", p.red).0 {
+                                        remove = Some(i);
+                                    }
+                                });
+                            }
+                            if let Some(i) = remove {
+                                tab.conds.remove(i);
+                            }
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("＋ 添加条件").size(11.5).color(p.text2),
+                                    )
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::new(1.0, p.border))
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .min_size(egui::vec2(96.0, 24.0)),
+                                )
+                                .clicked()
+                            {
+                                tab.conds.push((
+                                    cols.first().cloned().unwrap_or_default(),
+                                    "=".to_string(),
+                                    String::new(),
+                                ));
+                            }
+                        });
+                    // 回车应用
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.command) {
+                        actions.push(TabAction::ApplyFilterBar {
+                            tab_id: tab_id_s.clone(),
+                        });
+                    }
+                } else {
+                    // 自由模式:WHERE 表达式
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("WHERE").size(11.5).color(p.muted));
+                        let resp = theme::field(
+                            ui,
+                            "filter-free",
+                            &mut tab.free_where,
+                            ui.available_width() - 90.0,
+                            false,
+                        );
+                        if resp.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        {
+                            actions.push(TabAction::ApplyFilterBar {
+                                tab_id: tab_id_s.clone(),
+                            });
+                        }
+                    });
+                }
+            });
     }
 
     // ---- 数据网格(内容区无内边距,表头/行背景铺满)
@@ -1799,6 +1994,81 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
         }
         TabAction::RunQuery { tab_id } => app.run_query(&tab_id),
         TabAction::RunRedisCmd { tab_id } => app.run_redis_cmd(&tab_id),
+        TabAction::ApplyFilterBar { tab_id } => app.apply_filter_bar(&tab_id),
+        TabAction::ReloadDdl { tab_id } => app.load_ddl(&tab_id),
+        TabAction::ClearFilterBar { tab_id } => app.clear_filter_bar(&tab_id),
+        TabAction::SaveQueryChanges { tab_id } => {
+            let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
+                return;
+            };
+            let crate::app::TabKind::Query(q) = &tab.kind else {
+                return;
+            };
+            let Some(table) = q.result_table.clone() else {
+                return;
+            };
+            let Some(r) = q.results.get(q.active_set) else {
+                return;
+            };
+            let pk_cols = q.result_pk.clone();
+            if pk_cols.is_empty() {
+                app.toast_error("该表没有主键,无法回写".to_string());
+                return;
+            }
+            let pk_idxs: Vec<usize> = pk_cols
+                .iter()
+                .filter_map(|p| r.columns.iter().position(|c| c == p))
+                .collect();
+            if pk_idxs.len() != pk_cols.len() {
+                app.toast_error("结果集未包含全部主键列,无法回写".to_string());
+                return;
+            }
+            let mut updates = Vec::new();
+            for (ri, col, val) in &q.q_changes {
+                let Some(row) = r.rows.get(*ri) else { continue };
+                let pk: Vec<(String, String)> = pk_idxs
+                    .iter()
+                    .map(|&i| (r.columns[i].clone(), row[i].clone().unwrap_or_default()))
+                    .collect();
+                if pk.iter().any(|(_, v)| v.is_empty()) {
+                    continue;
+                }
+                updates.push(shujing_core::edits::CellUpdate {
+                    pk,
+                    sets: vec![(col.clone(), val.clone())],
+                });
+            }
+            if updates.is_empty() {
+                app.toast_error("没有可保存的修改".to_string());
+                return;
+            }
+            let conn_id = q.conn_id.clone();
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            let tid = tab_id.clone();
+            net::spawn(async move {
+                let result = service
+                    .apply_changes(&conn_id, &table, &updates, &[], &[])
+                    .await;
+                let _ = tx.send(BgEvent::ChangesSaved {
+                    tab_id: tid,
+                    result: result.map(|r| r.affected),
+                });
+            });
+        }
+        TabAction::CancelQuery { tab_id } => {
+            let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
+                return;
+            };
+            let crate::app::TabKind::Query(q) = &tab.kind else {
+                return;
+            };
+            let conn_id = q.conn_id.clone();
+            let service = app.service.clone();
+            net::spawn(async move {
+                let _ = service.cancel_query(&conn_id).await;
+            });
+        }
         TabAction::OptimizeQuery { tab_id } => app.run_optimize(&tab_id),
         TabAction::ErOpenTable {
             conn_id,
@@ -2291,6 +2561,7 @@ impl eframe::App for ShujingApp {
                     crate::redis::draw_redis_view(ctx, &tab_id, rt, read_only)
                 }
                 TabKind::Er(e) => crate::er::draw_er_view(ctx, &tab_id, e),
+                TabKind::Ddl(d) => structure::draw_ddl_view(ctx, &tab_id, d),
             };
             for a in actions {
                 execute_tab_action(self, ctx, a);

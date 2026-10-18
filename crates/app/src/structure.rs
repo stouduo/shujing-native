@@ -1,6 +1,6 @@
 //! 结构页:字段/索引/DDL,视觉与数据页一致。
 
-use crate::app::StructureTab;
+use crate::app::{DdlTab, StructureTab};
 use crate::table_view::TabAction;
 use crate::{icons, theme};
 use egui::{Align, Color32, Layout, RichText, Sense};
@@ -446,4 +446,107 @@ fn cell_line(ui: &egui::Ui, color: Color32) {
         [egui::pos2(r.left(), y), egui::pos2(r.right(), y)],
         egui::Stroke::new(1.0, color),
     );
+}
+
+
+/// 对象 DDL 查看页(触发器/存储过程/函数/视图)
+pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<TabAction> {
+    let mut actions = Vec::new();
+    let p = theme::c();
+
+    egui::TopBottomPanel::top("ddl_toolbar")
+        .show_separator_line(false)
+        .exact_height(theme::TOOLBAR_H)
+        .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin {
+            left: 14,
+            right: 10,
+            top: 0,
+            bottom: 0,
+        }))
+        .show(ctx, |ui| {
+            ui.horizontal_centered(|ui| {
+                let title = format!("{} {}", d.name, kind_label(&d.kind));
+                let tr = ui.label(theme::strong(&title, theme::FS_TABLE_TITLE).color(p.text));
+                let g = ui.painter().layout_no_wrap(
+                    title.clone(),
+                    theme::bold(theme::FS_TABLE_TITLE),
+                    Color32::PLACEHOLDER,
+                );
+                let baseline =
+                    tr.rect.center().y - g.size().y / 2.0 + icons::baseline_top(&g, theme::FS_TABLE_TITLE);
+                if let Some(db) = &d.database {
+                    icons::chip_at_baseline(ui, db, p.text2, baseline);
+                }
+                if d.loading {
+                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                }
+                if let Some(err) = &d.error {
+                    icons::label_at_baseline(
+                        ui,
+                        icons::clip(err, 70),
+                        egui::FontId::proportional(theme::FS_AUX),
+                        p.red,
+                        baseline,
+                        220.0,
+                    );
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if !d.loading && icons::refresh(ui, p.text2).clicked() {
+                        actions.push(TabAction::ReloadDdl {
+                            tab_id: tab_id.to_string(),
+                        });
+                    }
+                    if let Some(ddl) = &d.ddl {
+                        let ddl2 = ddl.clone();
+                        if theme::button(ui, "复制 DDL", theme::BtnKind::Secondary).clicked() {
+                            ui.ctx().copy_text(ddl2);
+                        }
+                    }
+                });
+            });
+            theme::hairline_bottom(ui);
+        });
+
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::new()
+                .fill(p.bg)
+                .inner_margin(egui::Margin::symmetric(14, 12)),
+        )
+        .show(ctx, |ui| {
+            let Some(ddl) = &d.ddl else {
+                ui.centered_and_justified(|ui| {
+                    let msg = if d.loading {
+                        "读取 DDL…"
+                    } else {
+                        d.error.as_deref().unwrap_or("无数据")
+                    };
+                    ui.label(RichText::new(msg).size(12.0).color(p.muted));
+                });
+                return;
+            };
+            let mut job = crate::sql_highlight::highlight(ddl);
+            job.wrap.max_width = ui.available_width();
+            egui::ScrollArea::vertical()
+                .id_salt(format!("objddl-{tab_id}"))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let galley = ui.fonts(|f| f.layout_job(job));
+                    let size = galley.size();
+                    ui.painter().galley(ui.cursor().left_top(), galley, p.text2);
+                    ui.allocate_space(size);
+                });
+        });
+    actions
+}
+
+fn kind_label(kind: &str) -> &str {
+    match kind {
+        "trigger" => "触发器",
+        "procedure" => "存储过程",
+        "function" => "函数",
+        "view" => "视图",
+        _ => "DDL",
+    }
 }

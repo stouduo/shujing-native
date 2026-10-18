@@ -6,6 +6,59 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// 一次异步操作的完成事件(由 tokio 后台任务投递,帧循环消费)
+// ---------------------------------------------------------------- 会话持久化
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct SessionData {
+    #[serde(default)]
+    tabs: Vec<SessionTab>,
+    #[serde(default)]
+    active: usize,
+    #[serde(default)]
+    online: Vec<String>,
+    #[serde(default)]
+    expanded: HashMap<String, String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum SessionTab {
+    Table {
+        conn: String,
+        table: String,
+        database: Option<String>,
+    },
+    Structure {
+        conn: String,
+        table: String,
+        database: Option<String>,
+    },
+    Query {
+        conn: String,
+        sql: String,
+        #[serde(default)]
+        history: Vec<String>,
+    },
+    Designer {
+        conn: String,
+        database: Option<String>,
+        table: Option<String>,
+        table_name: String,
+    },
+    Redis { conn: String, db: u8 },
+    Er {
+        conn: String,
+        database: Option<String>,
+    },
+    Ddl {
+        conn: String,
+        database: Option<String>,
+        name: String,
+        #[serde(rename = "obj_kind")]
+        kind: String,
+    },
+}
+
 pub enum BgEvent {
     ConnectDone {
         conn_id: String,
@@ -117,10 +170,17 @@ pub enum BgEvent {
     SearchDone {
         result: Result<Vec<shujing_core::SearchHit>, String>,
     },
+    /// 查询结果回写:主键列
+    QueryPkDone { tab_id: String, cols: Vec<String> },
     /// 一次性 SQL 执行完成(导入 SQL 文件),成功提示用 msg
     SqlDone {
         msg: String,
         result: Result<(), String>,
+    },
+    /// 对象 DDL
+    DdlLoaded {
+        tab_id: String,
+        result: Result<String, String>,
     },
     /// ER 图数据(表+结构+外键)
     ErLoaded {
@@ -191,8 +251,18 @@ pub struct TableTab {
     pub selected: Option<(usize, usize)>,
     /// 筛选输入框内容
     pub filter: String,
-    /// 已应用的筛选(全列 LIKE)
+    /// 已应用的筛选(全列 LIKE 关键词)
     pub active_filter: Option<String>,
+    /// 筛选栏(字段/自由模式)
+    pub filter_bar_open: bool,
+    /// 0 字段模式 / 1 自由 WHERE
+    pub filter_mode: u8,
+    /// 字段模式条件 (列, 操作符, 值)
+    pub conds: Vec<(String, String, String)>,
+    pub free_where: String,
+    /// 已应用的筛选栏 WHERE(构建好的)
+    pub applied_where: Option<String>,
+    pub filter_error: Option<String>,
     /// 最近一次查询耗时
     pub last_elapsed_ms: Option<u64>,
     /// 查看完整内容弹窗 (列名, 全文)
@@ -229,6 +299,12 @@ impl TableTab {
             view_cell: None,
             insert_form: None,
             detail: false,
+            filter_bar_open: false,
+            filter_mode: 0,
+            conds: vec![],
+            free_where: String::new(),
+            applied_where: None,
+            filter_error: None,
         }
     }
 }
@@ -255,6 +331,14 @@ pub struct QueryTab {
     pub error: Option<String>,
     /// SQL 优化分析弹窗
     pub optimize: Option<OptimizeState>,
+    /// 结果集回写:单表 SELECT 检测出的表名
+    pub result_table: Option<String>,
+    pub result_pk: Vec<String>,
+    pub pk_checked: bool,
+    /// 结果集未保存修改:(行号, 列名, 新值)
+    pub q_changes: Vec<(usize, String, Option<String>)>,
+    pub q_editing: Option<(usize, usize)>,
+    pub q_draft: String,
 }
 
 /// 优化分析弹窗状态
@@ -262,6 +346,17 @@ pub struct OptimizeState {
     pub running: bool,
     pub ran: bool,
     pub plan: Option<shujing_core::ExecResult>,
+    pub error: Option<String>,
+}
+
+/// 对象 DDL 查看标签(触发器/存储过程/函数/视图)
+pub struct DdlTab {
+    pub conn_id: String,
+    pub database: Option<String>,
+    pub name: String,
+    pub kind: String,
+    pub ddl: Option<String>,
+    pub loading: bool,
     pub error: Option<String>,
 }
 
@@ -417,6 +512,7 @@ pub enum TabKind {
     Designer(DesignerTab),
     Redis(RedisTab),
     Er(ErTab),
+    Ddl(DdlTab),
 }
 
 impl Tab {
@@ -444,6 +540,8 @@ pub struct ConnTree {
     /// 各库的表缓存(此前共用一个 Vec,切库瞬间会显示上一个库的表)
     pub tables_by_db: HashMap<String, Vec<shujing_core::TableMeta>>,
     pub loading: bool,
+    /// 对象分组展开状态(键 = "{db}|{group}",group ∈ table/view/prog;默认只开 table)
+    pub groups_open: HashMap<String, bool>,
 }
 
 /// 连接编辑弹窗
@@ -530,6 +628,19 @@ pub struct ShujingApp {
     pub new_table: Option<NewTableState>,
     pub global_search: Option<GlobalSearchState>,
     pub confirm: Option<ConfirmState>,
+    /// 会话持久化
+    pub session_dirty: bool,
+    pub last_session_save: Option<std::time::Instant>,
+    pub session_restored: bool,
+    pub pending_online: Vec<String>,
+    pub pending_expanded: HashMap<String, String>,
+    pub last_session_sig: (
+        usize,
+        usize,
+        bool,
+        usize,
+        Vec<Option<String>>,
+    ),
 }
 
 pub enum PendingAction {
@@ -566,7 +677,7 @@ impl ShujingApp {
         crate::theme::apply(&cc.egui_ctx);
         #[cfg(target_os = "macos")]
         crate::force_appearance(dark);
-        Self {
+        let mut app = Self {
             service,
             config_dir,
             conns,
@@ -588,6 +699,12 @@ impl ShujingApp {
             new_table: None,
             global_search: None,
             confirm: None,
+            session_dirty: false,
+            last_session_save: None,
+            session_restored: false,
+            pending_online: vec![],
+            pending_expanded: HashMap::new(),
+            last_session_sig: (0, 0, false, 0, vec![]),
             dark_mode: dark,
             auto_connect_done: false,
             shot: std::env::var("SHUJING_SCREENSHOT")
@@ -598,7 +715,9 @@ impl ShujingApp {
                     ready_at: None,
                     sent: false,
                 }),
-        }
+        };
+        app.restore_session();
+        app
     }
 
     /// CJK 字体:macOS 依次尝试常见系统中文字体(egui 默认只有拉丁字形)
@@ -886,7 +1005,7 @@ impl ShujingApp {
         Some(match &t.kind {
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Structure(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
-            TabKind::Query(_) | TabKind::Designer(_) | TabKind::Redis(_) | TabKind::Er(_) => return None,
+            TabKind::Query(_) | TabKind::Designer(_) | TabKind::Redis(_) | TabKind::Er(_) | TabKind::Ddl(_) => return None,
         })
     }
 
@@ -1014,6 +1133,54 @@ impl ShujingApp {
                 .get_table_structure(&conn_id, &table, database)
                 .await;
             let _ = tx.send(BgEvent::DesignerLoaded { tab_id, result });
+        });
+    }
+
+    /// 打开对象 DDL 标签
+    pub fn open_ddl(&mut self, conn_id: &str, database: Option<String>, kind: &str, name: &str) {
+        let existing = self.tabs.iter().position(|t| {
+            matches!(&t.kind, TabKind::Ddl(d)
+                if d.conn_id == conn_id && d.name == name && d.kind == kind)
+        });
+        if let Some(i) = existing {
+            self.active_tab = i;
+            return;
+        }
+        let id = format!("o{}", rand_suffix());
+        let title = format!("{name} DDL");
+        self.tabs.push(Tab {
+            id: id.clone(),
+            title,
+            kind: TabKind::Ddl(DdlTab {
+                conn_id: conn_id.to_string(),
+                database,
+                name: name.to_string(),
+                kind: kind.to_string(),
+                ddl: None,
+                loading: true,
+                error: None,
+            }),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.load_ddl(&id);
+    }
+
+    pub fn load_ddl(&mut self, tab_id: &str) {
+        let tab_id = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Ddl(d) = &tab.kind else {
+            return;
+        };
+        let conn_id = d.conn_id.clone();
+        let kind = d.kind.clone();
+        let name = d.name.clone();
+        net::spawn(async move {
+            let result = service.get_object_ddl(&conn_id, &kind, &name).await;
+            let _ = tx.send(BgEvent::DdlLoaded { tab_id, result });
         });
     }
 
@@ -1246,6 +1413,7 @@ impl ShujingApp {
                 TabKind::Designer(d) => d.conn_id.clone(),
                 TabKind::Redis(r) => r.conn_id.clone(),
                 TabKind::Er(e) => e.conn_id.clone(),
+                TabKind::Ddl(d) => d.conn_id.clone(),
             })
         });
         let id = format!("q{}", rand_suffix());
@@ -1263,6 +1431,12 @@ impl ShujingApp {
                 running: false,
                 error: None,
                 optimize: None,
+                result_table: None,
+                result_pk: vec![],
+                pk_checked: false,
+                q_changes: vec![],
+                q_editing: None,
+                q_draft: String::new(),
             }),
         });
         self.active_tab = self.tabs.len() - 1;
@@ -1290,11 +1464,13 @@ impl ShujingApp {
         let tab_id = tab_id.to_string();
         let tx = self.event_tx.clone();
         let service = self.service.clone();
-        let mysql = mysql_quote(&self.conns, &tab_id);
+        let (mysql, conn_id) = match self.table_tab(&tab_id) {
+            Some(t) => (mysql_quote(&self.conns, &t.conn_id), t.conn_id.clone()),
+            None => return,
+        };
         let Some(tab) = self.table_tab_mut(&tab_id) else {
             return;
         };
-        let conn_id = tab.conn_id.clone();
         let database = tab.database.clone();
         let table = tab.table.clone();
         let (limit, offset) = (tab.page_size, (tab.page - 1) * tab.page_size);
@@ -1306,10 +1482,14 @@ impl ShujingApp {
                 if *asc { "ASC" } else { "DESC" }
             )
         });
-        let where_clause = tab
-            .active_filter
-            .as_ref()
-            .map(|q| build_like_filter(&cols_snapshot, q, mysql));
+        let mut where_parts: Vec<String> = Vec::new();
+        if let Some(q) = &tab.active_filter {
+            where_parts.push(build_like_filter(&cols_snapshot, q, mysql));
+        }
+        if let Some(w) = &tab.applied_where {
+            where_parts.push(w.clone());
+        }
+        let where_clause = (!where_parts.is_empty()).then(|| where_parts.join(" AND "));
         tab.loading = true;
         tab.changes.clear();
         tab.editing = None;
@@ -1582,6 +1762,338 @@ impl ShujingApp {
         });
     }
 
+    // ---------------------------------------------------------------- 会话
+
+    pub fn mark_session_dirty(&mut self) {
+        self.session_dirty = true;
+    }
+
+    fn session_path(&self) -> std::path::PathBuf {
+        self.config_dir.join("session.json")
+    }
+
+    pub fn save_session(&mut self) {
+        let mut tabs = Vec::new();
+        for t in &self.tabs {
+            match &t.kind {
+                TabKind::Table(x) => tabs.push(SessionTab::Table {
+                    conn: x.conn_id.clone(),
+                    table: x.table.clone(),
+                    database: x.database.clone(),
+                }),
+                TabKind::Structure(x) => tabs.push(SessionTab::Structure {
+                    conn: x.conn_id.clone(),
+                    table: x.table.clone(),
+                    database: x.database.clone(),
+                }),
+                TabKind::Query(q) => tabs.push(SessionTab::Query {
+                    conn: q.conn_id.clone(),
+                    sql: q.sql.clone(),
+                    history: q.history.clone(),
+                }),
+                TabKind::Designer(d) => tabs.push(SessionTab::Designer {
+                    conn: d.conn_id.clone(),
+                    database: d.database.clone(),
+                    table: d.original_table.clone(),
+                    table_name: d.table_name.clone(),
+                }),
+                TabKind::Redis(r) => tabs.push(SessionTab::Redis {
+                    conn: r.conn_id.clone(),
+                    db: r.db,
+                }),
+                TabKind::Er(e) => tabs.push(SessionTab::Er {
+                    conn: e.conn_id.clone(),
+                    database: e.database.clone(),
+                }),
+                TabKind::Ddl(d) => tabs.push(SessionTab::Ddl {
+                    conn: d.conn_id.clone(),
+                    database: d.database.clone(),
+                    name: d.name.clone(),
+                    kind: d.kind.clone(),
+                }),
+            }
+        }
+        let data = SessionData {
+            tabs,
+            active: self.active_tab,
+            online: self
+                .trees
+                .iter()
+                .filter(|(_, t)| t.online)
+                .map(|(id, _)| id.clone())
+                .collect(),
+            expanded: self
+                .trees
+                .iter()
+                .filter_map(|(id, t)| t.expanded_db.clone().map(|db| (id.clone(), db)))
+                .collect(),
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&data) {
+            let _ = std::fs::write(self.session_path(), json);
+        }
+        self.session_dirty = false;
+        self.last_session_save = Some(std::time::Instant::now());
+    }
+
+    /// 距上次保存超过 1 秒且有变更时落盘(update 循环调用)
+    pub fn save_session_if_due(&mut self) {
+        if !self.session_dirty {
+            return;
+        }
+        let due = self
+            .last_session_save
+            .map(|t| t.elapsed().as_secs_f32() > 1.0)
+            .unwrap_or(true);
+        if due {
+            self.save_session();
+        }
+    }
+
+    /// 启动时恢复会话(标签结构/在线连接/展开库);压测模式跳过
+    pub fn restore_session(&mut self) -> bool {
+        if std::env::var("SHUJING_AUTOOPEN").is_ok() {
+            return false;
+        }
+        let Ok(json) = std::fs::read_to_string(self.session_path()) else {
+            return false;
+        };
+        let Ok(data) = serde_json::from_str::<SessionData>(&json) else {
+            return false;
+        };
+        let mut loaders: Vec<(String, String)> = Vec::new(); // (tab_id, kind)
+        for st in &data.tabs {
+            match st {
+                SessionTab::Table {
+                    conn,
+                    table,
+                    database,
+                } => {
+                    let tab = TableTab::new(conn.clone(), table.clone(), database.clone());
+                    let id = format!("t{}", rand_suffix());
+                    self.tabs.push(Tab {
+                        id: id.clone(),
+                        title: tab.table.clone(),
+                        kind: TabKind::Table(tab),
+                    });
+                    loaders.push((id.clone(), "table".into()));
+                }
+                SessionTab::Structure {
+                    conn,
+                    table,
+                    database,
+                } => {
+                    let id = format!("s{}", rand_suffix());
+                    self.tabs.push(Tab {
+                        id: id.clone(),
+                        title: format!("{table} 结构"),
+                        kind: TabKind::Structure(StructureTab {
+                            conn_id: conn.clone(),
+                            table: table.clone(),
+                            database: database.clone(),
+                            data: None,
+                            loading: true,
+                            error: None,
+                        }),
+                    });
+                    loaders.push((id.clone(), "structure".into()));
+                }
+                SessionTab::Query {
+                    conn,
+                    sql,
+                    history,
+                } => {
+                    self.query_seq += 1;
+                    let id = format!("q{}", rand_suffix());
+                    self.tabs.push(Tab {
+                        id: id.clone(),
+                        title: format!("查询 {}", self.query_seq),
+                        kind: TabKind::Query(QueryTab {
+                            conn_id: conn.clone(),
+                            sql: sql.clone(),
+                            history: history.clone(),
+                            results: vec![],
+                            active_set: 0,
+                            running: false,
+                            error: None,
+                            optimize: None,
+                            result_table: None,
+                            result_pk: vec![],
+                            pk_checked: false,
+                            q_changes: vec![],
+                            q_editing: None,
+                            q_draft: String::new(),
+                        }),
+                    });
+                }
+                SessionTab::Designer {
+                    conn,
+                    database,
+                    table,
+                    table_name,
+                } => {
+                    let id = format!("d{}", rand_suffix());
+                    self.tabs.push(Tab {
+                        id: id.clone(),
+                        title: match table {
+                            Some(t) => format!("设计 {t}"),
+                            None => "新表".to_string(),
+                        },
+                        kind: TabKind::Designer(DesignerTab {
+                            conn_id: conn.clone(),
+                            database: database.clone(),
+                            original_table: table.clone(),
+                            table_name: table_name.clone(),
+                            columns: if table.is_some() {
+                                vec![]
+                            } else {
+                                vec![DesignerColumn {
+                                    name: "id".into(),
+                                    data_type: "INTEGER".into(),
+                                    nullable: false,
+                                    pk: true,
+                                    auto_inc: true,
+                                    ..Default::default()
+                                }]
+                            },
+                            loaded: table.is_none(),
+                            loading: table.is_some(),
+                            saving: false,
+                            error: None,
+                            info: None,
+                        }),
+                    });
+                    if table.is_some() {
+                        loaders.push((id.clone(), "designer".into()));
+                    }
+                }
+                SessionTab::Redis { conn, db } => {
+                    let id = format!("r{}", rand_suffix());
+                    self.tabs.push(Tab {
+                        id: id.clone(),
+                        title: format!("db{db}"),
+                        kind: TabKind::Redis(RedisTab {
+                            conn_id: conn.clone(),
+                            db: *db,
+                            pattern: "*".to_string(),
+                            cursor: 0,
+                            keys: vec![],
+                            selected_key: None,
+                            detail: None,
+                            detail_loading: false,
+                            scanning: false,
+                            error: None,
+                            key_types: HashMap::new(),
+                            key_ttls: HashMap::new(),
+                            sort: 0,
+                            op_running: false,
+                            new_key: None,
+                            analyze: None,
+                            rename_draft: None,
+                            ttl_draft: None,
+                            edit_value: None,
+                            member_add: None,
+                            member_set_hash: false,
+                            list_edit: None,
+                        }),
+                    });
+                    loaders.push((id.clone(), "redis".into()));
+                }
+                SessionTab::Er { conn, database } => {
+                    let id = format!("e{}", rand_suffix());
+                    self.tabs.push(Tab {
+                        id: id.clone(),
+                        title: "ER 图".to_string(),
+                        kind: TabKind::Er(ErTab {
+                            conn_id: conn.clone(),
+                            database: database.clone(),
+                            loading: true,
+                            error: None,
+                            tables: vec![],
+                            structures: Default::default(),
+                            fks: vec![],
+                            zoom: 0.9,
+                            pan: egui::vec2(60.0, 40.0),
+                            positions: Default::default(),
+                            fit_done: false,
+                            refit: false,
+                        }),
+                    });
+                    loaders.push((id.clone(), "er".into()));
+                }
+                SessionTab::Ddl {
+                    conn,
+                    database,
+                    name,
+                    kind,
+                } => {
+                    let id = format!("o{}", rand_suffix());
+                    self.tabs.push(Tab {
+                        id: id.clone(),
+                        title: format!("{name} DDL"),
+                        kind: TabKind::Ddl(DdlTab {
+                            conn_id: conn.clone(),
+                            database: database.clone(),
+                            name: name.clone(),
+                            kind: kind.clone(),
+                            ddl: None,
+                            loading: true,
+                            error: None,
+                        }),
+                    });
+                    loaders.push((id.clone(), "ddl".into()));
+                }
+            }
+        }
+        // 触发各标签的数据加载
+        for (id, kind) in loaders {
+            match kind.as_str() {
+                "table" => self.load_rows(&id),
+                "structure" => self.load_structure(&id),
+                "designer" => self.load_designer_structure(&id),
+                "redis" => self.redis_scan(&id, true),
+                "er" => self.load_er(&id),
+                "ddl" => self.load_ddl(&id),
+                _ => {}
+            }
+        }
+        self.active_tab = data.active.min(self.tabs.len().saturating_sub(1));
+        self.pending_online = data.online.clone();
+        self.pending_expanded = data.expanded.clone();
+        self.session_restored = !data.tabs.is_empty() || !data.online.is_empty();
+        self.session_restored
+    }
+
+    /// 应用筛选栏(字段/自由模式)
+    pub fn apply_filter_bar(&mut self, tab_id: &str) {
+        let mysql = self
+            .table_tab(tab_id)
+            .map(|t| mysql_quote(&self.conns, &t.conn_id))
+            .unwrap_or(true);
+        let (conds, free) = {
+            let Some(t) = self.table_tab(tab_id) else { return };
+            (t.conds.clone(), t.free_where.clone())
+        };
+        let built = build_cond_where(&conds, &free, mysql);
+        if let Some(t) = self.table_tab_mut(tab_id) {
+            t.filter_error = None;
+            t.applied_where = built;
+            t.page = 1;
+        }
+        self.load_rows(tab_id);
+    }
+
+    /// 清除筛选栏
+    pub fn clear_filter_bar(&mut self, tab_id: &str) {
+        if let Some(t) = self.table_tab_mut(tab_id) {
+            t.applied_where = None;
+            t.conds.clear();
+            t.free_where.clear();
+            t.filter_error = None;
+            t.page = 1;
+        }
+        self.load_rows(tab_id);
+    }
+
     /// SQL 优化分析:对当前查询页 SQL 跑 EXPLAIN(仅 SELECT)
     pub fn run_optimize(&mut self, tab_id: &str) {
         let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
@@ -1714,6 +2226,12 @@ impl ShujingApp {
                             databases = vec!["main".to_string()];
                         }
                         tree.databases = databases;
+                        // 会话恢复:优先展开上次使用的库
+                        if let Some(db) = self.pending_expanded.remove(&conn_id) {
+                            if tree.databases.contains(&db) {
+                                tree.expanded_db = Some(db);
+                            }
+                        }
                         if tree.expanded_db.is_none() && !tree.databases.is_empty() {
                             let db = tree.databases[0].clone();
                             tree.expanded_db = Some(db.clone());
@@ -1772,11 +2290,27 @@ impl ShujingApp {
                 }
                 BgEvent::ChangesSaved { tab_id, result } => match result {
                     Ok(n) => {
-                        if let Some(t) = self.table_tab_mut(&tab_id) {
+                        // 查询结果回写:清改动并重跑查询
+                        let is_query = self
+                            .tabs
+                            .iter()
+                            .any(|t| t.id == tab_id && matches!(t.kind, TabKind::Query(_)));
+                        if is_query {
+                            if let Some(tab) =
+                                self.tabs.iter_mut().find(|t| t.id == tab_id)
+                            {
+                                if let TabKind::Query(q) = &mut tab.kind {
+                                    q.q_changes.clear();
+                                    q.q_editing = None;
+                                }
+                            }
+                            self.toast_error(format!("已保存 {n} 处修改"));
+                            self.run_query(&tab_id);
+                        } else if let Some(t) = self.table_tab_mut(&tab_id) {
                             t.changes.clear();
+                            self.load_rows(&tab_id);
+                            self.toast_error(format!("已保存 {n} 处修改"));
                         }
-                        self.load_rows(&tab_id);
-                        self.toast_error(format!("已保存 {n} 处修改"));
                     }
                     Err(e) => self.toast_error(format!("保存失败: {e}")),
                 },
@@ -1799,8 +2333,48 @@ impl ShujingApp {
                                 Ok(rs) => {
                                     q.results = rs;
                                     q.active_set = 0;
+                                    q.q_changes.clear();
+                                    q.q_editing = None;
+                                    q.result_table =
+                                        detect_single_table(&q.sql);
+                                    q.pk_checked = false;
+                                    // 单表 SELECT:拉主键判断结果集可否回写
+                                    if let Some(t) = q.result_table.clone() {
+                                        let conn_id = q.conn_id.clone();
+                                        let tid = tab_id.clone();
+                                        let tx = self.event_tx.clone();
+                                        let service = self.service.clone();
+                                        net::spawn(async move {
+                                            let cols = service
+                                                .get_table_structure(&conn_id, &t, None)
+                                                .await
+                                                .map(|st| {
+                                                    st.columns
+                                                        .iter()
+                                                        .filter(|c| c.key == "PRI")
+                                                        .map(|c| c.name.clone())
+                                                        .collect::<Vec<_>>()
+                                                })
+                                                .unwrap_or_default();
+                                            let _ = tx.send(BgEvent::QueryPkDone {
+                                                tab_id: tid,
+                                                cols,
+                                            });
+                                        });
+                                    }
                                 }
-                                Err(e) => q.error = Some(e),
+                                Err(e) => {
+                                    let low = e.to_lowercase();
+                                    if low.contains("interrupt")
+                                        || low.contains("cancel")
+                                        || low.contains("kill")
+                                        || low.contains("中止")
+                                    {
+                                        q.error = Some("已取消".to_string());
+                                    } else {
+                                        q.error = Some(e);
+                                    }
+                                }
                             }
                         }
                     }
@@ -2104,6 +2678,17 @@ impl ShujingApp {
                     Ok(()) => self.toast_error(msg),
                     Err(e) => self.toast_error(format!("执行失败: {e}")),
                 },
+                BgEvent::DdlLoaded { tab_id, result } => {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                        if let TabKind::Ddl(d) = &mut tab.kind {
+                            d.loading = false;
+                            match result {
+                                Ok(ddl) => d.ddl = Some(ddl),
+                                Err(e) => d.error = Some(e),
+                            }
+                        }
+                    }
+                }
                 BgEvent::ErLoaded { tab_id, result } => {
                     let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
                         return;
@@ -2136,6 +2721,14 @@ impl ShujingApp {
                     match result {
                         Ok(plan) => o.plan = Some(plan),
                         Err(e) => o.error = Some(e),
+                    }
+                }
+                BgEvent::QueryPkDone { tab_id, cols } => {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                        if let TabKind::Query(q) = &mut tab.kind {
+                            q.result_pk = cols;
+                            q.pk_checked = true;
+                        }
                     }
                 }
                 BgEvent::SearchDone { result } => {
@@ -2192,6 +2785,87 @@ pub fn build_like_filter(columns: &[String], query: &str, mysql: bool) -> String
         .map(|c| format!("{} LIKE {}", quote_ident_by(c, mysql), pattern))
         .collect::<Vec<_>>()
         .join(" OR ")
+}
+
+/// 筛选栏条件 → WHERE 片段(数字裸值,其余引号转义;自由模式原文并入)
+pub fn build_cond_where(
+    conds: &[(String, String, String)],
+    free: &str,
+    mysql: bool,
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for (col, op, val) in conds {
+        let op = op.trim();
+        if op.is_empty() {
+            continue;
+        }
+        let ident = quote_ident_by(col, mysql);
+        if op == "IS NULL" || op == "IS NOT NULL" {
+            parts.push(format!("{ident} {op}"));
+            continue;
+        }
+        let v = val.trim();
+        if v.is_empty() {
+            continue;
+        }
+        let literal = if v.parse::<f64>().is_ok() {
+            v.to_string()
+        } else {
+            format!("'{}'", v.replace('\'', "''"))
+        };
+        parts.push(format!("{ident} {op} {literal}"));
+    }
+    let free_t = free.trim();
+    if !free_t.is_empty() {
+        parts.push(free_t.to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(" AND "))
+}
+
+/// 检测 SQL 是否为可回写的单表 SELECT,返回表名(取最后一段标识符)
+pub fn detect_single_table(sql: &str) -> Option<String> {
+    let lower = sql.to_lowercase();
+    let head = lower.trim_start();
+    if !head.starts_with("select") {
+        return None;
+    }
+    for bad in [
+        " join ", " union ", " group by ", " having ", " into ", "insert ", "update ",
+        "delete ", ") select ", ")select",
+    ] {
+        if lower.contains(bad) {
+            return None;
+        }
+    }
+    // 子查询:select 出现两次以上即放弃
+    if lower.matches("select").count() > 1 {
+        return None;
+    }
+    let from_pos = lower.find(" from ")?;
+    let rest = sql[from_pos + 6..].trim();
+    // 取第一个标识符(容忍 `db`.`table` / "db"."table" / db.table,引号段可与点交错)
+    let mut ident = String::new();
+    let mut chars = rest.chars();
+    loop {
+        match chars.next() {
+            Some(q @ ('`' | '"')) => {
+                ident.push(q);
+                for c2 in chars.by_ref() {
+                    ident.push(c2);
+                    if c2 == q {
+                        break;
+                    }
+                }
+            }
+            Some(c) if c.is_alphanumeric() || c == '_' || c == '$' || c == '.' => {
+                ident.push(c);
+            }
+            _ => break,
+        }
+    }
+    let cleaned: String = ident.chars().filter(|c| *c != '`' && *c != '"').collect();
+    let name = cleaned.rsplit('.').next()?.trim().to_string();
+    (!name.is_empty()).then_some(name)
 }
 
 pub fn quote_ident_by(name: &str, mysql: bool) -> String {
@@ -2344,5 +3018,48 @@ impl ShujingApp {
             batch_errors: None,
             target_cols,
         });
+    }
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    #[test]
+    fn detect_single_table_basic() {
+        assert_eq!(
+            detect_single_table("SELECT * FROM users WHERE id = 1"),
+            Some("users".into())
+        );
+        assert_eq!(
+            detect_single_table("SELECT `u`.`id` FROM `dramato`.`users` LIMIT 10"),
+            Some("users".into())
+        );
+        assert_eq!(detect_single_table("SELECT a FROM t1 JOIN t2 ON 1"), None);
+        assert_eq!(detect_single_table("SELECT (SELECT 1) FROM t"), None);
+        assert_eq!(detect_single_table("UPDATE t SET a = 1"), None);
+        assert_eq!(
+            detect_single_table("select id, count(*) from orders group by id"),
+            None
+        );
+    }
+
+    #[test]
+    fn cond_where_builder() {
+        let conds = vec![
+            ("age".to_string(), ">".to_string(), "18".to_string()),
+            ("name".to_string(), "LIKE".to_string(), "张%".to_string()),
+            ("del".to_string(), "IS NULL".to_string(), String::new()),
+            ("empty".to_string(), "=".to_string(), String::new()),
+        ];
+        let w = build_cond_where(&conds, "", true).unwrap();
+        assert!(w.contains("`age` > 18"), "{w}");
+        assert!(w.contains("`name` LIKE '张%'"), "{w}");
+        assert!(w.contains("`del` IS NULL"), "{w}");
+        assert!(!w.contains("empty"), "{w}");
+        // 自由 WHERE 并入
+        let w2 = build_cond_where(&[], "status = 1 AND amount > 0", false).unwrap();
+        assert_eq!(w2, "status = 1 AND amount > 0");
+        assert!(build_cond_where(&[], "", true).is_none());
     }
 }

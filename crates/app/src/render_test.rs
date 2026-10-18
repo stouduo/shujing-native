@@ -89,6 +89,19 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         kind: "table".into(),
     })
     .collect();
+    let mut tables = tables;
+    tables.push(shujing_core::TableMeta {
+        name: "v_user_summary".into(),
+        kind: "view".into(),
+    });
+    tables.push(shujing_core::TableMeta {
+        name: "trg_touch_user".into(),
+        kind: "trigger".into(),
+    });
+    tables.push(shujing_core::TableMeta {
+        name: "fn_heat_score".into(),
+        kind: "function".into(),
+    });
     let archive: Vec<shujing_core::TableMeta> = (0..7)
         .map(|i| shujing_core::TableMeta {
             name: format!("archive_table_{i}"),
@@ -106,6 +119,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         version: "8.0.36".into(),
         databases: vec!["dramato".into(), "archive".into(), "comic".into()],
         expanded_db: Some("dramato".into()),
+        groups_open: Default::default(),
         tables_by_db: HashMap::from([
             ("dramato".to_string(), tables),
             ("archive".to_string(), archive),
@@ -138,6 +152,12 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         new_table: None,
         global_search: None,
         confirm: None,
+        session_dirty: false,
+        last_session_save: None,
+        session_restored: false,
+        pending_online: vec![],
+        pending_expanded: HashMap::new(),
+        last_session_sig: (0, 0, false, 0, vec![]),
     }
 }
 
@@ -365,6 +385,9 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         TabKind::Er(e) => {
             let _ = crate::er::draw_er_view(ctx, &tab_id, e);
         }
+        TabKind::Ddl(d) => {
+            let _ = crate::structure::draw_ddl_view(ctx, &tab_id, d);
+        }
     }
 }
 
@@ -507,6 +530,12 @@ fn render_query_view() {
         running: false,
         error: None,
         optimize: None,
+        result_table: None,
+        result_pk: vec![],
+        pk_checked: false,
+        q_changes: vec![],
+        q_editing: None,
+        q_draft: String::new(),
     };
     let rows: Vec<Vec<Option<String>>> = (0..24)
         .map(|i| {
@@ -729,4 +758,81 @@ fn render_er_diagram() {
         let mut b = app.borrow_mut();
         draw_app(&mut b, ctx);
     });
+}
+
+
+#[test]
+fn render_filter_bar() {
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        t.filter_bar_open = true;
+        t.filter_mode = 0;
+        t.conds = vec![
+            ("status".into(), "=".into(), "1".into()),
+            ("role_name".into(), "LIKE".into(), "admin%".into()),
+        ];
+    }
+    let app = std::cell::RefCell::new(app);
+    render("filter_bar", 1200.0, 700.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
+#[test]
+fn session_save_restore_roundtrip() {
+    let dir = std::env::temp_dir().join(format!("shujing_sess_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let mut app = test_app(vec![], 0);
+    app.config_dir = dir.clone();
+    // 一个查询标签 + 一个表标签
+    let mut q = QueryTab {
+        conn_id: "c1".into(),
+        sql: "SELECT 1".into(),
+        history: vec!["SELECT 2".into()],
+        results: vec![],
+        active_set: 0,
+        running: false,
+        error: None,
+        optimize: None,
+        result_table: None,
+        result_pk: vec![],
+        pk_checked: false,
+        q_changes: vec![],
+        q_editing: None,
+        q_draft: String::new(),
+    };
+    q.sql = "SELECT id FROM backend_role_privilege".into();
+    app.tabs.push(Tab {
+        id: "q1".into(),
+        title: "查询 1".into(),
+        kind: TabKind::Query(q),
+    });
+    app.tabs.push(stub_tab("role", "backend_role_privilege"));
+    app.active_tab = 1;
+    app
+        .trees
+        .entry("c1".to_string())
+        .or_default()
+        .online = true;
+    app.save_session();
+    assert!(dir.join("session.json").exists());
+
+    // 还原:直接解析(不走 new(),避免真正连库)
+    let json = std::fs::read_to_string(dir.join("session.json")).unwrap();
+    #[derive(serde::Deserialize)]
+    struct SD {
+        tabs: Vec<serde_json::Value>,
+        active: usize,
+        online: Vec<String>,
+    }
+    let d: SD = serde_json::from_str(&json).unwrap();
+    assert_eq!(d.tabs.len(), 2);
+    assert_eq!(d.active, 1);
+    assert_eq!(d.online, vec!["c1".to_string()]);
+    assert_eq!(d.tabs[0]["kind"], "query");
+    assert_eq!(d.tabs[1]["kind"], "table");
+    assert_eq!(d.tabs[0]["sql"], "SELECT id FROM backend_role_privilege");
+    let _ = std::fs::remove_dir_all(&dir);
 }
