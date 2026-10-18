@@ -673,3 +673,60 @@ fn render_redis_panel() {
         draw_app(&mut b, ctx);
     });
 }
+
+#[test]
+fn render_er_diagram() {
+    let mut app = test_app(vec![], 0);
+    app.open_er("c1", Some("dramato".to_string()));
+    use shujing_core::schema::FkMeta;
+    let col = |n: &str, key: &str| shujing_core::ColumnDef {
+        name: n.into(),
+        data_type: "int".into(),
+        nullable: false,
+        key: key.into(),
+        default: None,
+        extra: String::new(),
+        comment: String::new(),
+    };
+    if let TabKind::Er(e) = &mut app.tabs.last_mut().unwrap().kind {
+        e.loading = false;
+        e.tables = vec![
+            "users".into(),
+            "orders".into(),
+            "order_items".into(),
+            "products".into(),
+        ];
+        e.fks = vec![
+            FkMeta { table: "orders".into(), column: "user_id".into(), ref_table: "users".into(), ref_column: "id".into() },
+            FkMeta { table: "order_items".into(), column: "order_id".into(), ref_table: "orders".into(), ref_column: "id".into() },
+            FkMeta { table: "order_items".into(), column: "product_id".into(), ref_table: "products".into(), ref_column: "id".into() },
+        ];
+        e.structures = std::collections::HashMap::from([
+            ("users".to_string(), shujing_core::TableStructure {
+                columns: vec![col("id", "PRI"), col("name", ""), col("email", ""), col("created", "")],
+                indexes: vec![],
+                ddl: String::new(),
+            }),
+            ("orders".to_string(), shujing_core::TableStructure {
+                columns: vec![col("id", "PRI"), col("user_id", ""), col("total", ""), col("status", "")],
+                indexes: vec![],
+                ddl: String::new(),
+            }),
+            ("order_items".to_string(), shujing_core::TableStructure {
+                columns: vec![col("id", "PRI"), col("order_id", ""), col("product_id", ""), col("qty", "")],
+                indexes: vec![],
+                ddl: String::new(),
+            }),
+            ("products".to_string(), shujing_core::TableStructure {
+                columns: vec![col("id", "PRI"), col("title", ""), col("price", "")],
+                indexes: vec![],
+                ddl: String::new(),
+            }),
+        ]);
+    }
+    let app = std::cell::RefCell::new(app);
+    render("er_diagram", 1200.0, 720.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}

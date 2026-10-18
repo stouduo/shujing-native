@@ -72,7 +72,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                         e.positions.clear();
                     }
                     if theme::button(ui, "适配", theme::BtnKind::Secondary).clicked() {
-                        fit_view(e, ui.available_height() + theme::TOOLBAR_H);
+                        e.refit = true;
                     }
                 });
             });
@@ -97,6 +97,50 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                     );
                 });
                 return;
+            }
+            if !e.fit_done || e.refit {
+                let fit_rect = ui.available_rect_before_wrap();
+                let vh = fit_rect.height();
+                // 先布置一次拿包围盒,再以真实画布尺寸适配
+                let layout = auto_layout(e);
+                let node_h = |t: &str| -> f32 {
+                    let rows = e
+                        .structures
+                        .get(t)
+                        .map(|s| s.columns.len().min(MAX_ROWS))
+                        .unwrap_or(1);
+                    HEAD_H + ROW_H * rows as f32 + 6.0
+                };
+                if !layout.is_empty() {
+                    let mut min = Vec2::splat(f32::INFINITY);
+                    let mut max = Vec2::splat(f32::NEG_INFINITY);
+                    for (name, pos) in &layout {
+                        min = min.min(*pos);
+                        max = max.max(*pos + Vec2::new(NODE_W, node_h(name)));
+                    }
+                    let size = max - min;
+                    let vw = fit_rect.width();
+                    let z = ((vw - 80.0) / size.x)
+                        .min((vh - 80.0) / size.y)
+                        .min(1.4)
+                        .max(0.25);
+                    e.zoom = z;
+                    // pan 是全局屏幕坐标:必须以画布原点为基准
+                    e.pan = fit_rect.min.to_vec2() + egui::vec2(30.0, 20.0) - min * z
+                        + (egui::vec2(vw, vh) - size * z) * 0.5;
+                    // 全部节点都落在画布内才算适配完成(首帧视口可能未稳定)
+                    let all_inside = layout.iter().all(|(name, pos)| {
+                        let h = node_h(name);
+                        fit_rect.contains(world_to_screen(e, *pos))
+                            && fit_rect.contains(world_to_screen(e, *pos + Vec2::new(NODE_W, h)))
+                    });
+                    if all_inside {
+                        e.fit_done = true;
+                        e.refit = false;
+                    }
+                } else {
+                    e.fit_done = true;
+                }
             }
             let (canvas, _) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
             // ---- 视图变换
@@ -294,38 +338,6 @@ fn auto_layout(e: &ErTab) -> Vec<(String, Vec2)> {
         }
     }
     out
-}
-
-/// 自适应缩放居中
-fn fit_view(e: &mut ErTab, view_h: f32) {
-    let layout = auto_layout(e);
-    if layout.is_empty() {
-        return;
-    }
-    let node_h = |t: &str| -> f32 {
-        let rows = e
-            .structures
-            .get(t)
-            .map(|s| s.columns.len().min(MAX_ROWS))
-            .unwrap_or(1);
-        HEAD_H + ROW_H * rows as f32 + 6.0
-    };
-    let mut min = Vec2::splat(f32::INFINITY);
-    let mut max = Vec2::splat(f32::NEG_INFINITY);
-    for (name, pos) in &layout {
-        min = min.min(*pos);
-        max = max.max(*pos + Vec2::new(NODE_W, node_h(name)));
-    }
-    let size = max - min;
-    if size.x <= 0.0 || size.y <= 0.0 {
-        return;
-    }
-    // 画布尺寸近似:窗口宽 - 侧栏,粗略即可
-    let vw = 1000.0f32;
-    let vh = (view_h - theme::TOOLBAR_H - 20.0).max(200.0);
-    let z = ((vw - 80.0) / size.x).min((vh - 80.0) / size.y).min(1.4).max(0.25);
-    e.zoom = z;
-    e.pan = egui::vec2(40.0, 20.0) - min * z + (egui::vec2(vw, vh) - size * z) * 0.5;
 }
 
 fn draw_node(

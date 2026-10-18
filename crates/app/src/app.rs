@@ -278,6 +278,10 @@ pub struct ErTab {
     pub pan: egui::Vec2,
     /// 用户拖过的节点位置(世界坐标)
     pub positions: std::collections::HashMap<String, egui::Vec2>,
+    /// 首帧自动适配视野
+    pub fit_done: bool,
+    /// 请求重新适配(适配按钮)
+    pub refit: bool,
 }
 
 /// 危险操作确认弹窗(sql 中 {v} 会被替换为用户输入)
@@ -1037,6 +1041,8 @@ impl ShujingApp {
                 zoom: 0.9,
                 pan: egui::vec2(60.0, 40.0),
                 positions: Default::default(),
+                fit_done: false,
+                refit: false,
             }),
         });
         self.active_tab = self.tabs.len() - 1;
