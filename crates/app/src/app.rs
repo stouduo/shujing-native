@@ -117,6 +117,23 @@ pub enum BgEvent {
     SearchDone {
         result: Result<Vec<shujing_core::SearchHit>, String>,
     },
+    /// 一次性 SQL 执行完成(导入 SQL 文件),成功提示用 msg
+    SqlDone {
+        msg: String,
+        result: Result<(), String>,
+    },
+    /// ER 图数据(表+结构+外键)
+    ErLoaded {
+        tab_id: String,
+        result: Result<
+            (
+                Vec<String>,
+                Vec<shujing_core::schema::FkMeta>,
+                Vec<(String, shujing_core::TableStructure)>,
+            ),
+            String,
+        >,
+    },
 }
 
 /// ⌘P 快速打开
@@ -246,6 +263,21 @@ pub struct OptimizeState {
     pub ran: bool,
     pub plan: Option<shujing_core::ExecResult>,
     pub error: Option<String>,
+}
+
+/// ER 图标签
+pub struct ErTab {
+    pub conn_id: String,
+    pub database: Option<String>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub tables: Vec<String>,
+    pub structures: std::collections::HashMap<String, shujing_core::TableStructure>,
+    pub fks: Vec<shujing_core::schema::FkMeta>,
+    pub zoom: f32,
+    pub pan: egui::Vec2,
+    /// 用户拖过的节点位置(世界坐标)
+    pub positions: std::collections::HashMap<String, egui::Vec2>,
 }
 
 /// 危险操作确认弹窗(sql 中 {v} 会被替换为用户输入)
@@ -380,6 +412,7 @@ pub enum TabKind {
     Query(QueryTab),
     Designer(DesignerTab),
     Redis(RedisTab),
+    Er(ErTab),
 }
 
 impl Tab {
@@ -849,7 +882,7 @@ impl ShujingApp {
         Some(match &t.kind {
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Structure(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
-            TabKind::Query(_) | TabKind::Designer(_) | TabKind::Redis(_) => return None,
+            TabKind::Query(_) | TabKind::Designer(_) | TabKind::Redis(_) | TabKind::Er(_) => return None,
         })
     }
 
@@ -977,6 +1010,77 @@ impl ShujingApp {
                 .get_table_structure(&conn_id, &table, database)
                 .await;
             let _ = tx.send(BgEvent::DesignerLoaded { tab_id, result });
+        });
+    }
+
+    /// 打开 ER 图标签(同连接同库已开则激活)
+    pub fn open_er(&mut self, conn_id: &str, database: Option<String>) {
+        let existing = self.tabs.iter().position(|t| {
+            matches!(&t.kind, TabKind::Er(e) if e.conn_id == conn_id && e.database == database)
+        });
+        if let Some(i) = existing {
+            self.active_tab = i;
+            return;
+        }
+        let id = format!("e{}", rand_suffix());
+        self.tabs.push(Tab {
+            id: id.clone(),
+            title: "ER 图".to_string(),
+            kind: TabKind::Er(ErTab {
+                conn_id: conn_id.to_string(),
+                database,
+                loading: true,
+                error: None,
+                tables: vec![],
+                structures: Default::default(),
+                fks: vec![],
+                zoom: 0.9,
+                pan: egui::vec2(60.0, 40.0),
+                positions: Default::default(),
+            }),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.load_er(&id);
+    }
+
+    /// 拉 ER 图数据:表清单 + 全部结构(上限 40 张)+ 外键
+    pub fn load_er(&mut self, tab_id: &str) {
+        let tab_id = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Er(e) = &mut tab.kind else {
+            return;
+        };
+        let conn_id = e.conn_id.clone();
+        let database = e.database.clone();
+        e.loading = true;
+        e.error = None;
+        net::spawn(async move {
+            let tables = service
+                .list_tables(&conn_id, database.clone())
+                .await
+                .map(|v| v.into_iter().filter(|t| t.kind == "table").map(|t| t.name).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let fks = service
+                .list_foreign_keys(&conn_id, database.clone())
+                .await
+                .unwrap_or_default();
+            let mut structures = Vec::new();
+            for name in tables.iter().take(40) {
+                if let Ok(st) = service
+                    .get_table_structure(&conn_id, name, database.clone())
+                    .await
+                {
+                    structures.push((name.clone(), st));
+                }
+            }
+            let _ = tx.send(BgEvent::ErLoaded {
+                tab_id,
+                result: Ok((tables, fks, structures)),
+            });
         });
     }
 
@@ -1135,6 +1239,7 @@ impl ShujingApp {
                 TabKind::Query(q) => q.conn_id.clone(),
                 TabKind::Designer(d) => d.conn_id.clone(),
                 TabKind::Redis(r) => r.conn_id.clone(),
+                TabKind::Er(e) => e.conn_id.clone(),
             })
         });
         let id = format!("q{}", rand_suffix());
@@ -1362,6 +1467,39 @@ impl ShujingApp {
                 }]
             });
             let _ = tx.send(BgEvent::QueryDone { tab_id, result });
+        });
+    }
+
+    /// 导入 SQL 文件:选文件 → 逐语句执行 → 刷新树
+    pub fn import_sql_file(&mut self, conn_id: &str) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("SQL", &["sql", "txt"])
+            .pick_file()
+        else {
+            return;
+        };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            self.toast_error(format!("读取失败: {}", path.display()));
+            return;
+        };
+        let conn_id = conn_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let fname = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        net::spawn(async move {
+            let result = service
+                .run_sql(&conn_id, content, None)
+                .await
+                .map(|rs| rs.iter().map(|r| r.affected).sum::<u64>());
+            let msg = match &result {
+                Ok(n) => format!("已导入 {fname} · 影响 {n} 行"),
+                Err(_) => format!("已导入 {fname}"),
+            };
+            let result = result.map(|_| ());
+            let _ = tx.send(BgEvent::SqlDone { msg, result });
         });
     }
 
@@ -1954,6 +2092,27 @@ impl ShujingApp {
                             let tid = tab_id.clone();
                             self.redis_fetch_detail(&tid, &key);
                         }
+                    }
+                }
+                BgEvent::SqlDone { msg, result } => match result {
+                    Ok(()) => self.toast_error(msg),
+                    Err(e) => self.toast_error(format!("执行失败: {e}")),
+                },
+                BgEvent::ErLoaded { tab_id, result } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let TabKind::Er(e) = &mut tab.kind else {
+                        return;
+                    };
+                    e.loading = false;
+                    match result {
+                        Ok((tables, fks, structures)) => {
+                            e.tables = tables;
+                            e.fks = fks;
+                            e.structures = structures.into_iter().collect();
+                        }
+                        Err(err) => e.error = Some(err),
                     }
                 }
                 BgEvent::OptimizeDone { tab_id, result } => {

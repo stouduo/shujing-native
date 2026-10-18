@@ -366,6 +366,8 @@ impl ShujingApp {
             );
         }
         let mut new_table = false;
+        let mut er = false;
+        let mut import_sql = false;
         let _ = resp.clone().context_menu(|ui| {
             if ui.button("新建表…").clicked() {
                 new_table = true;
@@ -375,10 +377,24 @@ impl ShujingApp {
                 self.open_query_tab(Some(conn_id.to_string()));
                 ui.close_menu();
             }
+            if ui.button("查看 ER 图").clicked() {
+                er = true;
+                ui.close_menu();
+            }
+            if ui.button("导入 SQL 文件…").clicked() {
+                import_sql = true;
+                ui.close_menu();
+            }
             if ui.button("刷新表列表").clicked() {
                 ui.close_menu();
             }
         });
+        if er {
+            self.open_er(conn_id, Some(db.to_string()));
+        }
+        if import_sql {
+            self.import_sql_file(conn_id);
+        }
         if new_table {
             self.open_designer(conn_id, None, Some(db.to_string()));
             return;
@@ -446,6 +462,8 @@ impl ShujingApp {
             p.muted,
         );
         let mut new_table = false;
+        let mut er = false;
+        let mut import_sql = false;
         let _ = resp.clone().context_menu(|ui| {
             if ui.button("新建表…").clicked() {
                 new_table = true;
@@ -455,10 +473,24 @@ impl ShujingApp {
                 self.open_query_tab(Some(conn_id.to_string()));
                 ui.close_menu();
             }
+            if ui.button("查看 ER 图").clicked() {
+                er = true;
+                ui.close_menu();
+            }
+            if ui.button("导入 SQL 文件…").clicked() {
+                import_sql = true;
+                ui.close_menu();
+            }
         });
         if new_table {
             self.open_designer(conn_id, None, Some(db.to_string()));
             return;
+        }
+        if er {
+            self.open_er(conn_id, Some(db.to_string()));
+        }
+        if import_sql {
+            self.import_sql_file(conn_id);
         }
         if resp.clicked() {
             self.toggle_database(conn_id, db);
@@ -780,6 +812,7 @@ impl ShujingApp {
                     crate::app::TabKind::Query(q) => &q.conn_id == cid,
                     crate::app::TabKind::Designer(d) => &d.conn_id == cid,
                     crate::app::TabKind::Redis(r) => &r.conn_id == cid,
+                    crate::app::TabKind::Er(e) => &e.conn_id == cid,
                 };
                 if belongs {
                     if i < self.active_tab {

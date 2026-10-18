@@ -136,6 +136,8 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         stats: None,
         import: None,
         new_table: None,
+        global_search: None,
+        confirm: None,
     }
 }
 
@@ -360,6 +362,9 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         TabKind::Redis(rt) => {
             let _ = crate::redis::draw_redis_view(ctx, &tab_id, rt, false);
         }
+        TabKind::Er(e) => {
+            let _ = crate::er::draw_er_view(ctx, &tab_id, e);
+        }
     }
 }
 
@@ -501,6 +506,7 @@ fn render_query_view() {
         active_set: 0,
         running: false,
         error: None,
+        optimize: None,
     };
     let rows: Vec<Vec<Option<String>>> = (0..24)
         .map(|i| {

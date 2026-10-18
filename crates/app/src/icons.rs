@@ -95,6 +95,29 @@ pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_
                 st,
             );
         }
+        5 => {
+            // ER 图:三节点小图
+            let c = rect.center();
+            let st = Stroke::new(1.1, color);
+            p.rect_stroke(
+                egui::Rect::from_min_size(egui::pos2(c.x - 5.5, c.y - 4.5), Vec2::splat(5.0)),
+                1.0,
+                st,
+                egui::StrokeKind::Inside,
+            );
+            p.rect_stroke(
+                egui::Rect::from_min_size(egui::pos2(c.x + 1.0, c.y - 4.5), Vec2::splat(5.0)),
+                1.0,
+                st,
+                egui::StrokeKind::Inside,
+            );
+            p.rect_stroke(
+                egui::Rect::from_min_size(egui::pos2(c.x - 2.5, c.y + 1.0), Vec2::splat(5.0)),
+                1.0,
+                st,
+                egui::StrokeKind::Inside,
+            );
+        }
         4 => {
             // Redis:菱形(品牌红钻)
             let c = rect.center();

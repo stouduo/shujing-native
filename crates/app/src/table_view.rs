@@ -81,6 +81,12 @@ pub enum TabAction {
     OptimizeQuery { tab_id: String },
     /// 全局数据搜索
     GlobalSearch { conn_id: String, keyword: String },
+    /// ER 图点击节点 → 打开表数据
+    ErOpenTable {
+        conn_id: String,
+        table: String,
+        database: Option<String>,
+    },
     /// 点击搜索命中:打开表并按关键词筛选
     GotoHit {
         conn_id: String,
@@ -128,6 +134,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Structure(_) => 2,
                                 TabKind::Designer(_) => 3,
                                 TabKind::Redis(_) => 4,
+                                TabKind::Er(_) => 5,
                             };
                             let (a, c) = draw_one_tab(ui, i == app.active_tab, &title, glyph);
                             if a {
@@ -1793,6 +1800,18 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
         TabAction::RunQuery { tab_id } => app.run_query(&tab_id),
         TabAction::RunRedisCmd { tab_id } => app.run_redis_cmd(&tab_id),
         TabAction::OptimizeQuery { tab_id } => app.run_optimize(&tab_id),
+        TabAction::ErOpenTable {
+            conn_id,
+            table,
+            database,
+        } => {
+            let db = database.or_else(|| {
+                app.trees
+                    .get(&conn_id)
+                    .and_then(|t| t.expanded_db.clone())
+            });
+            app.open_table(&conn_id, &table, db);
+        }
         TabAction::GlobalSearch { conn_id, keyword } => {
             let tx = app.event_tx.clone();
             let service = app.service.clone();
@@ -2271,6 +2290,7 @@ impl eframe::App for ShujingApp {
                         .unwrap_or(false);
                     crate::redis::draw_redis_view(ctx, &tab_id, rt, read_only)
                 }
+                TabKind::Er(e) => crate::er::draw_er_view(ctx, &tab_id, e),
             };
             for a in actions {
                 execute_tab_action(self, ctx, a);
