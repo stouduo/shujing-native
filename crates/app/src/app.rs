@@ -108,6 +108,15 @@ pub enum BgEvent {
         tab_id: String,
         result: Result<Vec<shujing_core::redis_ops::KeyStat>, String>,
     },
+    /// SQL 优化分析(EXPLAIN)
+    OptimizeDone {
+        tab_id: String,
+        result: Result<shujing_core::ExecResult, String>,
+    },
+    /// 全局数据搜索
+    SearchDone {
+        result: Result<Vec<shujing_core::SearchHit>, String>,
+    },
 }
 
 /// ⌘P 快速打开
@@ -226,6 +235,26 @@ pub struct QueryTab {
     pub results: Vec<shujing_core::ExecResult>,
     pub active_set: usize,
     pub running: bool,
+    pub error: Option<String>,
+    /// SQL 优化分析弹窗
+    pub optimize: Option<OptimizeState>,
+}
+
+/// 优化分析弹窗状态
+pub struct OptimizeState {
+    pub running: bool,
+    pub ran: bool,
+    pub plan: Option<shujing_core::ExecResult>,
+    pub error: Option<String>,
+}
+
+/// 全局数据搜索(⌘⇧F)
+pub struct GlobalSearchState {
+    pub conn_id: String,
+    pub keyword: String,
+    pub searching: bool,
+    pub searched: bool,
+    pub hits: Vec<shujing_core::SearchHit>,
     pub error: Option<String>,
 }
 
@@ -445,6 +474,7 @@ pub struct ShujingApp {
     )>,
     pub import: Option<ImportState>,
     pub new_table: Option<NewTableState>,
+    pub global_search: Option<GlobalSearchState>,
 }
 
 pub enum PendingAction {
@@ -501,6 +531,7 @@ impl ShujingApp {
             stats: None,
             import: None,
             new_table: None,
+            global_search: None,
             dark_mode: dark,
             auto_connect_done: false,
             shot: std::env::var("SHUJING_SCREENSHOT")
@@ -1101,6 +1132,7 @@ impl ShujingApp {
                 active_set: 0,
                 running: false,
                 error: None,
+                optimize: None,
             }),
         });
         self.active_tab = self.tabs.len() - 1;
@@ -1311,6 +1343,57 @@ impl ShujingApp {
                 }]
             });
             let _ = tx.send(BgEvent::QueryDone { tab_id, result });
+        });
+    }
+
+    /// SQL 优化分析:对当前查询页 SQL 跑 EXPLAIN(仅 SELECT)
+    pub fn run_optimize(&mut self, tab_id: &str) {
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Query(q) = &tab.kind else {
+            return;
+        };
+        let sql = q.sql.trim().to_string();
+        let head = sql.get(..8).unwrap_or("").to_uppercase();
+        if sql.is_empty() {
+            self.toast_error("当前查询页没有 SQL".to_string());
+            return;
+        }
+        if !head.starts_with("SELECT") && !head.starts_with("WITH") {
+            self.toast_error("优化分析仅支持 SELECT 语句".to_string());
+            return;
+        }
+        let Some(conn) = self.conns.iter().find(|c| c.id == q.conn_id) else {
+            self.toast_error("请先选择连接".to_string());
+            return;
+        };
+        let explain = shujing_core::sql_advisor::explain_sql(conn.db_type, &sql);
+        let conn_id = q.conn_id.clone();
+        let tid = tab_id.to_string();
+        if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tid) {
+            if let TabKind::Query(q) = &mut t.kind {
+                let o = q.optimize.get_or_insert_with(|| crate::app::OptimizeState {
+                    running: false,
+                    ran: false,
+                    plan: None,
+                    error: None,
+                });
+                o.running = true;
+                o.error = None;
+            }
+        }
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = service
+                .run_sql(&conn_id, explain, Some(200))
+                .await
+                .and_then(|mut rs| {
+                    rs.truncate(1);
+                    rs.pop().ok_or_else(|| "没有执行计划".to_string())
+                });
+            let _ = tx.send(BgEvent::OptimizeDone { tab_id: tid, result });
         });
     }
 
@@ -1781,6 +1864,34 @@ impl ShujingApp {
                         }
                     }
                 }
+                BgEvent::OptimizeDone { tab_id, result } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        return;
+                    };
+                    let TabKind::Query(q) = &mut tab.kind else {
+                        return;
+                    };
+                    let Some(o) = q.optimize.as_mut() else {
+                        return;
+                    };
+                    o.running = false;
+                    o.ran = true;
+                    match result {
+                        Ok(plan) => o.plan = Some(plan),
+                        Err(e) => o.error = Some(e),
+                    }
+                }
+                BgEvent::SearchDone { result } => {
+                    let Some(gs) = self.global_search.as_mut() else {
+                        return;
+                    };
+                    gs.searching = false;
+                    gs.searched = true;
+                    match result {
+                        Ok(hits) => gs.hits = hits,
+                        Err(e) => gs.error = Some(e),
+                    }
+                }
                 BgEvent::RedisAnalyzeDone { tab_id, result } => {
                     let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
                         return;
@@ -1807,7 +1918,7 @@ impl ShujingApp {
 }
 
 /// 该连接是否用 MySQL 反引号引注标识符(SQLite 接受反引号,Postgres 必须双引号)
-fn mysql_quote(conns: &[ConnInfo], conn_id: &str) -> bool {
+pub fn mysql_quote(conns: &[ConnInfo], conn_id: &str) -> bool {
     conns
         .iter()
         .find(|c| c.id == conn_id)

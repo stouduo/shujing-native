@@ -1,7 +1,8 @@
 //! 功能弹窗:⌘P 快速打开 / CSV 导入向导 / 表统计 / 新建表。
 //! 统一使用 egui::Modal(背景压暗 + 居中)+ theme 控件。
 
-use crate::app::{NewTableState, ShujingApp};
+use crate::app::{BgEvent, NewTableState, ShujingApp};
+use crate::net;
 use crate::icons;
 use crate::theme;
 use egui::{Color32, RichText, Sense};
@@ -529,4 +530,177 @@ pub fn open_new_table(app: &mut ShujingApp, conn_id: &str, database: Option<Stri
         name: String::new(),
         sql: String::new(),
     });
+}
+
+
+/// 全局数据搜索(⌘⇧F):在所选连接全部表的所有列中找关键词
+pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.global_search.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let online: Vec<(String, String)> = app
+        .trees
+        .iter()
+        .filter(|(_, t)| t.online)
+        .filter_map(|(id, _)| app.conns.iter().find(|c| &c.id == id).map(|c| (c.id.clone(), c.name.clone())))
+        .collect();
+    // 打开时未选连接:默认第一个在线的
+    if app.global_search.as_ref().unwrap().conn_id.is_empty() {
+        if let Some((id, _)) = online.first() {
+            app.global_search.as_mut().unwrap().conn_id = id.clone();
+        }
+    }
+    let mut do_search = false;
+    let mut goto: Option<(String, String)> = None;
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::new("global-search"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(660.0);
+            theme::modal_title(ui, "全局搜索数据");
+            ui.spacing_mut().item_spacing.y = 8.0;
+            let gs = app.global_search.as_mut().unwrap();
+
+            ui.horizontal(|ui| {
+                // 连接选择
+                let sel_name = online
+                    .iter()
+                    .find(|(id, _)| *id == gs.conn_id)
+                    .map(|(_, n)| n.clone())
+                    .unwrap_or_else(|| if online.is_empty() { "无在线连接".into() } else { "选择连接".into() });
+                if theme::select(ui, "gs-conn", &sel_name, &online, 170.0)
+                    .is_some()
+                {
+                    gs.searched = false;
+                    gs.hits.clear();
+                }
+                ui.add_space(4.0);
+                // 关键词
+                let resp = ui.add_sized(
+                    [ui.available_width() - 70.0, 28.0],
+                    egui::TextEdit::singleline(&mut gs.keyword)
+                        .hint_text(RichText::new("关键词,回车搜索所有表…").size(12.0).color(p.muted))
+                        .font(egui::FontId::proportional(12.5)),
+                );
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    do_search = true;
+                }
+            });
+            ui.label(
+                RichText::new("在所选连接的全部表的所有列中查找(逐表扫描,大库可能较慢)")
+                    .size(11.0)
+                    .color(p.muted),
+            );
+            ui.add_space(2.0);
+            // 结果区
+            egui::Frame::new()
+                .fill(p.input_bg)
+                .stroke(egui::Stroke::new(1.0, p.border))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin::same(6))
+                .show(ui, |ui| {
+                    ui.set_min_height(140.0);
+                    if gs.searching {
+                        ui.centered_and_justified(|ui| {
+                            ui.vertical(|ui| {
+                                ui.add_space(30.0);
+                                ui.add(egui::Spinner::new().size(16.0).color(p.muted));
+                            });
+                        });
+                    } else if let Some(err) = &gs.error {
+                        ui.label(RichText::new(icons::clip(err, 100)).size(12.0).color(p.red));
+                    } else if gs.searched {
+                        if gs.hits.is_empty() {
+                            ui.centered_and_justified(|ui| {
+                                ui.label(RichText::new("没有命中").size(12.5).color(p.muted));
+                            });
+                        } else {
+                            ui.label(
+                                RichText::new(format!("命中 {} 处", gs.hits.len()))
+                                    .size(11.5)
+                                    .color(p.muted),
+                            );
+                            let hits = gs.hits.clone();
+                            let kw = gs.keyword.trim().to_string();
+                            for h in &hits {
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 26.0),
+                                    egui::Sense::click(),
+                                );
+                                if resp.hovered() {
+                                    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), p.row_hover);
+                                }
+                                let g = icons::text_galley(ui.painter(), h.table.clone(), theme::mono(12.0), Color32::PLACEHOLDER, 130.0);
+                                ui.painter().galley(egui::pos2(rect.left() + 8.0, rect.center().y - g.size().y / 2.0), g, p.accent);
+                                let g = icons::text_galley(ui.painter(), h.column.clone(), theme::mono(11.5), Color32::PLACEHOLDER, 130.0);
+                                ui.painter().galley(egui::pos2(rect.left() + 148.0, rect.center().y - g.size().y / 2.0), g, p.green);
+                                let preview: String = h
+                                    .row
+                                    .iter()
+                                    .map(|v| v.clone().unwrap_or_else(|| "NULL".into()))
+                                    .collect::<Vec<_>>()
+                                    .join(" | ");
+                                let g = icons::text_galley(ui.painter(), preview, theme::mono(11.5), Color32::PLACEHOLDER, rect.width() - 300.0);
+                                ui.painter().galley(egui::pos2(rect.left() + 288.0, rect.center().y - g.size().y / 2.0), g, p.text2);
+                                if resp.clicked() {
+                                    goto = Some((h.table.clone(), kw.clone()));
+                                }
+                            }
+                        }
+                    } else {
+                        ui.centered_and_justified(|ui| {
+                            ui.label(
+                                RichText::new("输入关键词后回车;点击命中行打开对应表并自动筛选")
+                                    .size(12.0)
+                                    .color(p.muted),
+                            );
+                        });
+                    }
+                });
+        });
+    if app.global_search.as_ref().unwrap().searching {
+        // 搜索按钮放在弹层外响应会丢:这里用快捷键回车触发,补一个按钮
+    }
+    // 底部按钮(在 modal 之外画不了,利用 footer 空隙省略;回车即可搜索)
+    let _ = &modal;
+    if do_search {
+        let gs = app.global_search.as_mut().unwrap();
+        let kw = gs.keyword.trim().to_string();
+        if !kw.is_empty() && !gs.conn_id.is_empty() {
+            gs.searching = true;
+            gs.error = None;
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            let cid = gs.conn_id.clone();
+            net::spawn(async move {
+                let result = service.search_all_tables(&cid, &kw, 50).await;
+                let _ = tx.send(BgEvent::SearchDone { result });
+            });
+        }
+    }
+    if let Some((table, kw)) = goto {
+        let conn_id = app.global_search.as_ref().unwrap().conn_id.clone();
+        app.global_search = None;
+        let conn = app.conns.iter().find(|c| c.id == conn_id);
+        let db = conn.and_then(|c| {
+            app.trees
+                .get(&c.id)
+                .and_then(|t| t.expanded_db.clone())
+        });
+        app.open_table(&conn_id, &table, db);
+        // 应用关键词筛选
+        let mysql = crate::app::mysql_quote(&app.conns, &conn_id);
+        if let Some(t) = app.tabs.get_mut(app.active_tab) {
+            if let crate::app::TabKind::Table(tt) = &mut t.kind {
+                tt.filter = kw.clone();
+                tt.active_filter = Some(crate::app::build_like_filter(&tt.columns, &kw, mysql));
+            }
+        }
+        let id = app.tabs[app.active_tab].id.clone();
+        app.load_rows(&id);
+    } else if close || modal.should_close() {
+        app.global_search = None;
+    }
 }

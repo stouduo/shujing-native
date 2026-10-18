@@ -2,8 +2,8 @@
 
 use crate::app::QueryTab;
 use crate::table_view::TabAction;
-use crate::{grid, theme};
-use egui::{Align, Layout, RichText};
+use crate::{grid, icons, theme};
+use egui::{Align, Color32, Layout, RichText, Sense};
 use shujing_core::ConnInfo;
 
 pub fn draw_query_view(
@@ -96,6 +96,18 @@ pub fn draw_query_view(
                     {
                         actions.push(TabAction::ExportQueryCsv {
                             tab_id: tab_id.to_string(),
+                        });
+                    }
+                    if !is_redis
+                        && theme::button(ui, "优化", theme::BtnKind::Secondary)
+                            .on_hover_text("SQL 优化分析(EXPLAIN + 规则诊断)")
+                            .clicked()
+                    {
+                        q.optimize = Some(super::app::OptimizeState {
+                            running: false,
+                            ran: false,
+                            plan: None,
+                            error: None,
                         });
                     }
                     let history = q.history.clone();
@@ -259,5 +271,188 @@ pub fn draw_query_view(
             }
         });
 
+    // 优化分析弹窗
+    if q.optimize.is_some() {
+        let db_type = conns
+            .iter()
+            .find(|c| c.id == q.conn_id)
+            .map(|c| c.db_type)
+            .unwrap_or(shujing_core::DbType::MySql);
+        actions.extend(draw_optimize_modal(ctx, tab_id, q, db_type, conns));
+    }
+
     actions
 }
+
+
+/// SQL 优化分析弹窗:静态规则 + EXPLAIN 计划诊断
+pub fn draw_optimize_modal(
+    ctx: &egui::Context,
+    tab_id: &str,
+    q: &mut super::app::QueryTab,
+    db_type: shujing_core::DbType,
+    conns: &[ConnInfo],
+) -> Vec<TabAction> {
+    let mut actions = Vec::new();
+    let Some(state) = q.optimize.as_ref() else {
+        return actions;
+    };
+    let p = theme::c();
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::new("sql-optimize"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(740.0);
+            theme::modal_title(ui, "SQL 优化分析");
+            ui.spacing_mut().item_spacing.y = 8.0;
+
+            // SQL 预览
+            let sql = q.sql.trim().to_string();
+            egui::Frame::new()
+                .fill(p.input_bg)
+                .corner_radius(egui::CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(crate::icons::clip(&sql, 160))
+                                .font(theme::mono(11.5))
+                                .color(p.text2),
+                        )
+                        .wrap_mode(egui::TextWrapMode::Truncate),
+                    );
+                });
+
+            if state.running {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(12.0).color(p.muted));
+                    ui.label(RichText::new("EXPLAIN 执行中…").size(12.0).color(p.muted));
+                });
+            } else if let Some(err) = &state.error {
+                ui.label(
+                    RichText::new(icons::clip(err, 120))
+                        .size(12.0)
+                        .color(p.red),
+                );
+            } else if state.ran {
+                // 诊断
+                let mut findings = shujing_core::sql_advisor::static_check(&sql);
+                if let Some(plan) = &state.plan {
+                    findings.extend(shujing_core::sql_advisor::plan_check(db_type, plan));
+                }
+                let danger = findings.iter().filter(|f| f.level == shujing_core::sql_advisor::Level::Danger).count();
+                let warn = findings.iter().filter(|f| f.level == shujing_core::sql_advisor::Level::Warn).count();
+                let (grade, gcol) = if danger > 0 {
+                    ("需优化", p.red)
+                } else if warn > 0 {
+                    ("可改进", ORANGE)
+                } else {
+                    ("良好", p.green)
+                };
+                ui.horizontal(|ui| {
+                    let g = ui.painter().layout_no_wrap(grade.to_string(), theme::bold(13.0), Color32::PLACEHOLDER);
+                    let gr = egui::Rect::from_center_size(
+                        ui.cursor().left_center() + egui::vec2(g.size().x / 2.0 + 10.0, 0.0),
+                        egui::vec2(g.size().x + 20.0, 22.0),
+                    );
+                    ui.allocate_rect(gr, Sense::hover());
+                    ui.painter().rect_filled(gr, egui::CornerRadius::same(6), theme::tint(gcol, 36));
+                    ui.painter().galley(
+                        egui::pos2(gr.center().x - g.size().x / 2.0, gr.center().y - g.size().y / 2.0),
+                        g,
+                        gcol,
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "{danger} 项风险 · {warn} 项警告 · {} 项提示",
+                            findings.len() - danger - warn
+                        ))
+                        .size(11.5)
+                        .color(p.muted),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let dialect = match db_type {
+                            shujing_core::DbType::Sqlite => "sqlite · EXPLAIN QUERY PLAN",
+                            shujing_core::DbType::Postgres => "postgres · EXPLAIN (ANALYZE, BUFFERS)",
+                            _ => "mysql · EXPLAIN",
+                        };
+                        ui.label(RichText::new(dialect).size(11.0).color(p.muted));
+                    });
+                });
+                ui.add_space(2.0);
+                ui.label(theme::strong("诊断建议", 12.0).color(p.text2));
+                for f in &findings {
+                    let (badge, col) = match f.level {
+                        shujing_core::sql_advisor::Level::Danger => ("危险", p.red),
+                        shujing_core::sql_advisor::Level::Warn => ("警告", ORANGE),
+                        shujing_core::sql_advisor::Level::Info => ("提示", p.accent),
+                    };
+                    ui.horizontal(|ui| {
+                        let b = ui.painter().layout_no_wrap(badge.to_string(), theme::bold(9.5), Color32::PLACEHOLDER);
+                        let br = egui::Rect::from_center_size(
+                            ui.cursor().left_center() + egui::vec2(b.size().x / 2.0 + 5.0, 0.0),
+                            egui::vec2(b.size().x + 10.0, 16.0),
+                        );
+                        ui.allocate_rect(br, Sense::hover());
+                        ui.painter().rect_filled(br, egui::CornerRadius::same(4), theme::tint(col, 40));
+                        ui.painter().galley(
+                            egui::pos2(br.center().x - b.size().x / 2.0, br.center().y - b.size().y / 2.0),
+                            b,
+                            col,
+                        );
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&f.title).size(12.0).color(p.text));
+                            ui.label(
+                                RichText::new(&f.detail).size(11.0).color(p.muted),
+                            );
+                        });
+                    });
+                }
+                // 执行计划网格
+                if let Some(plan) = &state.plan {
+                    if !plan.columns.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(theme::strong("执行计划", 12.0).color(p.text2));
+                        egui::ScrollArea::vertical()
+                            .id_salt("optimize-plan-grid")
+                            .max_height(180.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                super::grid::result_rows(ui, "optimize-plan", &plan.columns, &plan.rows);
+                            });
+                    }
+                }
+            }
+            ui.horizontal(|ui| {
+                let runnable = !state.running && !sql.is_empty();
+                if theme::button(
+                    ui,
+                    if state.running { "分析中…" } else { "运行分析" },
+                    if runnable { theme::BtnKind::Primary } else { theme::BtnKind::Secondary },
+                )
+                .clicked()
+                    && runnable
+                {
+                    actions.push(TabAction::OptimizeQuery {
+                        tab_id: tab_id.to_string(),
+                    });
+                }
+                ui.label(
+                    RichText::new("静态规则不执行;EXPLAIN 仅读取计划")
+                        .size(11.0)
+                        .color(p.muted),
+                );
+            });
+        });
+    if modal.should_close() {
+        close = true;
+    }
+    if close {
+        q.optimize = None;
+    }
+    actions
+}
+
+/// iOS 橙(警告级)
+const ORANGE: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);

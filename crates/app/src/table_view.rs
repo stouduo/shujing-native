@@ -77,6 +77,16 @@ pub enum TabAction {
     RedisAnalyze { tab_id: String },
     /// 查询页 Redis 命令行模式运行
     RunRedisCmd { tab_id: String },
+    /// SQL 优化分析(当前查询页 SQL)
+    OptimizeQuery { tab_id: String },
+    /// 全局数据搜索
+    GlobalSearch { conn_id: String, keyword: String },
+    /// 点击搜索命中:打开表并按关键词筛选
+    GotoHit {
+        conn_id: String,
+        table: String,
+        keyword: String,
+    },
 }
 
 /// 连接弹窗产生的动作
@@ -1782,6 +1792,58 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
         }
         TabAction::RunQuery { tab_id } => app.run_query(&tab_id),
         TabAction::RunRedisCmd { tab_id } => app.run_redis_cmd(&tab_id),
+        TabAction::OptimizeQuery { tab_id } => app.run_optimize(&tab_id),
+        TabAction::GlobalSearch { conn_id, keyword } => {
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            let cid = conn_id.clone();
+            net::spawn(async move {
+                let result = service.search_all_tables(&cid, &keyword, 50).await;
+                let _ = tx.send(BgEvent::SearchDone { result });
+            });
+        }
+        TabAction::GotoHit {
+            conn_id,
+            table,
+            keyword,
+        } => {
+            let had = app.tabs.iter().any(|t| {
+                matches!(&t.kind, TabKind::Table(tt)
+                    if tt.conn_id == conn_id && tt.table == table)
+            });
+            app.open_table(&conn_id, &table, None);
+            if !had {
+                // 新开标签:激活的就是它
+                if let Some(t) = app.tabs.get_mut(app.active_tab) {
+                    if let TabKind::Table(tt) = &mut t.kind {
+                        tt.filter = keyword.clone();
+                        tt.active_filter = Some(crate::app::build_like_filter(
+                            &tt.columns,
+                            &keyword,
+                            crate::app::mysql_quote(&app.conns, &conn_id),
+                        ));
+                    }
+                }
+                let id = app.tabs[app.active_tab].id.clone();
+                app.load_rows(&id);
+            } else if let Some(i) = app.tabs.iter().position(|t| {
+                matches!(&t.kind, TabKind::Table(tt) if tt.conn_id == conn_id && tt.table == table)
+            }) {
+                app.active_tab = i;
+                if let Some(t) = app.tabs.get_mut(i) {
+                    if let TabKind::Table(tt) = &mut t.kind {
+                        tt.filter = keyword.clone();
+                        tt.active_filter = Some(crate::app::build_like_filter(
+                            &tt.columns,
+                            &keyword,
+                            crate::app::mysql_quote(&app.conns, &conn_id),
+                        ));
+                    }
+                }
+                let id = app.tabs[i].id.clone();
+                app.load_rows(&id);
+            }
+        }
         TabAction::ExportQueryCsv { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
                 return;
@@ -2129,6 +2191,33 @@ impl eframe::App for ShujingApp {
                 sel: 0,
             });
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command && i.modifiers.shift) {
+            self.global_search = Some(crate::app::GlobalSearchState {
+                conn_id: String::new(),
+                keyword: String::new(),
+                searching: false,
+                searched: false,
+                hits: vec![],
+                error: None,
+            });
+        }
+        // ⌘1-9 切换到第 N 个标签
+        for n in 1..=9usize {
+            let key = [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+            ][n - 1];
+            if ctx.input(|i| i.key_pressed(key) && i.modifiers.command) && self.tabs.len() >= n {
+                self.active_tab = n - 1;
+            }
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command)
             && !self.tabs.is_empty()
         {
@@ -2193,6 +2282,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_import_modal(self, ctx);
         crate::modals::draw_stats_modal(self, ctx);
         crate::modals::draw_new_table_modal(self, ctx);
+        crate::modals::draw_global_search(self, ctx);
 
         if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {
             self.conn_modal = Some(ConnModal::new());

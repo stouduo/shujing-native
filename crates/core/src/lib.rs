@@ -10,8 +10,10 @@ mod model;
 pub mod redis_ops;
 pub mod schema;
 mod search;
+pub mod sql_advisor;
 pub mod store;
 
+pub use search::SearchHit;
 pub use model::{
     AppState, ColumnDef, ConnInfo, ConnectResult, DbType, ExecResult, IndexDef, LiveConn,
     TableMeta, TableStructure,
