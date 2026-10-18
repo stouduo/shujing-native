@@ -79,10 +79,16 @@ pub enum TabAction {
     RunRedisCmd { tab_id: String },
     /// 取消正在执行的查询
     CancelQuery { tab_id: String },
+    /// EXPLAIN 当前查询(不进历史)
+    ExplainQuery { tab_id: String },
+    /// 执行指定 SQL(⌘↵ 选区)
+    RunQuerySql { tab_id: String, sql: String },
     /// 保存查询结果集的修改(按主键 UPDATE 后重跑)
     SaveQueryChanges { tab_id: String },
     ApplyFilterBar { tab_id: String },
     ClearFilterBar { tab_id: String },
+    Toast { msg: String },
+    CopyToClipboard { text: String, toast: String },
     ReloadDdl { tab_id: String },
     /// SQL 优化分析(当前查询页 SQL)
     OptimizeQuery { tab_id: String },
@@ -115,6 +121,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
     let p = theme::c();
     let mut activate: Option<usize> = None;
     let mut close: Option<usize> = None;
+    let mut close_set: Vec<usize> = Vec::new();
     let mut new_query = false;
 
     egui::TopBottomPanel::top("tabbar")
@@ -144,12 +151,19 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Er(_) => 5,
                                 TabKind::Ddl(_) => 6,
                             };
-                            let (a, c) = draw_one_tab(ui, i == app.active_tab, &title, glyph);
+                            let (a, c, m) = draw_one_tab(ui, i == app.active_tab, &title, glyph);
                             if a {
                                 activate = Some(i);
                             }
                             if c {
                                 close = Some(i);
+                            }
+                            if let Some(m) = m {
+                                match m {
+                                    0 => close_set.extend((0..app.tabs.len()).filter(|j| *j != i)),
+                                    1 => close_set.extend(0..i),
+                                    _ => close_set.extend(i + 1..app.tabs.len()),
+                                }
                             }
                         }
                         ui.add_space(4.0);
@@ -167,9 +181,14 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 });
         });
 
-    if let Some(i) = close {
+    if !close_set.is_empty() {
+        for i in close_set.into_iter().rev() {
+            app.close_tab(i);
+        }
+    } else if let Some(i) = close {
         app.close_tab(i);
-    } else if let Some(i) = activate {
+    }
+    if let Some(i) = activate {
         app.active_tab = i;
     }
     if new_query {
@@ -178,7 +197,8 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
 }
 
 /// 自绘单个标签:激活态与工具条同色、上圆角并向下与内容连通
-fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (bool, bool) {
+/// 返回 (激活, 关闭, 右键菜单动作 0=关闭其他 1=关闭左侧 2=关闭右侧)
+fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (bool, bool, Option<u8>) {
     let p = theme::c();
     let h = theme::TABBAR_H - 5.0;
     let font = egui::FontId::proportional(theme::FS_TAB);
@@ -196,6 +216,21 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (boo
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), Sense::click());
     let mut activated = resp.clicked();
     let mut closed = resp.middle_clicked();
+    let mut menu: Option<u8> = None;
+    let _ = resp.clone().context_menu(|ui| {
+        if ui.button("关闭其他").clicked() {
+            menu = Some(0);
+            ui.close_menu();
+        }
+        if ui.button("关闭左侧").clicked() {
+            menu = Some(1);
+            ui.close_menu();
+        }
+        if ui.button("关闭右侧").clicked() {
+            menu = Some(2);
+            ui.close_menu();
+        }
+    });
 
     let painter = ui.painter();
     if active {
@@ -266,7 +301,7 @@ fn draw_one_tab(ui: &mut egui::Ui, active: bool, title: &str, glyph: u8) -> (boo
         closed = true;
         activated = false;
     }
-    (activated, closed)
+    (activated, closed, menu)
 }
 
 // ---------------------------------------------------------------- 表数据视图
@@ -275,11 +310,14 @@ pub(crate) fn draw_table_view(
     ctx: &egui::Context,
     tab_id: &str,
     tab: &mut TableTab,
+    conns: &[shujing_core::ConnInfo],
 ) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let tab_id_s = tab_id.to_string();
     let p = theme::c();
+    let mysql_quote_flag = crate::app::mysql_quote(conns, &tab.conn_id);
 
+    let mut toolbar_copy: Option<String> = None;
     // ---- 工具条(44pt):表名 + 库 chip + 状态;右侧 保存/丢弃/更多/刷新/筛选
     egui::TopBottomPanel::top("table_toolbar")
         .show_separator_line(false)
@@ -396,6 +434,38 @@ pub(crate) fn draw_table_view(
                                 ui.close_menu();
                             }
                             ui.separator();
+                            if ui.button("复制为 TSV").clicked() {
+                                toolbar_copy = Some(export_rows_text(
+                                    tab.columns.as_slice(),
+                                    tab.rows.as_slice(),
+                                    '\t',
+                                ));
+                                ui.close_menu();
+                            }
+                            if ui.button("复制为 Markdown").clicked() {
+                                toolbar_copy = Some(export_rows_markdown(
+                                    tab.columns.as_slice(),
+                                    tab.rows.as_slice(),
+                                ));
+                                ui.close_menu();
+                            }
+                            if ui.button("复制为 JSON").clicked() {
+                                toolbar_copy = Some(export_rows_json(
+                                    tab.columns.as_slice(),
+                                    tab.rows.as_slice(),
+                                ));
+                                ui.close_menu();
+                            }
+                            if ui.button("复制为 INSERT 语句").clicked() {
+                                toolbar_copy = Some(export_rows_inserts(
+                                    &tab.table,
+                                    tab.columns.as_slice(),
+                                    tab.rows.as_slice(),
+                                    mysql_quote_flag,
+                                ));
+                                ui.close_menu();
+                            }
+                            ui.separator();
                             if ui
                                 .button(if theme::is_dark() {
                                     "浅色外观"
@@ -475,6 +545,13 @@ pub(crate) fn draw_table_view(
             });
             theme::hairline_bottom(ui);
         });
+
+    if toolbar_copy.is_some() {
+        actions.push(TabAction::CopyToClipboard {
+            text: toolbar_copy.take().unwrap_or_default(),
+            toast: "已复制到剪贴板".to_string(),
+        });
+    }
 
     // ---- 底部状态栏(34pt):共 N 行 | 已筛选 | 耗时;右侧翻页
     let mut clear_filter = false;
@@ -874,6 +951,10 @@ pub(crate) fn draw_table_view(
             let mut new_selection: Option<Option<(usize, usize)>> = None;
             let mut copy_text: Option<String> = None;
             let mut set_null: Option<(usize, usize)> = None;
+            let mut col_set_sort: Option<(String, bool)> = None;
+            let mut col_clear_sort = false;
+            let mut col_where_out: Option<String> = None;
+            let mut col_stat_col: Option<String> = None;
             {
                 let sc = &mut sort_click;
                 let cr = &mut commit;
@@ -908,11 +989,46 @@ pub(crate) fn draw_table_view(
                             &mut set_null,
                             detail,
                             &col_widths,
+                            &mut col_set_sort,
+                            &mut col_clear_sort,
+                            &mut col_where_out,
+                            &mut col_stat_col,
+                            mysql_quote_flag,
                         );
                         if let Some(a) = menu_action {
                             actions.push(a);
                         }
                     });
+            }
+            // 列头右键动作落地
+            if let Some((c2, asc)) = col_set_sort {
+                *sort = Some((c2, asc));
+                tab.page = 1;
+                actions.push(TabAction::Reload {
+                    tab_id: tab_id_s.clone(),
+                });
+            }
+            if col_clear_sort {
+                *sort = None;
+                actions.push(TabAction::Reload {
+                    tab_id: tab_id_s.clone(),
+                });
+            }
+            if let Some(w) = col_where_out {
+                // 追加到筛选栏已应用 WHERE(AND 组合)
+                let merged = match &tab.applied_where {
+                    Some(prev) => format!("{prev} AND {w}"),
+                    None => w,
+                };
+                tab.applied_where = Some(merged);
+                tab.filter_bar_open = true;
+                tab.page = 1;
+                actions.push(TabAction::Reload {
+                    tab_id: tab_id_s.clone(),
+                });
+            }
+            if let Some(col) = col_stat_col {
+                tab.col_stats = Some(crate::app::compute_col_stats(&col, rows, columns));
             }
 
             if let Some(sel) = new_selection {
@@ -1156,6 +1272,11 @@ fn draw_data_table(
     set_null: &mut Option<(usize, usize)>,
     detail: &mut bool,
     col_widths: &[f32],
+    set_sort: &mut Option<(String, bool)>,
+    clear_sort: &mut bool,
+    col_where_out: &mut Option<String>,
+    col_stat_col: &mut Option<String>,
+    mysql_q: bool,
 ) {
     let p = theme::c();
     // TableBuilder 的行/列间距取自 item_spacing:清零才能得到原型的连续表头与 32pt 行高
@@ -1248,6 +1369,82 @@ fn draw_data_table(
                     .on_hover_text("点击排序:升序 → 降序 → 取消;拖动列边缘调宽");
                 if resp.clicked() {
                     *sc = Some(c.clone());
+                }
+                // 列头右键:排序/按列筛选/列统计
+                let mut col_menu: Option<u8> = None;
+                let _ = resp.clone().context_menu(|ui| {
+                    if ui.button("升序排序").clicked() {
+                        col_menu = Some(0);
+                        ui.close_menu();
+                    }
+                    if ui.button("降序排序").clicked() {
+                        col_menu = Some(1);
+                        ui.close_menu();
+                    }
+                    if ui.button("取消排序").clicked() {
+                        col_menu = Some(2);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("筛选此值(=当前页首行值)").clicked() {
+                        col_menu = Some(3);
+                        ui.close_menu();
+                    }
+                    if ui.button("筛选 NULL 值").clicked() {
+                        col_menu = Some(4);
+                        ui.close_menu();
+                    }
+                    if ui.button("筛选非空值").clicked() {
+                        col_menu = Some(5);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("列统计(当前页)").clicked() {
+                        col_menu = Some(6);
+                        ui.close_menu();
+                    }
+                });
+                if let Some(act) = col_menu {
+                    let col = c.clone();
+                    match act {
+                        0 => *set_sort = Some((col, true)),
+                        1 => *set_sort = Some((col, false)),
+                        2 => *clear_sort = true,
+                        3 => {
+                            let val = rows.first().and_then(|r| {
+                                columns
+                                    .iter()
+                                    .position(|x| x == &col)
+                                    .and_then(|i| r[i].clone())
+                            });
+                            if let Some(v) = val {
+                                let lit = if v.parse::<f64>().is_ok() {
+                                    v
+                                } else {
+                                    format!("'{}'", v.replace('\'', "''"))
+                                };
+                                *col_where_out = Some(format!(
+                                    "{} = {lit}",
+                                    crate::app::quote_ident_by(&col, mysql_q)
+                                ));
+                            }
+                        }
+                        4 => {
+                            *col_where_out = Some(format!(
+                                "{} IS NULL",
+                                crate::app::quote_ident_by(&col, mysql_q)
+                            ));
+                        }
+                        5 => {
+                            *col_where_out = Some(format!(
+                                "{} IS NOT NULL",
+                                crate::app::quote_ident_by(&col, mysql_q)
+                            ));
+                        }
+                        _ => {
+                            *col_stat_col = Some(col);
+                        }
+                    }
                 }
                 header_bottom_line(ui);
             });
@@ -1995,6 +2192,11 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
         TabAction::RunQuery { tab_id } => app.run_query(&tab_id),
         TabAction::RunRedisCmd { tab_id } => app.run_redis_cmd(&tab_id),
         TabAction::ApplyFilterBar { tab_id } => app.apply_filter_bar(&tab_id),
+        TabAction::Toast { msg } => app.toast_error(msg),
+        TabAction::CopyToClipboard { text, toast } => {
+            ctx.copy_text(text);
+            app.toast_error(toast);
+        }
         TabAction::ReloadDdl { tab_id } => app.load_ddl(&tab_id),
         TabAction::ClearFilterBar { tab_id } => app.clear_filter_bar(&tab_id),
         TabAction::SaveQueryChanges { tab_id } => {
@@ -2056,6 +2258,8 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 });
             });
         }
+        TabAction::ExplainQuery { tab_id } => app.run_explain(&tab_id),
+        TabAction::RunQuerySql { tab_id, sql } => app.run_query_sql(&tab_id, sql),
         TabAction::CancelQuery { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
                 return;
@@ -2276,7 +2480,22 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
 
             ui.label(RichText::new("类型").size(11.0).color(p.muted));
             ui.add_space(4.0);
-            segmented_db_type(ui, &mut m.db_type, 440.0);
+            if segmented_db_type(ui, &mut m.db_type, 440.0) {
+                // 切换类型:端口为空或等于其它类型默认值时带出新默认
+                let dp = default_port(m.db_type);
+                if !dp.is_empty()
+                    && (m.port.is_empty()
+                        || m.port == "3306"
+                        || m.port == "5432"
+                        || m.port == "6379")
+                {
+                    m.port = dp.to_string();
+                }
+                if m.db_type == shujing_core::DbType::Redis {
+                    m.user.clear();
+                    m.database = "0".to_string();
+                }
+            }
             ui.add_space(2.0);
 
             if m.db_type == shujing_core::DbType::Sqlite {
@@ -2291,10 +2510,63 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                         theme::form_field(ui, "端口", "conn-port", &mut m.port, 122.0, false);
                     });
                 });
-                theme::form_field(ui, "用户", "conn-user", &mut m.user, 440.0, false);
-                theme::form_field(ui, "密码", "conn-pwd", &mut m.password, 440.0, true);
-                theme::form_field(ui, "默认库(可选)", "conn-db", &mut m.database, 440.0, false);
+                if m.db_type == shujing_core::DbType::Redis {
+                    theme::form_field(ui, "密码(可选)", "conn-pwd", &mut m.password, 440.0, true);
+                    theme::form_field(ui, "DB 编号(0-15)", "conn-db", &mut m.database, 440.0, false);
+                } else {
+                    theme::form_field(ui, "用户", "conn-user", &mut m.user, 440.0, false);
+                    theme::form_field(ui, "密码", "conn-pwd", &mut m.password, 440.0, true);
+                    theme::form_field(ui, "默认库(可选)", "conn-db", &mut m.database, 440.0, false);
+                }
             }
+
+            // 标识色
+            ui.label(RichText::new("标识色").size(11.0).color(p.muted));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let cur = m.color_idx.unwrap_or(0);
+                for (i, (name, c)) in CONN_COLORS.iter().enumerate() {
+                    let sw = egui::Rect::from_center_size(
+                        egui::pos2(ui.cursor().left() + 11.0, ui.cursor().center().y),
+                        egui::vec2(22.0, 22.0),
+                    );
+                    let _ = ui.allocate_space(egui::vec2(22.0, 22.0));
+                    let resp = ui.interact(sw, egui::Id::new(("conn-color", i)), Sense::click());
+                    let selected = cur == i as u8;
+                    let fill = if *name == "无" { p.elevated } else { *c };
+                    ui.painter()
+                        .rect_filled(sw, egui::CornerRadius::same(11), fill);
+                    if *name == "无" {
+                        ui.painter().rect_stroke(
+                            sw,
+                            egui::CornerRadius::same(11),
+                            egui::Stroke::new(1.0, p.border),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    if selected {
+                        ui.painter().rect_stroke(
+                            sw.expand(2.0),
+                            egui::CornerRadius::same(13),
+                            egui::Stroke::new(1.5, p.text2),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    resp.clone().on_hover_text(*name);
+                    if resp.clicked() {
+                        m.color_idx = Some(i as u8);
+                    }
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add(egui::Checkbox::new(&mut m.read_only, "只读模式(仅允许查询)"))
+                        .changed()
+                    {
+                        // 只读连接不应带默认写语义,无需额外处理
+                    }
+                });
+            });
 
             ui.add_space(2.0);
             ui.horizontal(|ui| {
@@ -2340,7 +2612,12 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
 }
 
 /// iOS 分段控件:轨道 + 选中凸起
-fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width: f32) {
+fn segmented_db_type(
+    ui: &mut egui::Ui,
+    value: &mut shujing_core::DbType,
+    width: f32,
+) -> bool {
+    let mut changed = false;
     let p = theme::c();
     let h = 30.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), Sense::hover());
@@ -2356,8 +2633,9 @@ fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width:
         (shujing_core::DbType::MySql, "MySQL"),
         (shujing_core::DbType::Sqlite, "SQLite"),
         (shujing_core::DbType::Postgres, "PostgreSQL"),
+        (shujing_core::DbType::Redis, "Redis"),
     ];
-    let seg_w = (width - 6.0) / 3.0;
+    let seg_w = (width - 6.0) / opts.len() as f32;
     for (i, (t, label)) in opts.iter().enumerate() {
         let srect = egui::Rect::from_min_size(
             egui::pos2(rect.left() + 3.0 + i as f32 * seg_w, rect.top() + 3.0),
@@ -2372,22 +2650,49 @@ fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width:
             ui.painter()
                 .rect_filled(srect, egui::CornerRadius::same(6), p.hover);
         }
+        let font = if selected {
+            theme::bold(if *t == shujing_core::DbType::Postgres { 10.5 } else { 12.0 })
+        } else {
+            egui::FontId::proportional(if *t == shujing_core::DbType::Postgres { 10.5 } else { 12.0 })
+        };
         ui.painter().text(
             srect.center(),
             egui::Align2::CENTER_CENTER,
             *label,
-            if selected {
-                theme::bold(12.0)
-            } else {
-                egui::FontId::proportional(12.0)
-            },
+            font,
             if selected { p.text } else { p.text2 },
         );
         if resp.clicked() {
+            changed = *value != *t;
             *value = *t;
         }
     }
+    changed
 }
+
+fn default_port(t: shujing_core::DbType) -> &'static str {
+    match t {
+        shujing_core::DbType::MySql => "3306",
+        shujing_core::DbType::Postgres => "5432",
+        shujing_core::DbType::Redis => "6379",
+        shujing_core::DbType::Sqlite => "",
+    }
+}
+
+/// 连接标识色板(与 dbclient 一致的 6 色 + 无色)
+pub(crate) fn conn_colors() -> &'static [(&'static str, Color32)] {
+    CONN_COLORS
+}
+
+pub const CONN_COLORS: &[(&str, Color32)] = &[
+    ("无", Color32::TRANSPARENT),
+    ("Indigo", Color32::from_rgb(0x85, 0x87, 0xF6)),
+    ("Violet", Color32::from_rgb(0xA7, 0x8B, 0xFA)),
+    ("Cyan", Color32::from_rgb(0x4D, 0xD0, 0xE1)),
+    ("Emerald", Color32::from_rgb(0x4E, 0xC9, 0x8A)),
+    ("Amber", Color32::from_rgb(0xEE, 0xC1, 0x7E)),
+    ("Rose", Color32::from_rgb(0xF2, 0x77, 0x8C)),
+];
 
 fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
     shujing_core::ConnInfo {
@@ -2408,8 +2713,12 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
         password: (!m.password.is_empty()).then(|| m.password.clone()),
         database: (!m.database.is_empty()).then(|| m.database.clone()),
         file_path: (!m.file_path.is_empty()).then(|| m.file_path.clone()),
-        color: None,
-        read_only: false,
+        color: m.color_idx.and_then(|i| {
+            CONN_COLORS.get(i as usize).and_then(|(name, c)| {
+                (*name != "无").then(|| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()))
+            })
+        }),
+        read_only: m.read_only,
     }
 }
 
@@ -2538,7 +2847,10 @@ impl eframe::App for ShujingApp {
             self.active_tab = idx;
             let tab_id = self.tabs[idx].id.clone();
             let actions = match &mut self.tabs[idx].kind {
-                TabKind::Table(t) => draw_table_view(ctx, &tab_id, t),
+                TabKind::Table(t) => {
+                    let conns = self.conns.clone();
+                    draw_table_view(ctx, &tab_id, t, &conns)
+                }
                 TabKind::Structure(s) => structure::draw_structure_view(ctx, &tab_id, s),
                 TabKind::Query(q) => {
                     let conns = self.conns.clone();
@@ -2575,6 +2887,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_new_table_modal(self, ctx);
         crate::modals::draw_global_search(self, ctx);
         crate::modals::draw_confirm_modal(self, ctx);
+        crate::modals::draw_col_stats_modal(self, ctx);
 
         if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {
             self.conn_modal = Some(ConnModal::new());
@@ -2702,4 +3015,111 @@ pub(crate) fn draw_empty_state(ui: &mut egui::Ui) {
 /// ⌘T 新建查询标签
 fn ui_input_new_query(ctx: &egui::Context) -> bool {
     ctx.input(|i| i.key_pressed(egui::Key::T) && (i.modifiers.command || i.modifiers.ctrl))
+}
+
+
+// ---------------------------------------------------------------- 多格式导出(当前结果集)
+
+pub fn export_rows_text(columns: &[String], rows: &[Vec<Option<String>>], sep: char) -> String {
+    let mut out = columns.join(&sep.to_string());
+    out.push('\n');
+    for r in rows {
+        let line: Vec<String> = r
+            .iter()
+            .map(|v| v.clone().unwrap_or_default().replace(['\n', '\r'], " "))
+            .collect();
+        out.push_str(&line.join(&sep.to_string()));
+        out.push('\n');
+    }
+    out
+}
+
+pub fn export_rows_markdown(columns: &[String], rows: &[Vec<Option<String>>]) -> String {
+    let esc = |s: &str| s.replace('|', "\\|").replace('\n', " ");
+    let mut out = format!(
+        "| {} |\n| {} |\n",
+        columns.iter().map(|c| esc(c)).collect::<Vec<_>>().join(" | "),
+        columns.iter().map(|_| "---").collect::<Vec<_>>().join(" | ")
+    );
+    for r in rows {
+        let line: Vec<String> = r
+            .iter()
+            .map(|v| esc(v.as_deref().unwrap_or("NULL")))
+            .collect();
+        out.push_str(&format!("| {} |\n", line.join(" | ")));
+    }
+    out
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+pub fn export_rows_json(columns: &[String], rows: &[Vec<Option<String>>]) -> String {
+    let mut out = String::from("[\n");
+    for r in rows {
+        out.push_str("  {");
+        for (i, c) in columns.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            match &r[i] {
+                Some(v) if v.parse::<f64>().is_ok() || v == "true" || v == "false" => {
+                    out.push_str(&format!("\n    \"{}\": {}", json_escape(c), v))
+                }
+                Some(v) => out.push_str(&format!("\n    \"{}\": \"{}\"", json_escape(c), json_escape(v))),
+                None => out.push_str(&format!("\n    \"{}\": null", json_escape(c))),
+            }
+        }
+        out.push_str("\n  },\n");
+    }
+    if out.ends_with(",\n") {
+        out.truncate(out.len() - 3);
+        out.push_str("\n");
+    }
+    out.push(']');
+    out
+}
+
+pub fn export_rows_inserts(
+    table: &str,
+    columns: &[String],
+    rows: &[Vec<Option<String>>],
+    mysql: bool,
+) -> String {
+    let q = crate::app::quote_ident_by(table, mysql);
+    let cols: Vec<String> = columns
+        .iter()
+        .map(|c| crate::app::quote_ident_by(c, mysql))
+        .collect();
+    let mut out = String::new();
+    for r in rows {
+        let vals: Vec<String> = r
+            .iter()
+            .map(|v| match v {
+                None => "NULL".to_string(),
+                Some(s) if s.parse::<f64>().is_ok() => s.clone(),
+                Some(s) => format!("'{}'", s.replace('\'', "''")),
+            })
+            .collect();
+        out.push_str(&format!(
+            "INSERT INTO {} ({}) VALUES ({});\n",
+            q,
+            cols.join(", "),
+            vals.join(", ")
+        ));
+    }
+    out
 }

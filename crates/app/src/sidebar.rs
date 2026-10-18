@@ -7,6 +7,9 @@ use crate::net;
 use crate::{icons, theme};
 use egui::{Align, Color32, Layout, RichText, Sense, Vec2};
 
+/// iOS 橙(只读角标)
+const AMBER: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
+
 impl ShujingApp {
     pub fn draw_sidebar_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("sidebar")
@@ -135,11 +138,18 @@ impl ShujingApp {
         let w = ui.available_width();
         let (rect, row_resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::hover());
         let painter = ui.painter().clone();
-        painter.circle_filled(
-            egui::pos2(rect.left() + 5.0, rect.center().y),
-            4.0,
-            if online { p.green } else { p.dot_off },
-        );
+        // 标识色:在线时状态点与名称用连接色;未设置用默认语义色
+        let accent = c.color.as_ref().and_then(|hex| {
+            u32::from_str_radix(hex.trim_start_matches('#'), 16)
+                .ok()
+                .map(|v| Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
+        });
+        let dot = match accent {
+            Some(c2) if online => c2,
+            _ if online => p.green,
+            _ => p.dot_off,
+        };
+        painter.circle_filled(egui::pos2(rect.left() + 5.0, rect.center().y), 4.0, dot);
         // 同一行里不同字号的文字统一按基线排,而不是各自垂直居中
         let baseline = rect.center().y + 5.0;
         let name_font = theme::bold(theme::FS_CONN);
@@ -158,6 +168,21 @@ impl ShujingApp {
             name_galley.clone(),
             if online { p.text } else { p.text2 },
         );
+        if c.read_only {
+            let nx = rect.left() + 17.0 + name_galley.size().x + 6.0;
+            let chip = egui::Rect::from_center_size(
+                egui::pos2(nx + 17.0, rect.center().y),
+                egui::vec2(34.0, 15.0),
+            );
+            painter.rect_filled(chip, egui::CornerRadius::same(4), theme::tint(AMBER, 40));
+            painter.text(
+                chip.center(),
+                egui::Align2::CENTER_CENTER,
+                "只读",
+                theme::bold(9.0),
+                AMBER,
+            );
+        }
         if c.db_type == shujing_core::DbType::Sqlite {
             let sg = painter.layout_no_wrap(
                 "SQLite".to_owned(),
@@ -590,6 +615,8 @@ impl ShujingApp {
         let mut new_table = false;
         let mut er = false;
         let mut import_sql = false;
+        let mut export_full = false;
+        let mut export_schema = false;
         let _ = resp.clone().context_menu(|ui| {
             if ui.button("新建表…").clicked() {
                 new_table = true;
@@ -607,6 +634,15 @@ impl ShujingApp {
                 import_sql = true;
                 ui.close_menu();
             }
+            ui.separator();
+            if ui.button("导出数据库 SQL(结构+数据)").clicked() {
+                export_full = true;
+                ui.close_menu();
+            }
+            if ui.button("导出数据库 SQL(仅结构)").clicked() {
+                export_schema = true;
+                ui.close_menu();
+            }
             if ui.button("刷新表列表").clicked() {
                 ui.close_menu();
             }
@@ -616,6 +652,12 @@ impl ShujingApp {
         }
         if import_sql {
             self.import_sql_file(conn_id);
+        }
+        if export_full {
+            self.export_database_sql_file(conn_id, db, true);
+        }
+        if export_schema {
+            self.export_database_sql_file(conn_id, db, false);
         }
         if new_table {
             self.open_designer(conn_id, None, Some(db.to_string()));
@@ -686,6 +728,8 @@ impl ShujingApp {
         let mut new_table = false;
         let mut er = false;
         let mut import_sql = false;
+        let mut export_full = false;
+        let mut export_schema = false;
         let _ = resp.clone().context_menu(|ui| {
             if ui.button("新建表…").clicked() {
                 new_table = true;
@@ -703,6 +747,15 @@ impl ShujingApp {
                 import_sql = true;
                 ui.close_menu();
             }
+            ui.separator();
+            if ui.button("导出数据库 SQL(结构+数据)").clicked() {
+                export_full = true;
+                ui.close_menu();
+            }
+            if ui.button("导出数据库 SQL(仅结构)").clicked() {
+                export_schema = true;
+                ui.close_menu();
+            }
         });
         if new_table {
             self.open_designer(conn_id, None, Some(db.to_string()));
@@ -713,6 +766,14 @@ impl ShujingApp {
         }
         if import_sql {
             self.import_sql_file(conn_id);
+        }
+        if export_full {
+            self.export_database_sql_file(conn_id, db, true);
+            return;
+        }
+        if export_schema {
+            self.export_database_sql_file(conn_id, db, false);
+            return;
         }
         if resp.clicked() {
             self.toggle_database(conn_id, db);

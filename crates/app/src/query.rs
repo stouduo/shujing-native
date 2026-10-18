@@ -103,6 +103,15 @@ pub fn draw_query_view(
                         });
                     }
                     if !is_redis
+                        && theme::button(ui, "计划", theme::BtnKind::Secondary)
+                            .on_hover_text("EXPLAIN 执行计划(结果进结果区,不进历史)")
+                            .clicked()
+                    {
+                        actions.push(TabAction::ExplainQuery {
+                            tab_id: tab_id.to_string(),
+                        });
+                    }
+                    if !is_redis
                         && theme::button(ui, "优化", theme::BtnKind::Secondary)
                             .on_hover_text("SQL 优化分析(EXPLAIN + 规则诊断)")
                             .clicked()
@@ -181,6 +190,7 @@ pub fn draw_query_view(
                             };
                             ui.add(
                                 egui::TextEdit::multiline(&mut q.sql)
+                                    .id_salt(format!("sql-editor-{tab_id}"))
                                     .code_editor()
                                     .frame(false)
                                     .margin(egui::Margin::ZERO)
@@ -200,18 +210,54 @@ pub fn draw_query_view(
                         });
                 });
 
+            // ⌘/:选中行注释切换
+            if !is_redis
+                && ui.input(|i| i.key_pressed(egui::Key::Slash) && i.modifiers.command)
+            {
+                if let Some(state) =
+                    egui::TextEdit::load_state(ui.ctx(), egui::Id::new(format!("sql-editor-{tab_id}")))
+                {
+                    if let Some(range) = state.cursor.char_range() {
+                        let (a, b) = (range.primary.index, range.secondary.index);
+                        let (a, b) = (a.min(b), a.max(b));
+                        toggle_comment(&mut q.sql, a, b);
+                    }
+                }
+            }
             if ui.input(|i| {
                 i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
             }) {
-                actions.push(if is_redis {
-                    TabAction::RunRedisCmd {
+                if is_redis {
+                    actions.push(TabAction::RunRedisCmd {
                         tab_id: tab_id.to_string(),
-                    }
+                    });
                 } else {
-                    TabAction::RunQuery {
-                        tab_id: tab_id.to_string(),
+                    // 有选区只执行选中部分
+                    let sel_sql = egui::TextEdit::load_state(
+                        ui.ctx(),
+                        egui::Id::new(format!("sql-editor-{tab_id}")),
+                    )
+                    .and_then(|st| st.cursor.char_range())
+                    .and_then(|range| {
+                        let (a, b) = (range.primary.index, range.secondary.index);
+                        let (a, b) = (a.min(b), a.max(b));
+                        (a < b).then(|| {
+                            let start = q.sql.char_indices().nth(a).map(|(i, _)| i).unwrap_or(q.sql.len());
+                            let end = q.sql.char_indices().nth(b).map(|(i, _)| i).unwrap_or(q.sql.len());
+                            q.sql[start..end].trim().to_string()
+                        })
+                    })
+                    .filter(|s| !s.is_empty());
+                    match sel_sql {
+                        Some(sel) => actions.push(TabAction::RunQuerySql {
+                            tab_id: tab_id.to_string(),
+                            sql: sel,
+                        }),
+                        None => actions.push(TabAction::RunQuery {
+                            tab_id: tab_id.to_string(),
+                        }),
                     }
-                });
+                }
             }
 
             if q.results.is_empty() {
@@ -528,3 +574,43 @@ pub fn draw_optimize_modal(
 
 /// iOS 橙(警告级)
 const ORANGE: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
+
+
+/// 选中行注释切换:已注释的去 `-- `,未注释的加
+fn toggle_comment(sql: &mut String, sel_a: usize, sel_b: usize) {
+    let char_at = |s: &str, n: usize| s.char_indices().nth(n).map(|(i, _)| i).unwrap_or(s.len());
+    let (byte_a, byte_b) = (char_at(sql, sel_a), char_at(sql, sel_b));
+    let line_start = sql[..byte_a].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = sql[byte_b..].find('\n').map(|i| byte_b + i).unwrap_or(sql.len());
+    let block = &sql[line_start..line_end];
+    let all_commented = block
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .all(|l| l.trim_start().starts_with("--"));
+    let mut out = String::with_capacity(sql.len() + 16);
+    for line in block.lines() {
+        if all_commented {
+            // 去一层注释
+            if let Some(rest) = line.strip_prefix("-- ") {
+                out.push_str(rest);
+            } else if let Some(rest) = line.strip_prefix("--") {
+                out.push_str(rest);
+            } else {
+                out.push_str(line);
+            }
+        } else if line.trim().is_empty() {
+            out.push_str(line);
+        } else {
+            out.push_str("-- ");
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    if !block.ends_with('\n') {
+        // 最后一行无换行:上面 push 了多余的 \n,去掉
+        if out.ends_with('\n') {
+            out.pop();
+        }
+    }
+    *sql = format!("{}{}{}", &sql[..line_start], out, &sql[line_end..]);
+}

@@ -366,7 +366,8 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
     let tab_id = app.tabs[idx].id.clone();
     match &mut app.tabs[idx].kind {
         TabKind::Table(t) => {
-            let _ = table_view::draw_table_view(ctx, &tab_id, t);
+            let conns = app.conns.clone();
+            let _ = table_view::draw_table_view(ctx, &tab_id, t, &conns);
         }
         TabKind::Structure(s) => {
             let _ = structure::draw_structure_view(ctx, &tab_id, s);
@@ -465,10 +466,11 @@ fn render_data_table() {
     tab.changes
         .push((1, "role_name".into(), Some("内容编辑".into())));
     let cell = std::cell::RefCell::new(Some(tab));
+    let conns: Vec<shujing_core::ConnInfo> = vec![];
     render("data_table", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let tab = b.as_mut().unwrap();
-        let _actions = table_view::draw_table_view(ctx, "t1", tab);
+        let _actions = table_view::draw_table_view(ctx, "t1", tab, &conns);
     });
 }
 
@@ -477,10 +479,11 @@ fn render_row_detail() {
     let mut tab = role_tab();
     tab.detail = true;
     let cell = std::cell::RefCell::new(Some(tab));
+    let conns: Vec<shujing_core::ConnInfo> = vec![];
     render("row_detail", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let tab = b.as_mut().unwrap();
-        let _ = table_view::draw_table_view(ctx, "t1", tab);
+        let _ = table_view::draw_table_view(ctx, "t1", tab, &conns);
     });
 }
 

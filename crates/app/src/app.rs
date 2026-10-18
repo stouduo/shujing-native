@@ -263,6 +263,8 @@ pub struct TableTab {
     /// 已应用的筛选栏 WHERE(构建好的)
     pub applied_where: Option<String>,
     pub filter_error: Option<String>,
+    /// 列统计弹窗:(列名, [(指标, 值)])
+    pub col_stats: Option<(String, Vec<(String, String)>)>,
     /// 最近一次查询耗时
     pub last_elapsed_ms: Option<u64>,
     /// 查看完整内容弹窗 (列名, 全文)
@@ -305,8 +307,56 @@ impl TableTab {
             free_where: String::new(),
             applied_where: None,
             filter_error: None,
+            col_stats: None,
         }
     }
+}
+
+/// 列统计(当前页):行数/数值统计/NULL/去重
+pub fn compute_col_stats(
+    col: &str,
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+) -> (String, Vec<(String, String)>) {
+    let Some(ci) = columns.iter().position(|c| c == col) else {
+        return (col.to_string(), vec![]);
+    };
+    let vals: Vec<Option<String>> = rows.iter().map(|r| r[ci].clone()).collect();
+    let total = vals.len();
+    let nulls = vals.iter().filter(|v| v.is_none()).count();
+    let mut non_null: Vec<f64> = vals
+        .iter()
+        .filter_map(|v| v.as_ref().and_then(|s| s.parse::<f64>().ok()))
+        .collect();
+    let numeric = non_null.len();
+    let mut out = vec![
+        ("行数".to_string(), crate::icons::thousands(total as u64)),
+        ("NULL".to_string(), crate::icons::thousands(nulls as u64)),
+    ];
+    if numeric > 0 {
+        let sum: f64 = non_null.iter().sum();
+        let avg = sum / numeric as f64;
+        non_null.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let fmt = |x: f64| {
+            if x.fract() == 0.0 && x.abs() < 1e15 {
+                format!("{}", x as i64)
+            } else {
+                format!("{x}")
+            }
+        };
+        out.push(("数值个数".to_string(), crate::icons::thousands(numeric as u64)));
+        out.push(("SUM".to_string(), fmt(sum)));
+        out.push(("AVG".to_string(), fmt(avg)));
+        out.push(("MIN".to_string(), fmt(non_null[0])));
+        out.push(("MAX".to_string(), fmt(non_null[non_null.len() - 1])));
+    } else {
+        let mut distinct: Vec<&String> =
+            vals.iter().filter_map(|v| v.as_ref()).collect();
+        distinct.sort();
+        distinct.dedup();
+        out.push(("非空去重".to_string(), crate::icons::thousands(distinct.len() as u64)));
+    }
+    (col.to_string(), out)
 }
 
 /// 结构标签
@@ -557,6 +607,10 @@ pub struct ConnModal {
     pub file_path: String,
     pub testing: bool,
     pub test_result: Option<Result<String, String>>,
+    /// 只读模式(生产库保护)
+    pub read_only: bool,
+    /// 标识色板索引
+    pub color_idx: Option<u8>,
 }
 
 impl ConnModal {
@@ -573,6 +627,8 @@ impl ConnModal {
             file_path: String::new(),
             testing: false,
             test_result: None,
+            read_only: false,
+            color_idx: None,
         }
     }
 
@@ -590,6 +646,19 @@ impl ConnModal {
             file_path: c.file_path.clone().unwrap_or_default(),
             testing: false,
             test_result: None,
+            read_only: c.read_only,
+            color_idx: c.color.as_ref().and_then(|hex| {
+                let rgb = u32::from_str_radix(hex.trim_start_matches('#'), 16).ok();
+                rgb.and_then(|v| {
+                    let (r, g, b) = ((v >> 16) as u8, (v >> 8) as u8, v as u8);
+                    crate::table_view::CONN_COLORS
+                        .iter()
+                        .position(|(name, c)| {
+                            *name != "无" && c.r() == r && c.g() == g && c.b() == b
+                        })
+                        .map(|i| i as u8)
+                })
+            }),
         }
     }
 }
@@ -1613,6 +1682,67 @@ impl ShujingApp {
         });
     }
 
+    /// EXPLAIN 到结果区(不进历史)
+    pub fn run_explain(&mut self, tab_id: &str) {
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Query(q) = &tab.kind else {
+            return;
+        };
+        let sql = q.sql.trim().to_string();
+        let head = sql.get(..8).unwrap_or("").to_uppercase();
+        if sql.is_empty() || (!head.starts_with("SELECT") && !head.starts_with("WITH")) {
+            self.toast_error("计划仅支持 SELECT 语句".to_string());
+            return;
+        }
+        let Some(conn) = self.conns.iter().find(|c| c.id == q.conn_id) else {
+            self.toast_error("请先选择连接".to_string());
+            return;
+        };
+        let explain = shujing_core::sql_advisor::explain_sql(conn.db_type, &sql);
+        let conn_id = q.conn_id.clone();
+        let tid = tab_id.to_string();
+        if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tid) {
+            if let TabKind::Query(q) = &mut t.kind {
+                q.running = true;
+                q.error = None;
+            }
+        }
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = service.run_sql(&conn_id, explain, Some(200)).await;
+            let _ = tx.send(BgEvent::QueryDone { tab_id: tid, result });
+        });
+    }
+
+    /// 执行指定 SQL(⌘↵ 选区)
+    pub fn run_query_sql(&mut self, tab_id: &str, sql: String) {
+        let tab_id = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let TabKind::Query(q) = &mut tab.kind else {
+            return;
+        };
+        if q.running || sql.trim().is_empty() {
+            return;
+        }
+        q.running = true;
+        q.error = None;
+        q.history.retain(|h| h != &sql);
+        q.history.insert(0, sql.clone());
+        q.history.truncate(20);
+        let conn_id = q.conn_id.clone();
+        net::spawn(async move {
+            let result = service.run_sql(&conn_id, sql, None).await;
+            let _ = tx.send(BgEvent::QueryDone { tab_id, result });
+        });
+    }
+
     /// 查询页 Redis 命令行模式:redis_run 执行,结果渲染成单列结果集
     pub fn run_redis_cmd(&mut self, tab_id: &str) {
         let tab_id = tab_id.to_string();
@@ -1653,6 +1783,32 @@ impl ShujingApp {
                 }]
             });
             let _ = tx.send(BgEvent::QueryDone { tab_id, result });
+        });
+    }
+
+    /// 整库导出 SQL(结构+可选数据)
+    pub fn export_database_sql_file(&mut self, conn_id: &str, db: &str, with_data: bool) {
+        let default_name = format!("{db}_{}.sql", if with_data { "full" } else { "schema" });
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("SQL", &["sql"])
+            .save_file()
+        else {
+            return;
+        };
+        let conn_id = conn_id.to_string();
+        let db = db.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        crate::net::spawn(async move {
+            let result = service
+                .export_database_sql(&conn_id, with_data)
+                .await
+                .and_then(|(sql, _)| {
+                    std::fs::write(&path, sql).map_err(|e| format!("写入失败: {e}"))
+                })
+                .map(|_| path.display().to_string());
+            let _ = tx.send(BgEvent::ExportDone { result });
         });
     }
 

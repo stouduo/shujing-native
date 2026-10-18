@@ -51,7 +51,32 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 
     let mut picked: Option<(String, String, Option<String>)> = None;
+    let mut picked_cond: Option<String> = None;
+    let mut run_sql: Option<String> = None;
     let mut new_conn = false;
+
+    // 解析模式(与 dbclient QuickOpen 一致):
+    // ① SQL 语句(select/with/show/desc/describe/explain/pragma 开头)→ 直接执行
+    // ② `表名 条件…` → 打开表并套用条件
+    // ③ 纯表名 → 过滤/直接打开
+    let raw = q.query.trim().to_string();
+    let lower = raw.to_lowercase();
+    let is_sql = ["select", "with", "show", "desc", "describe", "explain", "pragma"]
+        .iter()
+        .any(|k| lower.starts_with(k));
+    let table_cond = if !is_sql && raw.contains(' ') {
+        raw.split_once(' ').map(|(a, b)| (a.to_string(), b.to_string()))
+    } else {
+        None
+    };
+    if let Some((tname, cond)) = &table_cond {
+        if let Some(hit) = candidates.iter().find(|(_, n, _, _)| n == tname) {
+            picked = Some((hit.0.clone(), hit.1.clone(), hit.2.clone()));
+            picked_cond = Some(cond.clone());
+        }
+    }
+    // enter 在下方 modal 内读取;SQL 直跑的判定挪到 picked 使用处
+
 
     let modal = egui::Modal::new(egui::Id::new("quick-open-modal"))
         .frame(theme::modal_frame())
@@ -72,6 +97,9 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
             let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
             let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if is_sql && enter && !raw.is_empty() {
+                run_sql = Some(raw.clone());
+            }
             if !candidates.is_empty() {
                 if down {
                     q.sel = (q.sel + 1).min(candidates.len() - 1);
@@ -150,7 +178,7 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
                                 g,
                                 p.muted,
                             );
-                            if row_resp.clicked() || (is_sel && enter) {
+                            if row_resp.clicked() || (is_sel && enter && picked.is_none()) {
                                 picked = Some((cid.clone(), name.clone(), db.clone()));
                             }
                         }
@@ -168,9 +196,48 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
         app.conn_modal = Some(crate::app::ConnModal::new());
         return;
     }
+    if let Some(conn) = run_sql {
+        // SQL 直接执行:开查询标签并运行
+        app.quick_open = None;
+        app.open_query_tab(Some(conn));
+        let idx = app.tabs.len() - 1;
+        if let Some(t) = app.tabs.get_mut(idx) {
+            if let crate::app::TabKind::Query(q2) = &mut t.kind {
+                q2.sql = raw.clone();
+            }
+        }
+        let id = app.tabs[idx].id.clone();
+        app.run_query(&id);
+        return;
+    }
     if let Some((conn, table, db)) = picked {
         app.quick_open = None;
+        let had = app.tabs.iter().any(|t| {
+            matches!(&t.kind, crate::app::TabKind::Table(tt)
+                if tt.conn_id == conn && tt.table == table)
+        });
         app.open_table(&conn, &table, db);
+        // `表名 条件` 模式:套用条件到筛选栏
+        if let Some(cond) = picked_cond {
+            let mysql = crate::app::mysql_quote(&app.conns, &conn);
+            let target = if had {
+                app.tabs.iter().position(|t| {
+                    matches!(&t.kind, crate::app::TabKind::Table(tt)
+                        if tt.conn_id == conn && tt.table == table)
+                })
+            } else {
+                Some(app.active_tab)
+            };
+            if let Some(i) = target {
+                if let Some(t) = app.tabs.get_mut(i) {
+                    if let crate::app::TabKind::Table(tt) = &mut t.kind {
+                        tt.free_where = cond.clone();
+                    }
+                }
+                let id = app.tabs[i].id.clone();
+                app.apply_filter_bar(&id);
+            }
+        }
         return;
     }
     if modal.should_close() {
@@ -770,5 +837,55 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         }
     } else if cancel || modal.should_close() {
         app.confirm = None;
+    }
+}
+
+
+/// 列统计弹窗(当前页)
+pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    // 只在有统计数据的激活表标签上显示
+    let Some(tab) = app.tabs.get(app.active_tab) else { return };
+    let Some((col, rows)) = tab
+        .table_data()
+        .and_then(|t| t.col_stats.clone())
+    else {
+        return;
+    };
+    let p = theme::c();
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::new("col-stats"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(360.0);
+            theme::modal_title(ui, &format!("列统计 · {col}"));
+            ui.spacing_mut().item_spacing.y = 6.0;
+            ui.label(RichText::new("基于当前页数据").size(11.0).color(p.muted));
+            ui.add_space(4.0);
+            for (k, v) in &rows {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(k).size(12.0).color(p.muted));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(v)
+                                .font(theme::mono(12.5))
+                                .color(p.text),
+                        );
+                    });
+                });
+                theme::hairline_bottom(ui);
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, "关闭", theme::BtnKind::Primary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close || modal.should_close() {
+        if let Some(t) = app.tabs.get_mut(app.active_tab) {
+            if let Some(tt) = t.table_data_mut() {
+                tt.col_stats = None;
+            }
+        }
     }
 }

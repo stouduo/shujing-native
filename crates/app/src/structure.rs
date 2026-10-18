@@ -121,30 +121,67 @@ pub fn draw_structure_view(
                     draw_indexes(ui, data);
                     ui.add_space(20.0);
 
-                    section_title(ui, "DDL", 0);
-                    ui.add_space(8.0);
-                    // DDL 也是内容层:与查询 SQL 编辑器一致,用背景色 + 描边
-                    egui::Frame::new()
-                        .fill(p.bg)
-                        .stroke(egui::Stroke::new(1.0, p.border))
-                        .corner_radius(egui::CornerRadius::same(8))
-                        .inner_margin(egui::Margin::same(12))
-                        .show(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .id_salt(format!("ddl-scroll-{tab_id}"))
-                                .max_height(320.0)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(data.ddl.clone())
-                                                .font(theme::mono(12.0))
-                                                .color(p.text2),
-                                        )
-                                        .selectable(true),
-                                    );
-                                });
+                    let ddl_open = ui
+                        .ctx()
+                        .memory(|m| {
+                            m.data
+                                .get_temp::<bool>(egui::Id::new(("ddl-open", tab_id)))
+                                .unwrap_or(false)
                         });
+                    section_title(ui, "DDL", 0);
+                    ui.add_space(4.0);
+                    // 折叠头
+                    let (hrect, hresp) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 28.0),
+                        Sense::click(),
+                    );
+                    if hresp.hovered() {
+                        ui.painter()
+                            .rect_filled(hrect, egui::CornerRadius::same(6), p.row_hover);
+                    }
+                    icons::paint_triangle(
+                        ui.painter(),
+                        egui::pos2(hrect.left() + 14.0, hrect.center().y),
+                        ddl_open,
+                        p.text2,
+                    );
+                    ui.painter().text(
+                        egui::pos2(hrect.left() + 30.0, hrect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        format!("建表语句({} 字符)", data.ddl.len()),
+                        egui::FontId::proportional(11.5),
+                        p.muted,
+                    );
+                    if hresp.clicked() {
+                        ui.ctx().memory_mut(|m| {
+                            m.data
+                                .insert_temp(egui::Id::new(("ddl-open", tab_id)), !ddl_open)
+                        });
+                    }
+                    if ddl_open {
+                        ui.add_space(6.0);
+                        // DDL 着色(与查询编辑器同源高亮)
+                        egui::Frame::new()
+                            .fill(p.bg)
+                            .stroke(egui::Stroke::new(1.0, p.border))
+                            .corner_radius(egui::CornerRadius::same(8))
+                            .inner_margin(egui::Margin::same(12))
+                            .show(ui, |ui| {
+                                egui::ScrollArea::vertical()
+                                    .id_salt(format!("ddl-scroll-{tab_id}"))
+                                    .max_height(320.0)
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        let mut job = crate::sql_highlight::highlight(&data.ddl);
+                                        job.wrap.max_width = ui.available_width();
+                                        let galley = ui.fonts(|f| f.layout_job(job));
+                                        let gsize = galley.size();
+                                        ui.painter()
+                                            .galley(ui.cursor().left_top(), galley, p.text2);
+                                        ui.allocate_space(gsize);
+                                    });
+                            });
+                    }
                     ui.add_space(8.0);
                 });
         });
@@ -190,19 +227,25 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .vscroll(false)
         .column(
-            Column::initial(180.0)
+            Column::initial(170.0)
                 .at_least(120.0)
                 .resizable(true)
                 .clip(true),
         )
         .column(
-            Column::initial(150.0)
+            Column::initial(140.0)
                 .at_least(90.0)
                 .resizable(true)
                 .clip(true),
         )
-        .column(Column::exact(64.0))
-        .column(Column::exact(64.0))
+        .column(Column::exact(56.0))
+        .column(Column::exact(56.0))
+        .column(
+            Column::initial(100.0)
+                .at_least(60.0)
+                .resizable(true)
+                .clip(true),
+        )
         .column(
             Column::initial(110.0)
                 .at_least(70.0)
@@ -211,7 +254,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
         )
         .column(Column::remainder().clip(true));
     tb.header(theme::HEADER_H, |mut header| {
-        for h in ["名称", "类型", "可空", "键", "默认值", "注释"] {
+        for h in ["名称", "类型", "可空", "键", "默认值", "额外", "注释"] {
             header.col(|ui| {
                 let rect = ui.max_rect();
                 ui.painter().rect_filled(rect, 0, p.panel);
@@ -326,6 +369,22 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                     } else {
                         p.text2
                     },
+                    12.0,
+                    rect.width() - 24.0,
+                );
+                cell_line(ui, p.row_line);
+            });
+            row.col(|ui| {
+                let rect = ui.max_rect();
+                if hovered {
+                    ui.painter().rect_filled(rect, 0, p.row_hover);
+                }
+                icons::paint_baseline_text(
+                    ui.painter(),
+                    rect,
+                    &c.extra,
+                    egui::FontId::proportional(11.0),
+                    p.muted,
                     12.0,
                     rect.width() - 24.0,
                 );
