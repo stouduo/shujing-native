@@ -237,9 +237,9 @@ impl ShujingApp {
             self.toggle_connect(c);
         }
 
-        // 连接操作全部收进右键菜单(悬停按钮易误触断开/删除)
+        // 连接操作收进名称的右键菜单(作用在名称上,不是整行空白)
         let mut menu_act: Option<&str> = None;
-        let _ = row_resp.clone().context_menu(|ui| {
+        let _ = name_resp.clone().context_menu(|ui| {
             let conn_label = if online { "断开连接" } else { "连接" };
             if ui.button(conn_label).clicked() {
                 menu_act = Some("toggle");
@@ -307,6 +307,42 @@ impl ShujingApp {
             }
             _ => {}
         }
+        // 库筛选快捷入口:漏斗常驻行右缘(在线时),点击直达
+        let filter_db_avail = online
+            && self
+                .trees
+                .get(&c.id)
+                .map(|t| !t.databases.is_empty())
+                .unwrap_or(false);
+        if filter_db_avail {
+            let frec = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 12.0, rect.center().y),
+                egui::vec2(20.0, 20.0),
+            );
+            let fres = ui.interact(frec, egui::Id::new(("db-filter-btn", &c.id)), Sense::click());
+            let has_filter = self.trees.get(&c.id).map(|t| {
+                t.visible_dbs
+                    .as_ref()
+                    .map(|v| v.len() < t.databases.len())
+                    .unwrap_or(false)
+            }) == Some(true);
+            let fcol = if has_filter {
+                p.accent
+            } else if fres.hovered() {
+                p.text
+            } else {
+                p.muted
+            };
+            icons::funnel_glyph(ui.painter(), frec.center(), fcol);
+            fres.clone().on_hover_text(if has_filter {
+                "已筛选库 · 点击调整"
+            } else {
+                "筛选显示的库"
+            });
+            if fres.clicked() {
+                self.open_db_filter(&c.id);
+            }
+        }
         if online && c.db_type != shujing_core::DbType::Sqlite {
             let ver = self
                 .trees
@@ -315,9 +351,10 @@ impl ShujingApp {
                 .unwrap_or_default();
             if !ver.is_empty() {
                 let vg = painter.layout_no_wrap(ver, theme::mono(10.5), Color32::PLACEHOLDER);
+                let right_edge = if filter_db_avail { 28.0 } else { 2.0 };
                 painter.galley(
                     egui::pos2(
-                        rect.right() - vg.size().x - 2.0,
+                        rect.right() - vg.size().x - right_edge,
                         baseline - icons::baseline_top(&vg, 10.5),
                     ),
                     vg,
