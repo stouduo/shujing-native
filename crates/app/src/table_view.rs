@@ -3260,6 +3260,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_global_search(self, ctx);
         crate::modals::draw_confirm_modal(self, ctx);
         crate::modals::draw_col_stats_modal(self, ctx);
+        crate::modals::draw_db_filter_modal(self, ctx);
         crate::modals::draw_settings_modal(self, ctx);
 
         if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {

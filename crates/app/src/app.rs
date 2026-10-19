@@ -451,6 +451,16 @@ pub struct ErTab {
     pub refit: bool,
 }
 
+/// 库筛选弹窗状态(每连接勾选显示哪些库)
+pub struct DbFilterState {
+    pub conn_id: String,
+    pub search: String,
+    /// 该连接的全部库名(弹窗期间冻结)
+    pub all: Vec<String>,
+    /// 勾选中的库名
+    pub selected: Vec<String>,
+}
+
 /// 危险操作确认弹窗(sql 中 {v} 会被替换为用户输入)
 pub struct ConfirmState {
     pub title: String,
@@ -625,6 +635,8 @@ pub struct ConnTree {
     pub loading: bool,
     /// 对象分组展开状态(键 = "{db}|{group}",group ∈ table/view/prog;默认只开 table)
     pub groups_open: HashMap<String, bool>,
+    /// 显示的库筛选(None=全部显示;Some(列表)=只显示列表中的库)
+    pub visible_dbs: Option<Vec<String>>,
 }
 
 /// 连接编辑弹窗
@@ -733,6 +745,8 @@ pub struct ShujingApp {
     /// 会话持久化
     pub snippets: Vec<String>,
     pub settings_open: bool,
+    /// 库筛选弹窗(每连接勾选显示哪些库)
+    pub db_filter: Option<DbFilterState>,
     /// 侧栏底部主题切换请求(绘制层无 ctx,经 update 消费)
     pub theme_toggle_requested: bool,
     pub session_dirty: bool,
@@ -808,6 +822,7 @@ impl ShujingApp {
             confirm: None,
             snippets,
             settings_open: false,
+            db_filter: None,
             theme_toggle_requested: false,
             session_dirty: false,
             last_session_save: None,
@@ -2022,6 +2037,77 @@ impl ShujingApp {
 
     // ---------------------------------------------------------------- 会话
 
+    // ---------------------------------------------------------------- 库筛选
+
+    fn db_filters_path(config_dir: &std::path::Path) -> std::path::PathBuf {
+        config_dir.join("db_filters.json")
+    }
+
+    /// 读取持久化的库筛选(连接 id → 显示的库名列表)
+    pub fn load_db_filters(config_dir: &std::path::Path) -> HashMap<String, Vec<String>> {
+        std::fs::read_to_string(Self::db_filters_path(config_dir))
+            .ok()
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_db_filters(&self) {
+        // 以当前各连接树上的筛选为准落盘
+        let mut map: HashMap<String, Vec<String>> = Self::load_db_filters(&self.config_dir);
+        for (id, tree) in &self.trees {
+            if let Some(list) = &tree.visible_dbs {
+                map.insert(id.clone(), list.clone());
+            } else {
+                map.remove(id);
+            }
+        }
+        if let Ok(j) = serde_json::to_string_pretty(&map) {
+            let _ = std::fs::write(Self::db_filters_path(&self.config_dir), j);
+        }
+    }
+
+    /// 连接成功时应用已持久化的库筛选
+    pub fn apply_saved_db_filter(&mut self, conn_id: &str) {
+        let saved = Self::load_db_filters(&self.config_dir);
+        if let Some(list) = saved.get(conn_id) {
+            if let Some(tree) = self.trees.get_mut(conn_id) {
+                tree.visible_dbs = Some(list.clone());
+            }
+        }
+    }
+
+    /// 打开库筛选弹窗
+    pub fn open_db_filter(&mut self, conn_id: &str) {
+        let Some(tree) = self.trees.get(conn_id) else { return };
+        if tree.databases.is_empty() {
+            self.toast_error("没有可筛选的库(连接未就绪)".to_string());
+            return;
+        }
+        let selected = tree.visible_dbs.clone().unwrap_or_else(|| tree.databases.clone());
+        self.db_filter = Some(DbFilterState {
+            conn_id: conn_id.to_string(),
+            search: String::new(),
+            all: tree.databases.clone(),
+            selected,
+        });
+    }
+
+    /// 应用筛选:写入树 + 落盘;若当前展开的库被隐藏则收起
+    pub fn apply_db_filter(&mut self, conn_id: &str, selected: Vec<String>) {
+        let expanded_hidden = self.trees.get(conn_id).and_then(|t| {
+            t.expanded_db
+                .as_ref()
+                .map(|db| !selected.contains(db))
+        });
+        if let Some(tree) = self.trees.get_mut(conn_id) {
+            tree.visible_dbs = Some(selected);
+            if expanded_hidden == Some(true) {
+                tree.expanded_db = None;
+            }
+        }
+        self.save_db_filters();
+    }
+
     fn snippets_path(config_dir: &std::path::Path) -> std::path::PathBuf {
         config_dir.join("snippets.json")
     }
@@ -2493,6 +2579,7 @@ impl ShujingApp {
                         let tree = self.trees.entry(conn_id.clone()).or_default();
                         tree.online = true;
                         tree.version = version;
+                        self.apply_saved_db_filter(&conn_id);
                         let tx = self.event_tx.clone();
                         let service = self.service.clone();
                         let cid = conn_id.clone();

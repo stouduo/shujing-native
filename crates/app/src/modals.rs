@@ -967,3 +967,115 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         app.settings_open = false;
     }
 }
+
+
+/// 库筛选弹窗:勾选该连接在侧栏显示哪些库(持久化 db_filters.json)
+pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.db_filter.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut apply: Option<Vec<String>> = None;
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::new("db-filter"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(380.0);
+            theme::modal_title(ui, "筛选显示的库");
+            ui.spacing_mut().item_spacing.y = 8.0;
+            let all_count = app.db_filter.as_ref().map(|f| f.all.len()).unwrap_or(0);
+            // 搜索 + 全选/全不选
+            ui.horizontal(|ui| {
+                let st = app.db_filter.as_mut().unwrap();
+                theme::search_box(ui, "db-filter-search", &mut st.search, "搜索库", 200.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("全不选").clicked() {
+                        let kw = st.search.trim().to_lowercase();
+                        if kw.is_empty() {
+                            st.selected.clear();
+                        } else {
+                            st.selected.retain(|s| !s.to_lowercase().contains(&kw));
+                        }
+                    }
+                    if ui.small_button("全选").clicked() {
+                        let kw = st.search.trim().to_lowercase();
+                        for d in &st.all {
+                            if kw.is_empty() || d.to_lowercase().contains(&kw) {
+                                if !st.selected.contains(d) {
+                                    st.selected.push(d.clone());
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+            ui.label(
+                RichText::new(format!(
+                    "已选 {}/{} · 未勾选的库不在侧栏显示",
+                    app.db_filter.as_ref().map(|f| f.selected.len()).unwrap_or(0),
+                    all_count
+                ))
+                .size(11.0)
+                .color(p.muted),
+            );
+            // 复选列表
+            egui::Frame::new()
+                .fill(p.input_bg)
+                .stroke(egui::Stroke::new(1.0, p.border))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin::same(6))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("db-filter-list")
+                        .max_height(300.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let st = app.db_filter.as_mut().unwrap();
+                            let kw = st.search.trim().to_lowercase();
+                            let all = st.all.clone();
+                            let mut any = false;
+                            for d in &all {
+                                if !kw.is_empty() && !d.to_lowercase().contains(&kw) {
+                                    continue;
+                                }
+                                any = true;
+                                let mut checked = st.selected.contains(d);
+                                if ui.checkbox(&mut checked, d).changed() {
+                                    if checked {
+                                        if !st.selected.contains(d) {
+                                            st.selected.push(d.clone());
+                                        }
+                                    } else {
+                                        st.selected.retain(|s| s != d);
+                                    }
+                                }
+                            }
+                            if !any {
+                                ui.centered_and_justified(|ui| {
+                                    ui.label(
+                                        RichText::new("无匹配库").size(12.0).color(p.muted),
+                                    );
+                                });
+                            }
+                        });
+                });
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, "完成", theme::BtnKind::Primary).clicked() {
+                    let st = app.db_filter.as_ref().unwrap();
+                    apply = Some(st.selected.clone());
+                }
+                ui.add_space(6.0);
+                if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if let Some(selected) = apply {
+        let conn_id = app.db_filter.as_ref().unwrap().conn_id.clone();
+        app.db_filter = None;
+        app.apply_db_filter(&conn_id, selected);
+    } else if close || modal.should_close() {
+        app.db_filter = None;
+    }
+}

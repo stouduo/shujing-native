@@ -115,7 +115,8 @@ impl ShujingApp {
                 let _ = ctx;
                 let conns = self.conns.clone();
                 for c in conns {
-                    self.draw_conn_block(ui, &c);
+                    let cid = c.id.clone();
+                    self.draw_conn_block(ui, &cid, &c);
                     ui.add_space(10.0);
                 }
                 if self.conns.is_empty() {
@@ -154,7 +155,7 @@ impl ShujingApp {
         });
     }
 
-    fn draw_conn_block(&mut self, ui: &mut egui::Ui, c: &shujing_core::ConnInfo) {
+    fn draw_conn_block(&mut self, ui: &mut egui::Ui, conn_id: &str, c: &shujing_core::ConnInfo) {
         let p = theme::c();
         let online = self.trees.get(&c.id).map(|t| t.online).unwrap_or(false);
         let w = ui.available_width();
@@ -244,6 +245,25 @@ impl ShujingApp {
                 menu_act = Some("toggle");
                 ui.close_menu();
             }
+            if online {
+                if ui.button("新建查询").clicked() {
+                    menu_act = Some("query");
+                    ui.close_menu();
+                }
+                if ui.button("筛选显示的库…").clicked() {
+                    menu_act = Some("dbfilter");
+                    ui.close_menu();
+                }
+                if ui.button("刷新").clicked() {
+                    menu_act = Some("refresh");
+                    ui.close_menu();
+                }
+                if ui.button("导入 SQL 文件…").clicked() {
+                    menu_act = Some("importsql");
+                    ui.close_menu();
+                }
+                ui.separator();
+            }
             if ui.button("编辑连接…").clicked() {
                 menu_act = Some("edit");
                 ui.close_menu();
@@ -256,6 +276,22 @@ impl ShujingApp {
         });
         match menu_act {
             Some("toggle") => self.toggle_connect(c),
+            Some("query") => self.open_query_tab(Some(conn_id.to_string())),
+            Some("dbfilter") => self.open_db_filter(conn_id),
+            Some("refresh") => {
+                // 重拉库列表 + 当前展开库的表
+                let tx = self.event_tx.clone();
+                let service = self.service.clone();
+                let cid = conn_id.to_string();
+                crate::net::spawn(async move {
+                    let databases = service.list_databases(&cid).await.unwrap_or_default();
+                    let _ = tx.send(BgEvent::DatabasesLoaded {
+                        conn_id: cid,
+                        databases,
+                    });
+                });
+            }
+            Some("importsql") => self.import_sql_file(conn_id),
             Some("edit") => self.conn_modal = Some(ConnModal::from_conn(c)),
             Some("delete") => {
                 self.open_confirm(
@@ -297,7 +333,7 @@ impl ShujingApp {
         if !online {
             return;
         }
-        let Some((databases, expanded, tables_by_db, loading)) = self.trees.get(conn_id).map(|t| {
+        let Some((mut databases, expanded, tables_by_db, loading)) = self.trees.get(conn_id).map(|t| {
             (
                 t.databases.clone(),
                 t.expanded_db.clone(),
@@ -307,6 +343,14 @@ impl ShujingApp {
         }) else {
             return;
         };
+        // 库筛选:只显示勾选的库
+        if let Some(visible) = self
+            .trees
+            .get(conn_id)
+            .and_then(|t| t.visible_dbs.clone())
+        {
+            databases.retain(|db| visible.contains(db));
+        }
         let filter = self.table_filter.to_lowercase();
         let searching = !filter.is_empty();
 

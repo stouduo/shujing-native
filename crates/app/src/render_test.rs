@@ -126,6 +126,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
             ("comic".to_string(), comic),
         ]),
         loading: false,
+        visible_dbs: None,
     };
     ShujingApp {
         service: Arc::new(shujing_core::Service::new(&dir)),
@@ -154,6 +155,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         confirm: None,
         snippets: vec![],
         settings_open: false,
+        db_filter: None,
         theme_toggle_requested: false,
         session_dirty: false,
         last_session_save: None,
