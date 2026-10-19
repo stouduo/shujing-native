@@ -242,7 +242,7 @@ pub fn draw_query_view(
                                         RichText::new(if is_redis {
                                             "GET key    ⌘↵ 执行命令"
                                         } else {
-                                            "SELECT …    ⌘↵ 运行"
+                                            "SELECT / INSERT / UPDATE / DDL …    ⌘↵ 运行"
                                         })
                                         .font(theme::mono(12.0))
                                         .color(p.muted),

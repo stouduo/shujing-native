@@ -672,28 +672,8 @@ pub(crate) fn draw_table_view(
                     let more =
                         ui.menu_button(RichText::new("···").size(15.0).color(p.text2), |ui| {
                             ui.set_min_width(180.0);
-                            if ui.button("新增行…").clicked() {
-                                tab.insert_form = Some(
-                                    tab.columns
-                                        .iter()
-                                        .map(|c| (c.clone(), String::new()))
-                                        .collect(),
-                                );
-                                ui.close_menu();
-                            }
                             if ui.button("查看整行详情").clicked() {
                                 tab.detail = true;
-                                ui.close_menu();
-                            }
-                            let adv_label = if tab.filter_bar_open {
-                                "隐藏高级筛选"
-                            } else if tab.applied_where.is_some() {
-                                "高级筛选(已应用)…"
-                            } else {
-                                "高级筛选…"
-                            };
-                            if ui.button(adv_label).clicked() {
-                                tab.filter_bar_open = !tab.filter_bar_open;
                                 ui.close_menu();
                             }
                             ui.separator();
@@ -774,23 +754,7 @@ pub(crate) fn draw_table_view(
                                 toolbar_menu = Some(TabAction::OpenSettings);
                                 ui.close_menu();
                             }
-                            ui.menu_button("每页行数", |ui| {
-                                for n in [50usize, 100, 200, 500] {
-                                    let label = if n == tab.page_size {
-                                        format!("✓ {n} 行")
-                                    } else {
-                                        format!("{n} 行")
-                                    };
-                                    if ui.button(label).clicked() {
-                                        tab.page_size = n;
-                                        actions.push(TabAction::SetPage {
-                                            tab_id: tab_id_s.clone(),
-                                            page: 1,
-                                        });
-                                        ui.close_menu();
-                                    }
-                                }
-                            });
+                            // 每页行数已移至底栏快捷设置
                         });
                     more.response.on_hover_text("更多操作");
 
@@ -804,6 +768,32 @@ pub(crate) fn draw_table_view(
                         });
                     }
 
+                    // 高级筛选(字段/自由模式筛选栏)快捷开关
+                    let adv_label = if tab.filter_bar_open {
+                        "收起筛选"
+                    } else if tab.applied_where.is_some() {
+                        "高级筛选*"
+                    } else {
+                        "高级筛选"
+                    };
+                    if theme::button(ui, adv_label, theme::BtnKind::Secondary)
+                        .on_hover_text("字段/自由模式高级筛选栏")
+                        .clicked()
+                    {
+                        tab.filter_bar_open = !tab.filter_bar_open;
+                    }
+                    // 新增行(快捷栏直达)
+                    if theme::button(ui, "＋ 新增行", theme::BtnKind::Secondary)
+                        .on_hover_text("插入一行新数据")
+                        .clicked()
+                    {
+                        tab.insert_form = Some(
+                            tab.columns
+                                .iter()
+                                .map(|c| (c.clone(), String::new()))
+                                .collect(),
+                        );
+                    }
                     let fresp =
                         theme::filter_box(ui, "table-filter", &mut tab.filter, "筛选行", 152.0);
                     fresp.clone().on_hover_text("回车应用筛选(全列模糊匹配)");
@@ -836,6 +826,7 @@ pub(crate) fn draw_table_view(
 
     // ---- 底部状态栏(34pt):共 N 行 | 已筛选 | 耗时;右侧翻页
     let mut clear_filter = false;
+    let mut page_reload = false;
     egui::TopBottomPanel::bottom("table_pager")
         .show_separator_line(false)
         .exact_height(theme::FOOTER_H)
@@ -881,6 +872,26 @@ pub(crate) fn draw_table_view(
                     vsep(ui);
                     ui.label(RichText::new(format!("{ms} ms")).size(11.5).color(p.text2));
                 }
+                // 每页行数快捷设置(底栏直达)
+                vsep(ui);
+                let size_opts = [50usize, 100, 200, 500];
+                let size_label = format!("每页 {}", tab.page_size);
+                ui.menu_button(RichText::new(size_label).size(11.5).color(p.text2), |ui| {
+                    ui.set_min_width(90.0);
+                    for n in size_opts {
+                        if ui
+                            .selectable_label(tab.page_size == n, RichText::new(format!("{n} 行")).size(12.0))
+                            .clicked()
+                        {
+                            if tab.page_size != n {
+                                tab.page_size = n;
+                                tab.page = 1;
+                                page_reload = true;
+                            }
+                            ui.close_menu();
+                        }
+                    }
+                });
                 if !tab.changes.is_empty() {
                     vsep(ui);
                     ui.label(
@@ -938,10 +949,11 @@ pub(crate) fn draw_table_view(
                 let cols = tab.columns.clone();
                 let row_no = sr + 1;
                 let mut close_detail = false;
-                egui::TopBottomPanel::bottom("row_detail")
+                egui::SidePanel::left("row_detail")
                     .show_separator_line(false)
-                    .default_height(176.0)
-                    .min_height(90.0)
+                    .default_width(280.0)
+                    .min_width(200.0)
+                    .max_width(420.0)
                     .resizable(true)
                     .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin {
                         left: 14,
@@ -950,7 +962,7 @@ pub(crate) fn draw_table_view(
                         bottom: 8,
                     }))
                     .show(ctx, |ui| {
-                        theme::hairline_top(ui);
+                        theme::hairline_bottom(ui);
                         ui.horizontal(|ui| {
                             ui.label(theme::strong(format!("行 #{row_no}"), 14.0).color(p.text));
                             ui.label(RichText::new("详情").size(11.0).color(p.muted));
@@ -1904,6 +1916,8 @@ fn draw_data_table(
                             set_null,
                             detail,
                             col_name,
+                            col_where_out,
+                            mysql_q,
                         );
                     });
                 }
@@ -1987,6 +2001,8 @@ fn draw_data_cell(
     set_null: &mut Option<(usize, usize)>,
     detail: &mut bool,
     col_name: &str,
+    col_where_out: &mut Option<String>,
+    mysql_q: bool,
 ) {
     let p = theme::c();
     let rect = ui.max_rect();
@@ -2020,6 +2036,7 @@ fn draw_data_cell(
     let resp = ui.allocate_rect(rect, Sense::click());
     if resp.clicked() {
         *new_selection = Some(Some((ri, ci)));
+        *detail = true; // 点击行数据:左侧拉起详情页
     }
     if has_pk && resp.double_clicked() {
         *editing = Some((ri, ci));
@@ -2028,6 +2045,46 @@ fn draw_data_cell(
     let menu_resp = resp.clone();
     menu_resp.context_menu(|ui| {
         *selected = Some((ri, ci));
+        // 快速筛选(把条件写入筛选栏)
+        ui.label(egui::RichText::new("快速筛选").size(10.5).color(p.muted));
+        let lit = v.as_deref().map(|s| {
+            if s.parse::<f64>().is_ok() {
+                s.to_string()
+            } else {
+                format!("'{}'", s.replace('\'', "''"))
+            }
+        });
+        let ident = crate::app::quote_ident_by(col_name, mysql_q);
+        if ui
+            .add_enabled(
+                v.is_some(),
+                egui::Button::new(egui::RichText::new("= 此值").size(12.0)),
+            )
+            .clicked()
+        {
+            *col_where_out = Some(format!("{ident} = {}", lit.unwrap_or_default()));
+            ui.close_menu();
+        }
+        if ui
+            .add_enabled(
+                v.is_some(),
+                egui::Button::new(egui::RichText::new("包含此值 (LIKE)").size(12.0)),
+            )
+            .clicked()
+        {
+            let inner = v.as_deref().unwrap_or("").replace('\'', "''");
+            *col_where_out = Some(format!("{ident} LIKE '%{inner}%'"));
+            ui.close_menu();
+        }
+        if ui.button(egui::RichText::new("此列为 NULL").size(12.0)).clicked() {
+            *col_where_out = Some(format!("{ident} IS NULL"));
+            ui.close_menu();
+        }
+        if ui.button(egui::RichText::new("此列非空").size(12.0)).clicked() {
+            *col_where_out = Some(format!("{ident} IS NOT NULL"));
+            ui.close_menu();
+        }
+        ui.separator();
         if ui.button("查看完整内容…").clicked() {
             let text = v.as_deref().unwrap_or("").to_string();
             let col = columns.get(ci).cloned().unwrap_or_default();
@@ -2061,6 +2118,13 @@ fn draw_data_cell(
             ui.close_menu();
         }
         if ui
+            .add_enabled(has_pk && v.is_some(), egui::Button::new("设为 NULL"))
+            .clicked()
+        {
+            *set_null = Some((ri, ci));
+            ui.close_menu();
+        }
+        if ui
             .add_enabled(has_pk, egui::Button::new("删除此行…"))
             .clicked()
         {
@@ -2068,13 +2132,6 @@ fn draw_data_cell(
                 tab_id: tab_id.to_string(),
                 ri,
             });
-            ui.close_menu();
-        }
-        if ui
-            .add_enabled(has_pk && v.is_some(), egui::Button::new("设为 NULL"))
-            .clicked()
-        {
-            *set_null = Some((ri, ci));
             ui.close_menu();
         }
         ui.label(
