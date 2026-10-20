@@ -1309,10 +1309,13 @@ impl ShujingApp {
             return;
         };
         let conn_id = d.conn_id.clone();
+        let database = d.database.clone();
         let kind = d.kind.clone();
         let name = d.name.clone();
         net::spawn(async move {
-            let result = service.get_object_ddl(&conn_id, &kind, &name).await;
+            let result = service
+                .get_object_ddl(&conn_id, database, &kind, &name)
+                .await;
             let _ = tx.send(BgEvent::DdlLoaded { tab_id, result });
         });
     }

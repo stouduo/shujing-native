@@ -392,8 +392,10 @@ async fn struct_mysql(
         .await
         .map_err(es)?;
 
+    // 带库限定:会话默认库可能不是目标库(多库连接),裸表名会 1146 表不存在
+    let qualified = format!("{}.{}", ident(database, true), ident(table, true));
     let mut result = conn
-        .query_iter(format!("SHOW CREATE TABLE {}", ident(table, true)))
+        .query_iter(format!("SHOW CREATE TABLE {qualified}"))
         .await
         .map_err(es)?;
     result
@@ -528,23 +530,41 @@ async fn count_pg(client: &tokio_postgres::Client, table: &str) -> Result<u64, S
 pub async fn object_ddl(
     backend: &mut Backend,
     info: &ConnInfo,
+    database: Option<&str>,
     kind: &str,
     name: &str,
 ) -> Result<String, String> {
     let mysql = info.db_type == crate::model::DbType::MySql;
+    // MySQL 对象限定库名:会话默认库可能与对象所在库不一致
+    let qualified = |n: &str| -> String {
+        if mysql {
+            let db = database
+                .map(str::to_string)
+                .or_else(|| info.database.clone())
+                .unwrap_or_default();
+            if db.is_empty() {
+                ident(n, true)
+            } else {
+                format!("{}.{}", ident(&db, true), ident(n, true))
+            }
+        } else {
+            ident(n, false)
+        }
+    };
     let sql = match (&info.db_type, kind) {
         (crate::model::DbType::Sqlite, _) => format!(
             "SELECT sql FROM sqlite_master WHERE name = {}",
             format!("'{}'", name.replace('\'', "''"))
         ),
+        // MySQL:带库限定,避免会话默认库与对象所在库不一致时找不到
         (crate::model::DbType::MySql, "trigger") => {
-            format!("SHOW CREATE TRIGGER {}", ident(name, true))
+            format!("SHOW CREATE TRIGGER {}", qualified(name))
         }
         (crate::model::DbType::MySql, "procedure") => {
-            format!("SHOW CREATE PROCEDURE {}", ident(name, true))
+            format!("SHOW CREATE PROCEDURE {}", qualified(name))
         }
         (crate::model::DbType::MySql, _) => {
-            format!("SHOW CREATE FUNCTION {}", ident(name, true))
+            format!("SHOW CREATE FUNCTION {}", qualified(name))
         }
         (crate::model::DbType::Redis, _) => return Err("Redis 不支持该操作".into()),
         (crate::model::DbType::Postgres, "trigger") => format!(

@@ -154,11 +154,17 @@ impl Service {
         guard.backend.count_rows(table).await
     }
 
-    pub async fn get_object_ddl(&self, id: &str, kind: &str, name: &str) -> Result<String, String> {
+    pub async fn get_object_ddl(
+        &self,
+        id: &str,
+        database: Option<String>,
+        kind: &str,
+        name: &str,
+    ) -> Result<String, String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
-        schema::object_ddl(&mut guard.backend, &info, kind, name).await
+        schema::object_ddl(&mut guard.backend, &info, database.as_deref(), kind, name).await
     }
 
     pub async fn search_all_tables(
@@ -768,7 +774,7 @@ mod tests {
         let objs = b.list_tables(&info).await.unwrap();
         let trg = objs.iter().find(|o| o.kind == "trigger").expect("应有触发器");
         assert_eq!(trg.name, "trg_t");
-        let ddl = schema::object_ddl(&mut b, &info, "trigger", "trg_t").await.unwrap();
+        let ddl = schema::object_ddl(&mut b, &info, None, "trigger", "trg_t").await.unwrap();
         assert!(ddl.contains("CREATE TRIGGER"));
         assert!(ddl.contains("AFTER INSERT ON t"));
         let _ = std::fs::remove_file(&path);
