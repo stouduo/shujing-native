@@ -332,6 +332,7 @@ impl Service {
         &self,
         backend: &mut model::Backend,
         info: &model::ConnInfo,
+        database: Option<&str>,
         table: &str,
         with_data: bool,
     ) -> Result<(String, u64), String> {
@@ -343,18 +344,29 @@ impl Service {
                 format!("\"{}\"", s.replace('"', "\"\""))
             }
         };
+        // MySQL 导出带库限定:多库连接下目标表可能不在会话默认库
+        let qt = if mysql {
+            match database.filter(|d| !d.trim().is_empty()) {
+                Some(db) => format!("{}.{}", q(db.trim()), q(table)),
+                None => q(table),
+            }
+        } else {
+            q(table)
+        };
         let lit = |v: Option<&str>| -> String {
             match v {
                 None => "NULL".to_string(),
                 Some(s) => format!("'{}'", s.replace('\'', "''")),
             }
         };
-        let qt = q(table);
 
         let mut out = String::new();
         out.push_str(&format!("-- 数镜 dump: table {qt}\n"));
         // 建表语句:SQLite/MySQL 用原生 DDL,PG 简化合成
-        match backend.get_table_structure(info, table, None).await {
+        match backend
+            .get_table_structure(info, table, database)
+            .await
+        {
             Ok(st) if !st.ddl.is_empty() => {
                 out.push_str(&st.ddl.trim_end_matches(';'));
                 out.push_str(";\n\n");
@@ -427,21 +439,31 @@ impl Service {
     pub async fn export_table_sql(
         &self,
         id: &str,
+        database: Option<String>,
         table: &str,
         with_data: bool,
     ) -> Result<(String, u64), String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
-        self.build_table_dump(&mut guard.backend, &info, table, with_data).await
+        self.build_table_dump(&mut guard.backend, &info, database.as_deref(), table, with_data)
+            .await
     }
 
     /// 导出整个数据库 SQL(所有表,结构 + 可选数据)
-    pub async fn export_database_sql(&self, id: &str, with_data: bool) -> Result<(String, u64), String> {
+    pub async fn export_database_sql(
+        &self,
+        id: &str,
+        database: Option<String>,
+        with_data: bool,
+    ) -> Result<(String, u64), String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
-        let tables = guard.backend.list_tables(&info).await?;
+        let tables = match database.as_deref().filter(|d| !d.trim().is_empty()) {
+            Some(db) => guard.backend.list_tables_in(&info, Some(db)).await?,
+            None => guard.backend.list_tables(&info).await?,
+        };
         let mut out = String::new();
         out.push_str(&format!(
             "-- 数镜 database dump\n-- tables: {}\n\n",
@@ -449,8 +471,9 @@ impl Service {
         ));
         let mut exported: u64 = 0;
         for t in tables.iter().filter(|t| t.kind == "table") {
-            let (dump, n) =
-                self.build_table_dump(&mut guard.backend, &info, &t.name, with_data).await?;
+            let (dump, n) = self
+                .build_table_dump(&mut guard.backend, &info, database.as_deref(), &t.name, with_data)
+                .await?;
             out.push_str(&dump);
             out.push('\n');
             exported += n;

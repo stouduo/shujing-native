@@ -1920,7 +1920,7 @@ impl ShujingApp {
         let service = self.service.clone();
         crate::net::spawn(async move {
             let result = service
-                .export_database_sql(&conn_id, with_data)
+                .export_database_sql(&conn_id, Some(db.clone()), with_data)
                 .await
                 .and_then(|(sql, _)| {
                     std::fs::write(&path, sql).map_err(|e| format!("写入失败: {e}"))
@@ -2004,11 +2004,12 @@ impl ShujingApp {
         };
         let conn_id = conn_id.to_string();
         let table = table.to_string();
+        let database = Some(_db.to_string());
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         crate::net::spawn(async move {
             let result = service
-                .export_table_sql(&conn_id, &table, true)
+                .export_table_sql(&conn_id, database, &table, true)
                 .await
                 .and_then(|(sql, _)| {
                     std::fs::write(&path, sql).map_err(|e| format!("写入失败: {e}"))
@@ -3196,10 +3197,16 @@ pub fn build_cond_where(
         if v.is_empty() {
             continue;
         }
-        let literal = if v.parse::<f64>().is_ok() {
+        let literal = if v.parse::<f64>().is_ok() && op != "LIKE" {
             v.to_string()
         } else {
-            format!("'{}'", v.replace('\'', "''"))
+            // LIKE 语义 = 包含:两侧补通配符(用户自带 % 则原样保留)
+            let wrapped = if op == "LIKE" && !v.contains('%') {
+                format!("%{v}%")
+            } else {
+                v.to_string()
+            };
+            format!("'{}'", wrapped.replace('\'', "''"))
         };
         parts.push(format!("{ident} {op} {literal}"));
     }

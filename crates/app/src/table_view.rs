@@ -1942,7 +1942,7 @@ fn draw_data_cell(
     detail: &mut bool,
     col_name: &str,
     col_where_out: &mut Option<(String, String, String)>,
-    mysql_q: bool,
+    _mysql_q: bool,
 ) {
     let p = theme::c();
     let rect = ui.max_rect();
@@ -2242,11 +2242,12 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             };
             let conn_id = t.conn_id.clone();
             let table = t.table.clone();
+            let database = t.database.clone();
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             net::spawn(async move {
                 let result = service
-                    .export_table_sql(&conn_id, &table, true)
+                    .export_table_sql(&conn_id, database, &table, true)
                     .await
                     .and_then(|(sql, _rows)| {
                         std::fs::write(&path, sql).map_err(|e| format!("写入失败: {e}"))
@@ -3097,6 +3098,21 @@ impl eframe::App for ShujingApp {
             let dark = !theme::is_dark();
             self.set_theme_dark(ctx, dark);
         }
+        // 会话持久化:标签/激活位/在线数/展开库变化即标脏,1 秒节流落盘
+        let sig = (
+            self.tabs.len(),
+            self.active_tab,
+            self.tabs
+                .iter()
+                .any(|t| matches!(&t.kind, TabKind::Query(q) if !q.history.is_empty())),
+            self.trees.iter().filter(|(_, t)| t.online).count(),
+            self.trees.values().map(|t| t.expanded_db.clone()).collect::<Vec<_>>(),
+        );
+        if sig != self.last_session_sig {
+            self.last_session_sig = sig;
+            self.mark_session_dirty();
+        }
+        self.save_session_if_due();
         if !self.auto_connect_done {
             self.auto_connect_done = true;
             let conns = self.conns.clone();
