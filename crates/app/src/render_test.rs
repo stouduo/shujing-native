@@ -1121,3 +1121,75 @@ fn data_grid_hscroll_works() {
         "组合 xy 滚轮的横向分量应驱动横向滚动(触控板斜滑场景)"
     );
 }
+
+#[test]
+fn filter_bar_clicks_work() {
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        t.filter_bar_open = true;
+        t.filter_mode = 0;
+        t.conds = vec![("status".into(), "=".into(), "1".into())];
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+
+    // 点击操作符下拉(fop):x ≈ 侧栏236+14(边距)+170+6+130+6+56+18+6 = 大约 640,行中心 y ≈ 82+4+26+6+13 ≈ 131
+    let click = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>, pos: egui::Pos2| {
+        h.input_mut()
+            .events
+            .push(egui::Event::PointerMoved(pos));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+    };
+    // 从截图核对的实际逻辑坐标:操作符下拉 ≈ (440, 149)
+    click(&mut harness, egui::pos2(440.0, 149.0));
+    harness.step();
+    let out = harness.output().clone();
+    let popup_rect = egui::Rect::from_min_size(egui::pos2(399.0, 170.0), egui::vec2(96.0, 250.0));
+    let popup_shapes = out
+        .shapes
+        .iter()
+        .filter(|cs| cs.clip_rect.intersects(popup_rect))
+        .count();
+    eprintln!("[popup-shapes] {popup_shapes}");
+    // 弹层选项第一项(= )在按钮下方 ~30px;第二项(!=)≈ +28
+    click(&mut harness, egui::pos2(440.0, 205.0));
+    let b = harness.state();
+    let conds_op = b.borrow().tabs[2]
+        .table_data()
+        .map(|t| t.conds[0].1.clone())
+        .unwrap_or_default();
+    assert_eq!(conds_op, "!=", "操作符下拉应可选,实际为 {conds_op:?}");
+}

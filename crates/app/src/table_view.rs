@@ -941,7 +941,7 @@ pub(crate) fn draw_table_view(
         });
     }
 
-    // ---- 行详情(右键菜单打开,默认收起;避免选中即占版面)
+    // ---- 行详情:右侧悬浮层(盖在表格上方,不挤压网格)
     if tab.detail {
         if let Some((sr, _)) = tab.selected {
             if sr < tab.rows.len() {
@@ -949,77 +949,28 @@ pub(crate) fn draw_table_view(
                 let cols = tab.columns.clone();
                 let row_no = sr + 1;
                 let mut close_detail = false;
-                egui::SidePanel::left("row_detail")
-                    .show_separator_line(false)
-                    .default_width(280.0)
-                    .min_width(200.0)
-                    .max_width(420.0)
-                    .resizable(true)
-                    .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin {
-                        left: 14,
-                        right: 12,
-                        top: 8,
-                        bottom: 8,
-                    }))
+                egui::Area::new(egui::Id::new("row_detail"))
+                    .anchor(
+                        egui::Align2::RIGHT_TOP,
+                        egui::vec2(-10.0, theme::TABBAR_H + theme::TOOLBAR_H + 6.0),
+                    )
+                    .order(egui::Order::Foreground)
                     .show(ctx, |ui| {
-                        theme::hairline_bottom(ui);
-                        ui.horizontal(|ui| {
-                            ui.label(theme::strong(format!("行 #{row_no}"), 14.0).color(p.text));
-                            ui.label(RichText::new("详情").size(11.0).color(p.muted));
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let (rect, resp) =
-                                    ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
-                                if resp.hovered() {
-                                    ui.painter().rect_filled(
-                                        rect,
-                                        egui::CornerRadius::same(5),
-                                        p.elevated,
-                                    );
-                                }
-                                icons::paint_close(
-                                    ui.painter(),
-                                    rect.center(),
-                                    4.0,
-                                    if resp.hovered() { p.text } else { p.muted },
-                                );
-                                let _ = resp.clone().on_hover_text("关闭");
-                                if resp.clicked() {
-                                    close_detail = true;
-                                }
-                            });
-                        });
-                        ui.add_space(6.0);
-                        egui::ScrollArea::vertical()
-                            .id_salt(format!("detail-scroll-{tab_id_s}"))
-                            .auto_shrink([false, false])
+                        egui::Frame::new()
+                            .fill(p.panel)
+                            .stroke(egui::Stroke::new(1.0, p.border))
+                            .corner_radius(egui::CornerRadius::same(10))
+                            .inner_margin(egui::Margin::same(12))
+                            .shadow(egui::Shadow {
+                                offset: [0, 10],
+                                blur: 30,
+                                spread: 0,
+                                color: egui::Color32::from_black_alpha(90),
+                            })
                             .show(ui, |ui| {
-                                egui::Grid::new(format!("detail-grid-{tab_id_s}"))
-                                    .num_columns(2)
-                                    .spacing([20.0, 7.0])
-                                    .show(ui, |ui| {
-                                        for (c, v) in cols.iter().zip(row_vals.iter()) {
-                                            ui.label(
-                                                RichText::new(c)
-                                                    .font(theme::mono(12.0))
-                                                    .color(p.muted),
-                                            );
-                                            let text = v.as_deref().unwrap_or("null");
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(text)
-                                                        .font(theme::mono(12.0))
-                                                        .color(if v.is_none() {
-                                                            p.null_text
-                                                        } else {
-                                                            p.cell_text
-                                                        }),
-                                                )
-                                                .wrap()
-                                                .selectable(true),
-                                            );
-                                            ui.end_row();
-                                        }
-                                    });
+                                ui.set_min_width(276.0);
+                                close_detail =
+                                    detail_body(ui, &tab_id_s, &cols, &row_vals, row_no);
                             });
                     });
                 if close_detail {
@@ -1132,7 +1083,9 @@ pub(crate) fn draw_table_view(
                                     }
                                     let opts: Vec<(String, String)> =
                                         cols.iter().map(|c| (c.clone(), c.clone())).collect();
-                                    theme::select(ui, &format!("fcol-{i}"), col, &opts, 150.0);
+                                    if let Some(v) = theme::select(ui, &format!("fcol-{i}"), col, &opts, 150.0) {
+                                        *col = v;
+                                    }
                                     let op_opts: Vec<(String, String)> = OPS
                                         .iter()
                                         .map(|o| (o.to_string(), o.to_string()))
@@ -1140,7 +1093,9 @@ pub(crate) fn draw_table_view(
                                     if op.is_empty() {
                                         *op = "=".to_string();
                                     }
-                                    theme::select(ui, &format!("fop-{i}"), op, &op_opts, 96.0);
+                                    if let Some(v) = theme::select(ui, &format!("fop-{i}"), op, &op_opts, 96.0) {
+                                        *op = v;
+                                    }
                                     let needs_value = *op != "IS NULL" && *op != "IS NOT NULL";
                                     if needs_value {
                                         theme::field(ui, &format!("fval-{i}"), val, 190.0, false);
@@ -1244,7 +1199,7 @@ pub(crate) fn draw_table_view(
             let mut set_null: Option<(usize, usize)> = None;
             let mut col_set_sort: Option<(String, bool)> = None;
             let mut col_clear_sort = false;
-            let mut col_where_out: Option<String> = None;
+            let mut col_where_out: Option<(String, String, String)> = None;
             let mut col_stat_col: Option<String> = None;
             {
                 let sc = &mut sort_click;
@@ -1347,14 +1302,14 @@ pub(crate) fn draw_table_view(
                     tab_id: tab_id_s.clone(),
                 });
             }
-            if let Some(w) = col_where_out {
-                // 追加到筛选栏已应用 WHERE(AND 组合)
-                let merged = match &tab.applied_where {
-                    Some(prev) => format!("{prev} AND {w}"),
-                    None => w,
-                };
-                tab.applied_where = Some(merged);
+            if let Some((fc, fop, fval)) = col_where_out {
+                // 进字段条件列表:筛选栏可见可改(回显)
+                tab.conds.push((fc, fop, fval));
                 tab.filter_bar_open = true;
+                tab.filter_mode = 0;
+                let mysql2 = mysql_quote_flag;
+                let free = tab.free_where.clone();
+                tab.applied_where = crate::app::build_cond_where(&tab.conds, &free, mysql2);
                 tab.page = 1;
                 actions.push(TabAction::Reload {
                     tab_id: tab_id_s.clone(),
@@ -1615,7 +1570,7 @@ fn draw_data_table(
     col_widths: &[f32],
     set_sort: &mut Option<(String, bool)>,
     clear_sort: &mut bool,
-    col_where_out: &mut Option<String>,
+    col_where_out: &mut Option<(String, String, String)>,
     col_stat_col: &mut Option<String>,
     mysql_q: bool,
     show_rowno: bool,
@@ -1756,35 +1711,20 @@ fn draw_data_table(
                         1 => *set_sort = Some((col, false)),
                         2 => *clear_sort = true,
                         3 => {
-                            let val = rows.first().and_then(|r| {
+                            if let Some(v) = rows.first().and_then(|r| {
                                 columns
                                     .iter()
                                     .position(|x| x == &col)
                                     .and_then(|i| r[i].clone())
-                            });
-                            if let Some(v) = val {
-                                let lit = if v.parse::<f64>().is_ok() {
-                                    v
-                                } else {
-                                    format!("'{}'", v.replace('\'', "''"))
-                                };
-                                *col_where_out = Some(format!(
-                                    "{} = {lit}",
-                                    crate::app::quote_ident_by(&col, mysql_q)
-                                ));
+                            }) {
+                                *col_where_out = Some((col, "=".to_string(), v));
                             }
                         }
                         4 => {
-                            *col_where_out = Some(format!(
-                                "{} IS NULL",
-                                crate::app::quote_ident_by(&col, mysql_q)
-                            ));
+                            *col_where_out = Some((col, "IS NULL".to_string(), String::new()));
                         }
                         5 => {
-                            *col_where_out = Some(format!(
-                                "{} IS NOT NULL",
-                                crate::app::quote_ident_by(&col, mysql_q)
-                            ));
+                            *col_where_out = Some((col, "IS NOT NULL".to_string(), String::new()));
                         }
                         _ => {
                             *col_stat_col = Some(col);
@@ -2001,7 +1941,7 @@ fn draw_data_cell(
     set_null: &mut Option<(usize, usize)>,
     detail: &mut bool,
     col_name: &str,
-    col_where_out: &mut Option<String>,
+    col_where_out: &mut Option<(String, String, String)>,
     mysql_q: bool,
 ) {
     let p = theme::c();
@@ -2047,14 +1987,6 @@ fn draw_data_cell(
         *selected = Some((ri, ci));
         // 快速筛选(把条件写入筛选栏)
         ui.label(egui::RichText::new("快速筛选").size(10.5).color(p.muted));
-        let lit = v.as_deref().map(|s| {
-            if s.parse::<f64>().is_ok() {
-                s.to_string()
-            } else {
-                format!("'{}'", s.replace('\'', "''"))
-            }
-        });
-        let ident = crate::app::quote_ident_by(col_name, mysql_q);
         if ui
             .add_enabled(
                 v.is_some(),
@@ -2062,7 +1994,8 @@ fn draw_data_cell(
             )
             .clicked()
         {
-            *col_where_out = Some(format!("{ident} = {}", lit.unwrap_or_default()));
+            let val = v.clone().unwrap_or_default();
+            *col_where_out = Some((col_name.to_string(), "=".to_string(), val));
             ui.close_menu();
         }
         if ui
@@ -2072,16 +2005,16 @@ fn draw_data_cell(
             )
             .clicked()
         {
-            let inner = v.as_deref().unwrap_or("").replace('\'', "''");
-            *col_where_out = Some(format!("{ident} LIKE '%{inner}%'"));
+            let val = v.clone().unwrap_or_default();
+            *col_where_out = Some((col_name.to_string(), "LIKE".to_string(), val));
             ui.close_menu();
         }
         if ui.button(egui::RichText::new("此列为 NULL").size(12.0)).clicked() {
-            *col_where_out = Some(format!("{ident} IS NULL"));
+            *col_where_out = Some((col_name.to_string(), "IS NULL".to_string(), String::new()));
             ui.close_menu();
         }
         if ui.button(egui::RichText::new("此列非空").size(12.0)).clicked() {
-            *col_where_out = Some(format!("{ident} IS NOT NULL"));
+            *col_where_out = Some((col_name.to_string(), "IS NOT NULL".to_string(), String::new()));
             ui.close_menu();
         }
         ui.separator();
@@ -3564,4 +3497,55 @@ pub fn export_rows_inserts(
         ));
     }
     out
+}
+
+
+/// 行详情悬浮层内容(列-值竖排);返回 true = 用户点了关闭
+fn detail_body(
+    ui: &mut egui::Ui,
+    tab_id: &str,
+    cols: &[String],
+    row_vals: &[Option<String>],
+    row_no: usize,
+) -> bool {
+    let p = theme::c();
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.label(theme::strong(format!("行 #{row_no}"), 14.0).color(p.text));
+        ui.label(RichText::new("详情").size(11.0).color(p.muted));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+            if resp.hovered() {
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(5), p.elevated);
+            }
+            icons::paint_close(ui.painter(), rect.center(), 4.0, if resp.hovered() { p.text } else { p.muted });
+            let _ = resp.clone().on_hover_text("关闭");
+            if resp.clicked() {
+                close = true;
+            }
+        });
+    });
+    ui.add_space(6.0);
+    egui::ScrollArea::vertical()
+        .id_salt(format!("detail-scroll-{tab_id}"))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (c, v) in cols.iter().zip(row_vals.iter()) {
+                ui.label(RichText::new(c).font(theme::mono(11.0)).color(p.muted));
+                let text = v.as_deref().unwrap_or("null");
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(text)
+                            .font(theme::mono(12.0))
+                            .color(if v.is_none() { p.null_text } else { p.cell_text }),
+                    )
+                    .wrap()
+                    .selectable(true),
+                );
+                theme::hairline_bottom(ui);
+                ui.add_space(4.0);
+            }
+        });
+    close
 }

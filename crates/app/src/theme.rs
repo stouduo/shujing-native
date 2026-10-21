@@ -816,12 +816,23 @@ pub fn select(
 
     let mut picked = None;
     if opened {
-        egui::popup_below_widget(
+        if std::env::var("SHUJING_POPUP_DEBUG").is_ok() {
+            eprintln!(
+                "[popup] id={popup_id:?} widget={:?} parent_layer={:?} screen={:?}",
+                resp.rect,
+                ui.layer_id(),
+                ui.input(|i| i.screen_rect)
+            );
+        }
+        let _area_out = egui::popup_below_widget(
             ui,
             popup_id,
             &resp,
             egui::PopupCloseBehavior::CloseOnClick,
             |ui| {
+                if std::env::var("SHUJING_POPUP_DEBUG").is_ok() {
+                    eprintln!("[popup-inner] max_rect={:?} layer={:?}", ui.max_rect(), ui.layer_id());
+                }
                 ui.set_min_width(width);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (val, label) in options {
