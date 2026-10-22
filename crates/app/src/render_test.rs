@@ -379,7 +379,7 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         }
         TabKind::Query(q) => {
             let conns = app.conns.clone();
-            let _ = query::draw_query_view(&conns, ctx, &tab_id, q, &[]);
+            let _ = query::draw_query_view(&conns, ctx, &tab_id, q, &[], &[], false);
         }
         TabKind::Designer(d) => {
             crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
@@ -544,6 +544,7 @@ fn render_structure_view() {
 fn render_query_view() {
     let mut q = QueryTab {
         conn_id: "c1".into(),
+        database: None,
         sql: "SELECT id, role, role_name, status\nFROM backend_role_privilege\nWHERE status = 1\nORDER BY created DESC\nLIMIT 50;".into(),
         history: vec!["SELECT * FROM backend_role_privilege LIMIT 10;".into()],
         results: vec![],
@@ -603,7 +604,7 @@ fn render_query_view() {
     render("query", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
-        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[]);
+        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &[], false);
     });
 }
 
@@ -886,6 +887,7 @@ fn session_save_restore_roundtrip() {
     // 一个查询标签 + 一个表标签
     let mut q = QueryTab {
         conn_id: "c1".into(),
+        database: None,
         sql: "SELECT 1".into(),
         history: vec!["SELECT 2".into()],
         results: vec![],

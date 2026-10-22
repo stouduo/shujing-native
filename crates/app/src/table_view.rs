@@ -981,49 +981,6 @@ pub(crate) fn draw_table_view(
         });
     }
 
-    // ---- 行详情:右侧悬浮层(盖在表格上方,不挤压网格)
-    if tab.detail {
-        if let Some((sr, _)) = tab.selected {
-            if sr < tab.rows.len() {
-                let row_vals = tab.rows[sr].clone();
-                let cols = tab.columns.clone();
-                let row_no = sr + 1;
-                let mut close_detail = false;
-                egui::Area::new(egui::Id::new("row_detail"))
-                    .anchor(
-                        egui::Align2::RIGHT_TOP,
-                        egui::vec2(-10.0, theme::TABBAR_H + theme::TOOLBAR_H + 6.0),
-                    )
-                    .order(egui::Order::Foreground)
-                    .show(ctx, |ui| {
-                        egui::Frame::new()
-                            .fill(p.panel)
-                            .stroke(egui::Stroke::new(1.0, p.border))
-                            .corner_radius(egui::CornerRadius::same(10))
-                            .inner_margin(egui::Margin::same(12))
-                            .shadow(egui::Shadow {
-                                offset: [0, 10],
-                                blur: 30,
-                                spread: 0,
-                                color: egui::Color32::from_black_alpha(90),
-                            })
-                            .show(ui, |ui| {
-                                // 固定宽度,避免长 URL 把整个悬浮卡撑满;高度由内容收缩
-                                ui.set_width(360.0);
-                                close_detail = detail_body(ui, &tab_id_s, &cols, &row_vals, row_no);
-                            });
-                    });
-                if close_detail {
-                    tab.detail = false;
-                }
-            } else {
-                tab.detail = false;
-            }
-        } else {
-            tab.detail = false;
-        }
-    }
-
     // ---- 筛选栏(字段/自由两种模式)
     if tab.filter_bar_open {
         // 高度必须随内容自适应:固定 96pt 时条件行会溢出面板,在表头上方留下透明/空白带
@@ -1196,6 +1153,36 @@ pub(crate) fn draw_table_view(
                     });
                 }
             });
+    }
+
+    // ---- 行详情:右侧面板(挤窄表格宽度,不再遮挡最右列)
+    if tab.detail {
+        let detail_ready = matches!(tab.selected, Some((sr, _)) if sr < tab.rows.len());
+        if !detail_ready {
+            tab.detail = false;
+        } else {
+            let (sr, _) = tab.selected.unwrap();
+            let row_vals = tab.rows[sr].clone();
+            let cols = tab.columns.clone();
+            let row_no = sr + 1;
+            let mut close_detail = false;
+            egui::SidePanel::right("row_detail_panel")
+                .resizable(false)
+                .show_separator_line(false)
+                .exact_width(384.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(p.panel)
+                        .stroke(egui::Stroke::new(1.0, p.border))
+                        .inner_margin(egui::Margin::same(12)),
+                )
+                .show(ctx, |ui| {
+                    close_detail = detail_body(ui, &tab_id_s, &cols, &row_vals, row_no);
+                });
+            if close_detail {
+                tab.detail = false;
+            }
+        }
     }
 
     // ---- 数据网格(内容区无内边距,表头/行背景铺满)
@@ -2348,11 +2335,12 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             }
             let conn_id = t.conn_id.clone();
             let table = t.table.clone();
+            let database = t.database.clone();
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             net::spawn(async move {
                 let result = service
-                    .apply_changes(&conn_id, &table, &updates, &[], &[])
+                    .apply_changes(&conn_id, &table, database.as_deref(), &updates, &[], &[])
                     .await;
                 let _ = tx.send(BgEvent::ChangesSaved {
                     tab_id: tab_id.clone(),
@@ -2657,12 +2645,13 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 return;
             }
             let conn_id = q.conn_id.clone();
+            let database = q.database.clone();
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             let tid = tab_id.clone();
             net::spawn(async move {
                 let result = service
-                    .apply_changes(&conn_id, &table, &updates, &[], &[])
+                    .apply_changes(&conn_id, &table, database.as_deref(), &updates, &[], &[])
                     .await;
                 let _ = tx.send(BgEvent::ChangesSaved {
                     tab_id: tid,
@@ -2790,12 +2779,13 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             }
             let conn_id = t.conn_id.clone();
             let table = t.table.clone();
+            let database = t.database.clone();
             t.loading = true;
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             net::spawn(async move {
                 let result = service
-                    .apply_changes(&conn_id, &table, &[], &[pk], &[])
+                    .apply_changes(&conn_id, &table, database.as_deref(), &[], &[pk], &[])
                     .await;
                 let _ = tx.send(BgEvent::ChangesSaved {
                     tab_id: tab_id.clone(),
@@ -2813,11 +2803,12 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             };
             let conn_id = t.conn_id.clone();
             let table = t.table.clone();
+            let database = t.database.clone();
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             net::spawn(async move {
                 let result = service
-                    .apply_changes(&conn_id, &table, &[], &[], &[values])
+                    .apply_changes(&conn_id, &table, database.as_deref(), &[], &[], &[values])
                     .await;
                 let _ = tx.send(BgEvent::ChangesSaved {
                     tab_id: tab_id.clone(),
@@ -3289,7 +3280,17 @@ impl eframe::App for ShujingApp {
                 TabKind::Query(q) => {
                     let conns = self.conns.clone();
                     let snippets = self.snippets.clone();
-                    query::draw_query_view(&conns, ctx, &tab_id, q, &snippets)
+                    let dbs = self
+                        .trees
+                        .get(&q.conn_id)
+                        .map(|t| t.databases.clone())
+                        .unwrap_or_default();
+                    let show_db = conns
+                        .iter()
+                        .find(|c| c.id == q.conn_id)
+                        .map(|c| c.db_type == shujing_core::DbType::MySql)
+                        .unwrap_or(false);
+                    query::draw_query_view(&conns, ctx, &tab_id, q, &snippets, &dbs, show_db)
                 }
                 TabKind::Designer(d) => {
                     // 方言信息给设计器(SQL 生成用)
@@ -3606,8 +3607,7 @@ fn detail_body(
     ui.add_space(6.0);
     egui::ScrollArea::vertical()
         .id_salt(format!("detail-scroll-{tab_id}"))
-        .auto_shrink([false, true])
-        .max_height(420.0)
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             for (c, v) in cols.iter().zip(row_vals.iter()) {
                 ui.label(RichText::new(c).font(theme::mono(11.0)).color(p.muted));

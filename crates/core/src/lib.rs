@@ -183,6 +183,7 @@ impl Service {
         &self,
         id: &str,
         table: &str,
+        database: Option<&str>,
         updates: &[edits::CellUpdate],
         deletes: &[Vec<(String, String)>],
         inserts: &[Vec<(String, String)>],
@@ -190,7 +191,26 @@ impl Service {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
-        edits::apply_changes(&mut guard.backend, &info, table, updates, deletes, inserts).await
+        edits::apply_changes(
+            &mut guard.backend,
+            &info,
+            table,
+            database,
+            updates,
+            deletes,
+            inserts,
+        )
+        .await
+    }
+
+    /// 设置连接的会话库上下文(MySQL USE db / PG search_path),
+    /// 之后该连接上执行的 SQL 不带库限定也落在该库(查询页执行前调用)
+    pub async fn use_database(&self, id: &str, db: &str) {
+        let Some(live) = self.state.live(id) else {
+            return;
+        };
+        let mut guard = live.lock().await;
+        guard.backend.set_session_db(Some(db));
     }
 
     /// 判断错误是否为连接失效(空闲超时/网络中断等),可尝试重连
@@ -686,20 +706,20 @@ mod tests {
             pk: vec![("id".into(), "1".into())],
             sets: vec![("age".into(), Some("31".into()))],
         }];
-        let r = edits::apply_changes(&mut b, &info, "t1", &updates, &[], &[]).await.unwrap();
+        let r = edits::apply_changes(&mut b, &info, "t1", None, &updates, &[], &[]).await.unwrap();
         assert_eq!(r.affected, 1);
         let r = b.run_one("SELECT age FROM t1 WHERE id = 1", 10).await.unwrap();
         assert_eq!(r.rows[0][0].as_deref(), Some("31"));
 
         let deletes = vec![vec![("id".into(), "2".into())]];
-        edits::apply_changes(&mut b, &info, "t1", &[], &deletes, &[]).await.unwrap();
+        edits::apply_changes(&mut b, &info, "t1", None, &[], &deletes, &[]).await.unwrap();
         assert_eq!(b.count_rows("t1").await.unwrap(), 2);
 
         let updates = vec![edits::CellUpdate {
             pk: vec![("id".into(), "1".into())],
             sets: vec![("age".into(), None)],
         }];
-        edits::apply_changes(&mut b, &info, "t1", &updates, &[], &[]).await.unwrap();
+        edits::apply_changes(&mut b, &info, "t1", None, &updates, &[], &[]).await.unwrap();
         let r = b.run_one("SELECT age FROM t1 WHERE id = 1", 10).await.unwrap();
         assert_eq!(r.rows[0][0], None);
 
@@ -707,7 +727,7 @@ mod tests {
             ("name".to_string(), "dave".to_string()),
             ("age".to_string(), "40".to_string()),
         ]];
-        edits::apply_changes(&mut b, &info, "t1", &[], &[], &inserts).await.unwrap();
+        edits::apply_changes(&mut b, &info, "t1", None, &[], &[], &inserts).await.unwrap();
         assert_eq!(b.count_rows("t1").await.unwrap(), 3);
         let r = b.run_one("SELECT name FROM t1 WHERE name = 'dave'", 10).await.unwrap();
         assert_eq!(r.rows.len(), 1);
@@ -721,6 +741,7 @@ mod tests {
             &mut b,
             &info,
             "nopk",
+            None,
             &[edits::CellUpdate {
                 pk: vec![],
                 sets: vec![("a".into(), Some("x".into()))],

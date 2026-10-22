@@ -21,6 +21,14 @@ pub fn quote_ident_pub(database: &Option<String>, name: &str) -> String {
     }
 }
 
+/// 带库限定的表名(MySQL 多库连接必须 `db`.`table`,否则 No database selected)
+pub fn qualified_table(table: &str, database: Option<&str>, mysql: bool) -> String {
+    match database.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(db) => format!("{}.{}", quote(db, mysql), quote(&table, mysql)),
+        None => quote(&table, mysql),
+    }
+}
+
 fn quote(name: &str, mysql: bool) -> String {
     if mysql {
         format!("`{}`", name.replace('`', "``"))
@@ -49,12 +57,14 @@ pub async fn apply_changes(
     backend: &mut Backend,
     info: &ConnInfo,
     table: &str,
+    database: Option<&str>,
     updates: &[CellUpdate],
     deletes: &[Vec<(String, String)>],
     inserts: &[Vec<(String, String)>],
 ) -> Result<ExecResult, String> {
     let started = Instant::now();
     let mysql = info.db_type == crate::model::DbType::MySql;
+    let table = qualified_table(table, database, mysql);
     let mut affected: u64 = 0;
 
     for u in updates {
@@ -70,17 +80,12 @@ pub async fn apply_changes(
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let sql = format!(
-            "UPDATE {} SET {} WHERE {}",
-            quote(table, mysql),
-            sets,
-            where_of(&u.pk, mysql)?
-        );
+        let sql = format!("UPDATE {} SET {} WHERE {}", table, sets, where_of(&u.pk, mysql)?);
         affected += backend.run_one(&sql, 1).await?.affected.max(0);
     }
 
     for pk in deletes {
-        let sql = format!("DELETE FROM {} WHERE {}", quote(table, mysql), where_of(pk, mysql)?);
+        let sql = format!("DELETE FROM {} WHERE {}", table, where_of(pk, mysql)?);
         affected += backend.run_one(&sql, 1).await?.affected.max(0);
     }
 
@@ -90,12 +95,7 @@ pub async fn apply_changes(
         }
         let cols = ins.iter().map(|(c, _)| quote(c, mysql)).collect::<Vec<_>>().join(", ");
         let vals = ins.iter().map(|(_, v)| literal(v)).collect::<Vec<_>>().join(", ");
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            quote(table, mysql),
-            cols,
-            vals
-        );
+        let sql = format!("INSERT INTO {} ({}) VALUES ({})", table, cols, vals);
         affected += backend.run_one(&sql, 1).await?.affected.max(0);
     }
 
@@ -110,4 +110,20 @@ pub async fn apply_changes(
         truncated: false,
         elapsed_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qualified_table_limits_to_database() {
+        assert_eq!(qualified_table("users", Some("shop"), true), "`shop`.`users`");
+        assert_eq!(qualified_table("users", Some(" shop "), true), "`shop`.`users`");
+        assert_eq!(qualified_table("users", None, true), "`users`");
+        // 空串库视同未设置
+        assert_eq!(qualified_table("users", Some(""), true), "`users`");
+        // 非 MySQL 双引号
+        assert_eq!(qualified_table("users", Some("pub"), false), "\"pub\".\"users\"");
+    }
 }

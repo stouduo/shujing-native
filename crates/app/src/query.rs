@@ -12,6 +12,8 @@ pub fn draw_query_view(
     tab_id: &str,
     q: &mut QueryTab,
     snippets: &[String],
+    databases: &[String],
+    show_db: bool,
 ) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let p = theme::c();
@@ -41,6 +43,23 @@ pub fn draw_query_view(
                     theme::select(ui, "query-conn-select", &sel_name, &opts, 180.0)
                 {
                     q.conn_id = new_id;
+                }
+                // 会话库下拉(MySQL 多库连接):执行前 USE,否则裸表名报 No database selected
+                if show_db && !databases.is_empty() {
+                    let db_opts: Vec<(String, String)> = databases
+                        .iter()
+                        .map(|d| (d.clone(), d.clone()))
+                        .collect();
+                    let sel_db = q
+                        .database
+                        .clone()
+                        .unwrap_or_else(|| "(连接默认库)".into());
+                    ui.label(RichText::new("库").size(theme::FS_AUX).color(p.muted));
+                    if let Some(new_db) =
+                        theme::select(ui, "query-db-select", &sel_db, &db_opts, 150.0)
+                    {
+                        q.database = Some(new_db);
+                    }
                 }
                 if q.running {
                     ui.add(egui::Spinner::new().size(11.0).color(p.muted));

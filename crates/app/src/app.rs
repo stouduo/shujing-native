@@ -38,6 +38,9 @@ enum SessionTab {
         sql: String,
         #[serde(default)]
         history: Vec<String>,
+        /// 执行前的会话库(None=连接默认库)
+        #[serde(default)]
+        database: Option<String>,
     },
     Designer {
         conn: String,
@@ -394,6 +397,8 @@ pub struct StructureTab {
 /// 查询标签
 pub struct QueryTab {
     pub conn_id: String,
+    /// 会话库上下文(None=连接默认库;执行前 USE,避免多库连接报 No database selected)
+    pub database: Option<String>,
     pub sql: String,
     /// 执行历史(新→旧,去重,上限 20)
     pub history: Vec<String>,
@@ -1551,6 +1556,7 @@ impl ShujingApp {
 
     /// 新建查询标签
     pub fn open_query_tab(&mut self, conn_id: Option<String>) {
+        // 库上下文跟随当前激活标签(正在看 shop 库的表 → 新查询默认 shop)
         let inherit = conn_id.or_else(|| {
             self.tabs.get(self.active_tab).map(|t| match &t.kind {
                 TabKind::Table(t) => t.conn_id.clone(),
@@ -1562,6 +1568,29 @@ impl ShujingApp {
                 TabKind::Ddl(d) => d.conn_id.clone(),
             })
         });
+        let inherit_db = self.tabs.get(self.active_tab).and_then(|t| match &t.kind {
+            TabKind::Table(t) => t.database.clone(),
+            TabKind::Structure(s) => s.database.clone(),
+            TabKind::Query(q) => q.database.clone(),
+            TabKind::Designer(d) => d.database.clone(),
+            TabKind::Redis(_) => None,
+            TabKind::Er(e) => e.database.clone(),
+            TabKind::Ddl(d) => d.database.clone(),
+        });
+        // 指定了连接(侧栏右键"新建查询")时,继承其展开中的库
+        let inherit_db = inherit_db.or_else(|| {
+            let cid = inherit.as_ref()?;
+            let tree = self.trees.get(cid)?;
+            tree.expanded_db.clone().or_else(|| {
+                tree.databases.first().cloned().filter(|_| {
+                    self.conns
+                        .iter()
+                        .find(|c| &c.id == cid)
+                        .map(|c| c.db_type == shujing_core::DbType::MySql)
+                        .unwrap_or(false)
+                })
+            })
+        });
         let id = format!("q{}", rand_suffix());
         self.query_seq += 1;
         let title = format!("查询 {}", self.query_seq);
@@ -1570,6 +1599,7 @@ impl ShujingApp {
             title,
             kind: TabKind::Query(QueryTab {
                 conn_id: inherit.unwrap_or_default(),
+                database: inherit_db,
                 sql: String::new(),
                 history: vec![],
                 results: vec![],
@@ -1791,7 +1821,11 @@ impl ShujingApp {
         q.history.insert(0, sql.clone());
         q.history.truncate(20);
         let conn_id = q.conn_id.clone();
+        let db = q.database.clone();
         net::spawn(async move {
+            if let Some(db) = &db {
+                service.use_database(&conn_id, db).await;
+            }
             let result = service.run_sql(&conn_id, sql, None).await;
             let _ = tx.send(BgEvent::QueryDone { tab_id, result });
         });
@@ -1817,6 +1851,7 @@ impl ShujingApp {
         };
         let explain = shujing_core::sql_advisor::explain_sql(conn.db_type, &sql);
         let conn_id = q.conn_id.clone();
+        let db = q.database.clone();
         let tid = tab_id.to_string();
         if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tid) {
             if let TabKind::Query(q) = &mut t.kind {
@@ -1827,6 +1862,9 @@ impl ShujingApp {
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         net::spawn(async move {
+            if let Some(db) = &db {
+                service.use_database(&conn_id, db).await;
+            }
             let result = service.run_sql(&conn_id, explain, Some(200)).await;
             let _ = tx.send(BgEvent::QueryDone {
                 tab_id: tid,
@@ -1855,7 +1893,11 @@ impl ShujingApp {
         q.history.insert(0, sql.clone());
         q.history.truncate(20);
         let conn_id = q.conn_id.clone();
+        let db = q.database.clone();
         net::spawn(async move {
+            if let Some(db) = &db {
+                service.use_database(&conn_id, db).await;
+            }
             let result = service.run_sql(&conn_id, sql, None).await;
             let _ = tx.send(BgEvent::QueryDone { tab_id, result });
         });
@@ -2173,6 +2215,7 @@ impl ShujingApp {
                     conn: q.conn_id.clone(),
                     sql: q.sql.clone(),
                     history: q.history.clone(),
+                    database: q.database.clone(),
                 }),
                 TabKind::Designer(d) => tabs.push(SessionTab::Designer {
                     conn: d.conn_id.clone(),
@@ -2280,7 +2323,12 @@ impl ShujingApp {
                     });
                     loaders.push((id.clone(), "structure".into()));
                 }
-                SessionTab::Query { conn, sql, history } => {
+                SessionTab::Query {
+                    conn,
+                    sql,
+                    history,
+                    database,
+                } => {
                     self.query_seq += 1;
                     let id = format!("q{}", rand_suffix());
                     self.tabs.push(Tab {
@@ -2288,6 +2336,7 @@ impl ShujingApp {
                         title: format!("查询 {}", self.query_seq),
                         kind: TabKind::Query(QueryTab {
                             conn_id: conn.clone(),
+                            database: database.clone(),
                             sql: sql.clone(),
                             history: history.clone(),
                             results: vec![],
@@ -2499,6 +2548,7 @@ impl ShujingApp {
         };
         let explain = shujing_core::sql_advisor::explain_sql(conn.db_type, &sql);
         let conn_id = q.conn_id.clone();
+        let db = q.database.clone();
         let tid = tab_id.to_string();
         if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tid) {
             if let TabKind::Query(q) = &mut t.kind {
@@ -2515,6 +2565,9 @@ impl ShujingApp {
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         net::spawn(async move {
+            if let Some(db) = &db {
+                service.use_database(&conn_id, db).await;
+            }
             let result = service
                 .run_sql(&conn_id, explain, Some(200))
                 .await
