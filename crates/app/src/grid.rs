@@ -20,10 +20,18 @@ pub fn result_rows(
     let desired_w = 48.0 + col_widths.iter().sum::<f32>();
     let table_left = ui.max_rect().left();
     let table_right = ui.max_rect().right();
+    // 结果网格和表数据页共用同一套横向滚动条策略:常驻、实体、高可见度
+    ui.spacing_mut().scroll.floating = false;
+    ui.spacing_mut().scroll.dormant_handle_opacity = 0.9;
+    ui.spacing_mut().scroll.dormant_background_opacity = 0.15;
+    ui.spacing_mut().scroll.interact_handle_opacity = 1.0;
+    ui.spacing_mut().scroll.active_handle_opacity = 1.0;
+    ui.spacing_mut().scroll.bar_width = 12.0;
+    ui.spacing_mut().scroll.bar_inner_margin = 2.0;
     egui::ScrollArea::horizontal()
         .id_salt(format!("{id_salt}-hscroll"))
         .auto_shrink([false, false])
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width().max(desired_w));
             // 拖拽平移:按住结果网格左右拖 = 横向滚动(只读网格无编辑态)
@@ -47,18 +55,11 @@ pub fn result_rows(
                 .vscroll(true)
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .column(Column::exact(48.0));
-            let ncols = columns.len();
+            // 内容宽度 + 末尾占位列:窄网格铺满,宽网格溢出并出现横向滚动条
             for (i, _c) in columns.iter().enumerate() {
-                tb = tb.column(if i + 1 == ncols {
-                    Column::remainder().clip(true)
-                } else {
-                    Column::initial(col_widths[i])
-                        .at_least(64.0)
-                        .at_most(380.0)
-                        .resizable(true)
-                        .clip(true)
-                });
+                tb = tb.column(Column::exact(col_widths[i]).resizable(true).clip(true));
             }
+            tb = tb.column(Column::remainder().at_least(0.0));
             tb.header(theme::HEADER_H, |mut header| {
                 header.col(|ui| {
                     let rect = ui.max_rect();
@@ -92,6 +93,11 @@ pub fn result_rows(
                         header_line(ui, p.border);
                     });
                 }
+                header.col(|ui| {
+                    let rect = ui.max_rect();
+                    ui.painter().rect_filled(rect, 0, p.panel);
+                    header_line(ui, p.border);
+                });
             })
             .body(|body| {
                 let mut row_band: Option<(f32, f32)> = None;
@@ -163,6 +169,14 @@ pub fn result_rows(
                             row_line(ui, p.row_line);
                         });
                     }
+                    // 末尾占位列:延续行背景/行线
+                    row.col(|ui| {
+                        let rect = ui.max_rect();
+                        if hovered {
+                            ui.painter().rect_filled(rect, 0, p.row_hover);
+                        }
+                        row_line(ui, p.row_line);
+                    });
                 });
             });
         });
@@ -187,7 +201,6 @@ fn row_line(ui: &egui::Ui, color: Color32) {
     );
 }
 
-
 /// 可编辑结果集(查询回写):双击进入编辑,改动以 (行号,列名,新值) 记在 changes。
 /// 返回 (请求开始编辑的格, 提交的格);开始编辑由调用方置 draft,提交由调用方记 changes。
 pub fn result_rows_editable(
@@ -198,7 +211,10 @@ pub fn result_rows_editable(
     changes: &[(usize, String, Option<String>)],
     editing: &mut Option<(usize, usize)>,
     draft: &mut String,
-) -> (Option<(usize, usize, String)>, Option<(usize, usize, String)>) {
+) -> (
+    Option<(usize, usize, String)>,
+    Option<(usize, usize, String)>,
+) {
     let mut start_edit: Option<(usize, usize, String)> = None;
     let mut commit: Option<(usize, usize, String)> = None;
     let p = theme::c();
@@ -210,10 +226,18 @@ pub fn result_rows_editable(
     let editing_active = editing.is_some();
     let table_left = ui.max_rect().left();
     let table_right = ui.max_rect().right();
+    // 结果网格和表数据页共用同一套横向滚动条策略:常驻、实体、高可见度
+    ui.spacing_mut().scroll.floating = false;
+    ui.spacing_mut().scroll.dormant_handle_opacity = 0.9;
+    ui.spacing_mut().scroll.dormant_background_opacity = 0.15;
+    ui.spacing_mut().scroll.interact_handle_opacity = 1.0;
+    ui.spacing_mut().scroll.active_handle_opacity = 1.0;
+    ui.spacing_mut().scroll.bar_width = 12.0;
+    ui.spacing_mut().scroll.bar_inner_margin = 2.0;
     egui::ScrollArea::horizontal()
         .id_salt(format!("{id_salt}-hscroll"))
         .auto_shrink([false, false])
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width().max(desired_w));
             // 拖拽平移(编辑态除外)
@@ -237,18 +261,11 @@ pub fn result_rows_editable(
                 .vscroll(true)
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .column(Column::exact(48.0));
-            let ncols = columns.len();
+            // 内容宽度 + 末尾占位列:窄网格铺满,宽网格溢出并出现横向滚动条
             for (i, _c) in columns.iter().enumerate() {
-                tb = tb.column(if i + 1 == ncols {
-                    Column::remainder().clip(true)
-                } else {
-                    Column::initial(col_widths[i])
-                        .at_least(64.0)
-                        .at_most(380.0)
-                        .resizable(true)
-                        .clip(true)
-                });
+                tb = tb.column(Column::exact(col_widths[i]).resizable(true).clip(true));
             }
+            tb = tb.column(Column::remainder().at_least(0.0));
             tb.header(theme::HEADER_H, |mut header| {
                 header.col(|ui| {
                     let rect = ui.max_rect();
@@ -281,6 +298,11 @@ pub fn result_rows_editable(
                         header_line(ui, p.border);
                     });
                 }
+                header.col(|ui| {
+                    let rect = ui.max_rect();
+                    ui.painter().rect_filled(rect, 0, p.panel);
+                    header_line(ui, p.border);
+                });
             })
             .body(|body| {
                 let mut row_band: Option<(f32, f32)> = None;
@@ -321,9 +343,7 @@ pub fn result_rows_editable(
                             let rect = ui.max_rect();
                             let painter = ui.painter().with_clip_rect(rect);
                             let is_editing = *editing == Some((ri, ci));
-                            let changed = changes
-                                .iter()
-                                .any(|(r, c, _)| *r == ri && c == col);
+                            let changed = changes.iter().any(|(r, c, _)| *r == ri && c == col);
                             if hovered || changed {
                                 painter.rect_filled(
                                     rect,
@@ -388,6 +408,14 @@ pub fn result_rows_editable(
                             row_line(ui, p.row_line);
                         });
                     }
+                    // 末尾占位列:延续行背景/行线
+                    row.col(|ui| {
+                        let rect = ui.max_rect();
+                        if hovered {
+                            ui.painter().rect_filled(rect, 0, p.row_hover);
+                        }
+                        row_line(ui, p.row_line);
+                    });
                 });
             });
         });

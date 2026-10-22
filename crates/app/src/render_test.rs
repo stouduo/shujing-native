@@ -630,19 +630,17 @@ fn render_conn_modal() {
 #[test]
 fn render_designer_edit() {
     let mut app = test_app(vec![], 0);
-    app.conns.push(shujing_core::ConnInfo {
-        id: "c1".into(),
-        name: "dramato-dev".into(),
-        db_type: shujing_core::DbType::MySql,
-        host: Some("127.0.0.1".into()),
-        port: Some(3306),
-        user: Some("root".into()),
-        password: None,
-        database: None,
-        file_path: None,
-        color: None,
-        read_only: false,
-    });
+    // 复用已有 c1;不能 push 一个同 id 的连接,否则侧栏漏斗会触发重复 widget ID 警告
+    if let Some(c) = app.conns.iter_mut().find(|c| c.id == "c1") {
+        c.name = "dramato-dev".into();
+        c.db_type = shujing_core::DbType::MySql;
+        c.host = Some("127.0.0.1".into());
+        c.port = Some(3306);
+        c.user = Some("root".into());
+        c.password = None;
+        c.database = None;
+        c.file_path = None;
+    }
     app.open_designer("c1", Some("users"), Some("dramato".to_string()));
     if let TabKind::Designer(d) = &mut app.tabs.last_mut().unwrap().kind {
         d.loading = false;
@@ -1153,9 +1151,7 @@ fn filter_bar_clicks_work() {
 
     // 点击操作符下拉(fop):x ≈ 侧栏236+14(边距)+170+6+130+6+56+18+6 = 大约 640,行中心 y ≈ 82+4+26+6+13 ≈ 131
     let click = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>, pos: egui::Pos2| {
-        h.input_mut()
-            .events
-            .push(egui::Event::PointerMoved(pos));
+        h.input_mut().events.push(egui::Event::PointerMoved(pos));
         h.step();
         h.input_mut().events.push(egui::Event::PointerButton {
             pos,

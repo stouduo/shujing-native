@@ -595,6 +595,14 @@ pub(crate) fn draw_table_view(
         }))
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
+                // 右侧按钮+筛选框较多;脏状态还多出保存/丢弃。窄窗口下把次要操作收进 ···,
+                // 否则 1024~1200 宽度的标题/库 chip 会被筛选框压住。
+                let compact = ui.available_width()
+                    < if tab.changes.is_empty() {
+                        900.0
+                    } else {
+                        1040.0
+                    };
                 let title_resp = ui.add(
                     egui::Label::new(
                         theme::strong(&tab.table, theme::FS_TABLE_TITLE).color(p.text),
@@ -627,14 +635,18 @@ pub(crate) fn draw_table_view(
                 } else {
                     "读取结构中…".to_string()
                 };
-                icons::label_at_baseline(
-                    ui,
-                    hint,
-                    egui::FontId::proportional(theme::FS_AUX),
-                    p.muted,
-                    title_baseline,
-                    260.0,
-                );
+                if compact {
+                    title_resp.clone().on_hover_text(&hint);
+                } else {
+                    icons::label_at_baseline(
+                        ui,
+                        hint,
+                        egui::FontId::proportional(theme::FS_AUX),
+                        p.muted,
+                        title_baseline,
+                        260.0,
+                    );
+                }
                 if let Some(err) = &tab.error {
                     icons::label_at_baseline(
                         ui,
@@ -672,6 +684,29 @@ pub(crate) fn draw_table_view(
                     let more =
                         ui.menu_button(RichText::new("···").size(15.0).color(p.text2), |ui| {
                             ui.set_min_width(180.0);
+                            if compact {
+                                if ui.button("＋ 新增行").clicked() {
+                                    tab.insert_form = Some(
+                                        tab.columns
+                                            .iter()
+                                            .map(|c| (c.clone(), String::new()))
+                                            .collect(),
+                                    );
+                                    ui.close_menu();
+                                }
+                                let adv_label = if tab.filter_bar_open {
+                                    "收起高级筛选"
+                                } else if tab.applied_where.is_some() {
+                                    "高级筛选(已应用)…"
+                                } else {
+                                    "高级筛选…"
+                                };
+                                if ui.button(adv_label).clicked() {
+                                    tab.filter_bar_open = !tab.filter_bar_open;
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                            }
                             if ui.button("查看整行详情").clicked() {
                                 tab.detail = true;
                                 ui.close_menu();
@@ -768,31 +803,33 @@ pub(crate) fn draw_table_view(
                         });
                     }
 
-                    // 高级筛选(字段/自由模式筛选栏)快捷开关
-                    let adv_label = if tab.filter_bar_open {
-                        "收起筛选"
-                    } else if tab.applied_where.is_some() {
-                        "高级筛选*"
-                    } else {
-                        "高级筛选"
-                    };
-                    if theme::button(ui, adv_label, theme::BtnKind::Secondary)
-                        .on_hover_text("字段/自由模式高级筛选栏")
-                        .clicked()
-                    {
-                        tab.filter_bar_open = !tab.filter_bar_open;
-                    }
-                    // 新增行(快捷栏直达)
-                    if theme::button(ui, "＋ 新增行", theme::BtnKind::Secondary)
-                        .on_hover_text("插入一行新数据")
-                        .clicked()
-                    {
-                        tab.insert_form = Some(
-                            tab.columns
-                                .iter()
-                                .map(|c| (c.clone(), String::new()))
-                                .collect(),
-                        );
+                    if !compact {
+                        // 高级筛选(字段/自由模式筛选栏)快捷开关
+                        let adv_label = if tab.filter_bar_open {
+                            "收起筛选"
+                        } else if tab.applied_where.is_some() {
+                            "高级筛选*"
+                        } else {
+                            "高级筛选"
+                        };
+                        if theme::button(ui, adv_label, theme::BtnKind::Secondary)
+                            .on_hover_text("字段/自由模式高级筛选栏")
+                            .clicked()
+                        {
+                            tab.filter_bar_open = !tab.filter_bar_open;
+                        }
+                        // 新增行(快捷栏直达)
+                        if theme::button(ui, "＋ 新增行", theme::BtnKind::Secondary)
+                            .on_hover_text("插入一行新数据")
+                            .clicked()
+                        {
+                            tab.insert_form = Some(
+                                tab.columns
+                                    .iter()
+                                    .map(|c| (c.clone(), String::new()))
+                                    .collect(),
+                            );
+                        }
                     }
                     let fresp =
                         theme::filter_box(ui, "table-filter", &mut tab.filter, "筛选行", 152.0);
@@ -875,12 +912,15 @@ pub(crate) fn draw_table_view(
                 // 每页行数快捷设置(底栏直达)
                 vsep(ui);
                 let size_opts = [50usize, 100, 200, 500];
-                let size_label = format!("每页 {}", tab.page_size);
+                let size_label = format!("每页 {} ▾", tab.page_size);
                 ui.menu_button(RichText::new(size_label).size(11.5).color(p.text2), |ui| {
                     ui.set_min_width(90.0);
                     for n in size_opts {
                         if ui
-                            .selectable_label(tab.page_size == n, RichText::new(format!("{n} 行")).size(12.0))
+                            .selectable_label(
+                                tab.page_size == n,
+                                RichText::new(format!("{n} 行")).size(12.0),
+                            )
                             .clicked()
                         {
                             if tab.page_size != n {
@@ -968,9 +1008,9 @@ pub(crate) fn draw_table_view(
                                 color: egui::Color32::from_black_alpha(90),
                             })
                             .show(ui, |ui| {
-                                ui.set_min_width(276.0);
-                                close_detail =
-                                    detail_body(ui, &tab_id_s, &cols, &row_vals, row_no);
+                                // 固定宽度,避免长 URL 把整个悬浮卡撑满;高度由内容收缩
+                                ui.set_width(360.0);
+                                close_detail = detail_body(ui, &tab_id_s, &cols, &row_vals, row_no);
                             });
                     });
                 if close_detail {
@@ -1083,7 +1123,9 @@ pub(crate) fn draw_table_view(
                                     }
                                     let opts: Vec<(String, String)> =
                                         cols.iter().map(|c| (c.clone(), c.clone())).collect();
-                                    if let Some(v) = theme::select(ui, &format!("fcol-{i}"), col, &opts, 150.0) {
+                                    if let Some(v) =
+                                        theme::select(ui, &format!("fcol-{i}"), col, &opts, 150.0)
+                                    {
                                         *col = v;
                                     }
                                     let op_opts: Vec<(String, String)> = OPS
@@ -1093,7 +1135,9 @@ pub(crate) fn draw_table_view(
                                     if op.is_empty() {
                                         *op = "=".to_string();
                                     }
-                                    if let Some(v) = theme::select(ui, &format!("fop-{i}"), op, &op_opts, 96.0) {
+                                    if let Some(v) =
+                                        theme::select(ui, &format!("fop-{i}"), op, &op_opts, 96.0)
+                                    {
                                         *op = v;
                                     }
                                     let needs_value = *op != "IS NULL" && *op != "IS NOT NULL";
@@ -2009,12 +2053,22 @@ fn draw_data_cell(
             *col_where_out = Some((col_name.to_string(), "LIKE".to_string(), val));
             ui.close_menu();
         }
-        if ui.button(egui::RichText::new("此列为 NULL").size(12.0)).clicked() {
+        if ui
+            .button(egui::RichText::new("此列为 NULL").size(12.0))
+            .clicked()
+        {
             *col_where_out = Some((col_name.to_string(), "IS NULL".to_string(), String::new()));
             ui.close_menu();
         }
-        if ui.button(egui::RichText::new("此列非空").size(12.0)).clicked() {
-            *col_where_out = Some((col_name.to_string(), "IS NOT NULL".to_string(), String::new()));
+        if ui
+            .button(egui::RichText::new("此列非空").size(12.0))
+            .clicked()
+        {
+            *col_where_out = Some((
+                col_name.to_string(),
+                "IS NOT NULL".to_string(),
+                String::new(),
+            ));
             ui.close_menu();
         }
         ui.separator();
@@ -3106,7 +3160,10 @@ impl eframe::App for ShujingApp {
                 .iter()
                 .any(|t| matches!(&t.kind, TabKind::Query(q) if !q.history.is_empty())),
             self.trees.iter().filter(|(_, t)| t.online).count(),
-            self.trees.values().map(|t| t.expanded_db.clone()).collect::<Vec<_>>(),
+            self.trees
+                .values()
+                .map(|t| t.expanded_db.clone())
+                .collect::<Vec<_>>(),
         );
         if sig != self.last_session_sig {
             self.last_session_sig = sig;
@@ -3515,7 +3572,6 @@ pub fn export_rows_inserts(
     out
 }
 
-
 /// 行详情悬浮层内容(列-值竖排);返回 true = 用户点了关闭
 fn detail_body(
     ui: &mut egui::Ui,
@@ -3535,7 +3591,12 @@ fn detail_body(
                 ui.painter()
                     .rect_filled(rect, egui::CornerRadius::same(5), p.elevated);
             }
-            icons::paint_close(ui.painter(), rect.center(), 4.0, if resp.hovered() { p.text } else { p.muted });
+            icons::paint_close(
+                ui.painter(),
+                rect.center(),
+                4.0,
+                if resp.hovered() { p.text } else { p.muted },
+            );
             let _ = resp.clone().on_hover_text("关闭");
             if resp.clicked() {
                 close = true;
@@ -3545,17 +3606,20 @@ fn detail_body(
     ui.add_space(6.0);
     egui::ScrollArea::vertical()
         .id_salt(format!("detail-scroll-{tab_id}"))
-        .auto_shrink([false, false])
+        .auto_shrink([false, true])
+        .max_height(420.0)
         .show(ui, |ui| {
             for (c, v) in cols.iter().zip(row_vals.iter()) {
                 ui.label(RichText::new(c).font(theme::mono(11.0)).color(p.muted));
                 let text = v.as_deref().unwrap_or("null");
                 ui.add(
-                    egui::Label::new(
-                        RichText::new(text)
-                            .font(theme::mono(12.0))
-                            .color(if v.is_none() { p.null_text } else { p.cell_text }),
-                    )
+                    egui::Label::new(RichText::new(text).font(theme::mono(12.0)).color(
+                        if v.is_none() {
+                            p.null_text
+                        } else {
+                            p.cell_text
+                        },
+                    ))
                     .wrap()
                     .selectable(true),
                 );

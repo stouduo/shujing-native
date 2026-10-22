@@ -121,13 +121,11 @@ pub fn draw_structure_view(
                     draw_indexes(ui, data);
                     ui.add_space(20.0);
 
-                    let ddl_open = ui
-                        .ctx()
-                        .memory(|m| {
-                            m.data
-                                .get_temp::<bool>(egui::Id::new(("ddl-open", tab_id)))
-                                .unwrap_or(false)
-                        });
+                    let ddl_open = ui.ctx().memory(|m| {
+                        m.data
+                            .get_temp::<bool>(egui::Id::new(("ddl-open", tab_id)))
+                            .unwrap_or(true)
+                    });
                     section_title(ui, "DDL", 0);
                     ui.add_space(4.0);
                     // 折叠头
@@ -176,8 +174,11 @@ pub fn draw_structure_view(
                                         job.wrap.max_width = ui.available_width();
                                         let galley = ui.fonts(|f| f.layout_job(job));
                                         let gsize = galley.size();
-                                        ui.painter()
-                                            .galley(ui.cursor().left_top(), galley, p.text2);
+                                        ui.painter().galley(
+                                            ui.cursor().left_top(),
+                                            galley,
+                                            p.text2,
+                                        );
                                         ui.allocate_space(gsize);
                                     });
                             });
@@ -507,7 +508,6 @@ fn cell_line(ui: &egui::Ui, color: Color32) {
     );
 }
 
-
 /// 对象 DDL 查看页(触发器/存储过程/函数/视图)
 pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<TabAction> {
     let mut actions = Vec::new();
@@ -531,8 +531,8 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
                     theme::bold(theme::FS_TABLE_TITLE),
                     Color32::PLACEHOLDER,
                 );
-                let baseline =
-                    tr.rect.center().y - g.size().y / 2.0 + icons::baseline_top(&g, theme::FS_TABLE_TITLE);
+                let baseline = tr.rect.center().y - g.size().y / 2.0
+                    + icons::baseline_top(&g, theme::FS_TABLE_TITLE);
                 if let Some(db) = &d.database {
                     icons::chip_at_baseline(ui, db, p.text2, baseline);
                 }
