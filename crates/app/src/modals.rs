@@ -590,15 +590,6 @@ pub fn draw_new_table_modal(app: &mut ShujingApp, ctx: &egui::Context) {
 }
 
 /// 供侧栏"新建表"入口使用
-pub fn open_new_table(app: &mut ShujingApp, conn_id: &str, database: Option<String>) {
-    app.new_table = Some(NewTableState {
-        conn_id: conn_id.to_string(),
-        database,
-        name: String::new(),
-        sql: String::new(),
-    });
-}
-
 
 /// 全局数据搜索(⌘⇧F):在所选连接全部表的所有列中找关键词
 pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
@@ -618,8 +609,19 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
             app.global_search.as_mut().unwrap().conn_id = id.clone();
         }
     }
+    // 库列表/展开库先快照(gs 可变借用期间读不了 app.trees)
+    let cur_conn = app.global_search.as_ref().unwrap().conn_id.clone();
+    let conn_dbs: Vec<String> = app
+        .trees
+        .get(&cur_conn)
+        .map(|t| t.databases.clone())
+        .unwrap_or_default();
+    let conn_expanded: Option<String> = app
+        .trees
+        .get(&cur_conn)
+        .and_then(|t| t.expanded_db.clone());
     let mut do_search = false;
-    let mut goto: Option<(String, String)> = None;
+    let mut goto: Option<(Option<String>, String, String)> = None;
     let mut close = false;
     let modal = egui::Modal::new(egui::Id::new("global-search"))
         .frame(theme::modal_frame())
@@ -637,11 +639,28 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     .find(|(id, _)| *id == gs.conn_id)
                     .map(|(_, n)| n.clone())
                     .unwrap_or_else(|| if online.is_empty() { "无在线连接".into() } else { "选择连接".into() });
-                if theme::select(ui, "gs-conn", &sel_name, &online, 170.0)
-                    .is_some()
-                {
+                if let Some(cid) = theme::select(ui, "gs-conn", &sel_name, &online, 170.0) {
+                    gs.conn_id = cid;
+                    gs.db = None;
                     gs.searched = false;
                     gs.hits.clear();
+                }
+                // 库范围(多库连接):默认侧栏展开的库;换连接后下一帧列表随新连接刷新
+                let dbs: Vec<(String, String)> = conn_dbs
+                    .iter()
+                    .map(|d| (d.clone(), d.clone()))
+                    .collect();
+                if !dbs.is_empty() {
+                    let sel_db = gs
+                        .db
+                        .clone()
+                        .or(conn_expanded.clone())
+                        .unwrap_or_else(|| "(连接默认库)".into());
+                    if let Some(db) = theme::select(ui, "gs-db", &sel_db, &dbs, 140.0) {
+                        gs.db = Some(db);
+                        gs.searched = false;
+                        gs.hits.clear();
+                    }
                 }
                 ui.add_space(4.0);
                 // 关键词
@@ -656,7 +675,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                 }
             });
             ui.label(
-                RichText::new("在所选连接的全部表的所有列中查找(逐表扫描,大库可能较慢)")
+                RichText::new("在所选库的全部表的所有列中查找(逐表扫描,大库可能较慢)")
                     .size(11.0)
                     .color(p.muted),
             );
@@ -712,7 +731,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                                 let g = icons::text_galley(ui.painter(), preview, theme::mono(11.5), Color32::PLACEHOLDER, rect.width() - 300.0);
                                 ui.painter().galley(egui::pos2(rect.left() + 288.0, rect.center().y - g.size().y / 2.0), g, p.text2);
                                 if resp.clicked() {
-                                    goto = Some((h.table.clone(), kw.clone()));
+                                    goto = Some((h.database.clone(), h.table.clone(), kw.clone()));
                                 }
                             }
                         }
@@ -736,26 +755,29 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
         let gs = app.global_search.as_mut().unwrap();
         let kw = gs.keyword.trim().to_string();
         if !kw.is_empty() && !gs.conn_id.is_empty() {
+            if gs.db.is_none() {
+                gs.db = app
+                    .trees
+                    .get(&gs.conn_id)
+                    .and_then(|t| t.expanded_db.clone());
+            }
+            let db = gs.db.clone();
             gs.searching = true;
             gs.error = None;
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             let cid = gs.conn_id.clone();
             net::spawn(async move {
-                let result = service.search_all_tables(&cid, &kw, 50).await;
+                let result = service
+                    .search_all_tables(&cid, db.as_deref(), &kw, 50)
+                    .await;
                 let _ = tx.send(BgEvent::SearchDone { result });
             });
         }
     }
-    if let Some((table, kw)) = goto {
+    if let Some((db, table, kw)) = goto {
         let conn_id = app.global_search.as_ref().unwrap().conn_id.clone();
         app.global_search = None;
-        let conn = app.conns.iter().find(|c| c.id == conn_id);
-        let db = conn.and_then(|c| {
-            app.trees
-                .get(&c.id)
-                .and_then(|t| t.expanded_db.clone())
-        });
         app.open_table(&conn_id, &table, db);
         // 应用关键词筛选
         let mysql = crate::app::mysql_quote(&app.conns, &conn_id);
@@ -827,9 +849,22 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 app.confirm = None;
                 app.delete_connection(conn_id);
                 app.toast_error(format!("已删除连接 {}", input_ok));
+            } else if let Some(conn_id) =
+                action.as_deref().and_then(|a| a.strip_prefix("disconnect-conn:"))
+            {
+                app.confirm = None;
+                app.trees.remove(conn_id);
+                app.close_tabs_for_connection(conn_id);
+                let service = app.service.clone();
+                let cid = conn_id.to_string();
+                net::spawn(async move {
+                    let _ = service.disconnect(&cid).await;
+                });
+                app.toast_error("已断开连接".to_string());
             } else {
                 let conn_id = c.conn_id.clone();
-                let sql = c.resolved_sql();
+                let mysql = crate::app::mysql_quote(&app.conns, &conn_id);
+                let sql = c.resolved_sql(mysql);
                 app.confirm = None;
                 let tx = app.event_tx.clone();
                 let service = app.service.clone();

@@ -50,9 +50,9 @@ pub fn draw_redis_view(
                     60.0,
                 );
                 ui.add_space(6.0);
-                // 模式输入:输入即筛已加载,回车重扫
-                theme::field(ui, "redis-pattern", &mut rt.pattern, 260.0, false);
-                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                // 模式输入:输入即筛已加载,回车重扫(只认本输入框的回车,避免抢内联编辑的 Enter)
+                let presp = theme::field(ui, "redis-pattern", &mut rt.pattern, 260.0, false);
+                if presp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !rt.scanning {
                     actions.push(TabAction::RedisScan {
                         tab_id: tab_id.to_string(),
                         reset: true,
@@ -67,7 +67,7 @@ pub fn draw_redis_view(
                 if rt.scanning {
                     ui.add(egui::Spinner::new().size(11.0).color(p.muted));
                 }
-                if rt.cursor != 0 && !rt.keys.is_empty() {
+                if rt.cursor != 0 {
                     if theme::button(ui, "继续扫描", theme::BtnKind::Secondary).clicked() {
                         actions.push(TabAction::RedisScan {
                             tab_id: tab_id.to_string(),
@@ -196,17 +196,18 @@ fn glob_match(pattern: &str, text: &str) -> bool {
         return false;
     }
     let parts: Vec<&str> = pattern.split('*').collect();
+    let last = parts.len().saturating_sub(1);
     let mut pos = 0usize;
     for (i, part) in parts.iter().enumerate() {
         if part.is_empty() {
             continue;
         }
+        if i == last && !part.is_empty() {
+            // 尾段必须锚定到结尾
+            return text[pos..].ends_with(part);
+        }
         match text[pos..].find(part) {
             Some(idx) if i == 0 || idx == 0 => pos += idx + part.len(),
-            Some(idx) if i == parts.len() - 1 => {
-                // 尾段须锚定结尾
-                return text[pos + idx..].len() == part.len();
-            }
             Some(idx) => pos += idx + part.len(),
             None => return false,
         }
@@ -391,6 +392,15 @@ fn draw_detail(
         return;
     };
     let Some(d) = rt.detail.clone() else {
+        // 加载失败(非 loading 无数据):给出占位而不是空白
+        ui.centered_and_justified(|ui| {
+            ui.add_space(20.0);
+            ui.label(
+                RichText::new("详情加载失败,点右上 ↻ 重试")
+                    .size(12.5)
+                    .color(p.red),
+            );
+        });
         return;
     };
     // ---- 头部(egui 0.31 Frame::show 会吃满可用高度,这里手工分配条带)
@@ -447,7 +457,16 @@ fn draw_detail(
                         });
                     }
                     if d.key_type == "string" && !read_only {
-                        if theme::mini_text_button(ui, "编辑", p.text2).0 {
+                        // 详情文本截断在 5 万字符:截断值编辑保存会丢尾部,禁止在线编辑
+                        let truncated = d
+                            .text
+                            .as_deref()
+                            .map(|t| t.chars().count() >= 50_000)
+                            .unwrap_or(false);
+                        let btn = theme::mini_text_button(ui, "编辑", if truncated { p.muted } else { p.text2 });
+                        if truncated {
+                            btn.1.on_hover_text("值超过 5 万字符已截断显示,为防丢数据不支持在线编辑");
+                        } else if btn.0 {
                             rt.edit_value = Some(d.text.clone().unwrap_or_default());
                         }
                     }
@@ -461,12 +480,6 @@ fn draw_detail(
                             if apply {
                                 rt.ttl_draft = None;
                                 if let Ok(sec) = v.trim().parse::<i64>() {
-                                    actions.push(TabAction::RedisOp {
-                                        tab_id: tab_id.to_string(),
-                                        op: RedisOp::Refresh {
-                                            key: key.clone(),
-                                        },
-                                    });
                                     actions.push(TabAction::RedisSetTtl {
                                         tab_id: tab_id.to_string(),
                                         key: key.clone(),
@@ -543,14 +556,14 @@ fn draw_detail(
                     rt.list_edit = Some((idx, v));
                     if theme::button(ui, "保存", theme::BtnKind::Primary).clicked() || entered {
                         if let Some((idx2, v2)) = rt.list_edit.clone() {
-                            if !v2.is_empty() {
+                            {
                                 actions.push(TabAction::RedisMemberOp {
                                     tab_id: tab_id.to_string(),
                                     key: key.clone(),
                                     key_type: d.key_type.clone(),
                                     op: "lset".into(),
-                                    member: idx2.to_string(),
-                                    extra: v2,
+                                    member: v2,
+                                    extra: idx2.to_string(),
                                 });
                             }
                         }
@@ -683,9 +696,24 @@ fn draw_pair_row(
         ui.painter()
             .rect_filled(rect, egui::CornerRadius::same(5), p.row_hover);
     }
-    // 字段列(hash)/序号(list)
+    // 字段列(hash)/成员列(zset)/序号(list)
     let mut vx = rect.left() + 10.0;
     match d.key_type.as_str() {
+        "zset" => {
+            let g = icons::text_galley(
+                ui.painter(),
+                field.to_string(),
+                theme::mono(12.0),
+                Color32::PLACEHOLDER,
+                190.0,
+            );
+            ui.painter().galley(
+                egui::pos2(vx, rect.center().y - g.size().y / 2.0),
+                g,
+                p.accent,
+            );
+            vx += 200.0;
+        }
         "hash" => {
             let g = icons::text_galley(
                 ui.painter(),
@@ -733,8 +761,8 @@ fn draw_pair_row(
     if read_only {
         return;
     }
-    // 行操作按钮(hash/list 可编辑成员;set/zset 仅删除)
-    let member = if d.key_type == "hash" { field } else { value };
+    // 行操作按钮(hash/list 可编辑成员;zset 删的是成员名,不是分数)
+    let member = if d.key_type == "hash" || d.key_type == "zset" { field } else { value };
     let editable = matches!(d.key_type.as_str(), "hash" | "list");
     let btn_y = rect.center().y;
     if editable {
@@ -757,27 +785,29 @@ fn draw_pair_row(
                 rt.member_add = Some((field.to_string(), value.to_string()));
                 rt.member_set_hash = true;
             } else {
-                // list:按序号 LSET
-                rt.list_edit = Some((i, String::new()));
+                // list:按序号 LSET(预填当前值)
+                rt.list_edit = Some((i, value.to_string()));
             }
         }
     }
-    let dr = egui::Rect::from_center_size(
-        egui::pos2(rect.right() - 26.0, btn_y),
-        egui::vec2(26.0, 20.0),
-    );
-    let dresp = ui.interact(dr, egui::Id::new(("redis-del-mem", i)), Sense::click());
-    let dcol = if dresp.hovered() { p.red } else { p.muted };
-    icons::paint_close(ui.painter(), dr.center(), 3.5, dcol);
-    if dresp.clicked() {
-        actions.push(TabAction::RedisMemberOp {
-            tab_id: tab_id.to_string(),
-            key,
-            key_type: d.key_type.clone(),
-            op: "del".into(),
-            member: member.to_string(),
-            extra: String::new(),
-        });
+    if matches!(d.key_type.as_str(), "hash" | "list" | "set" | "zset") {
+        let dr = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - 26.0, btn_y),
+            egui::vec2(26.0, 20.0),
+        );
+        let dresp = ui.interact(dr, egui::Id::new(("redis-del-mem", i)), Sense::click());
+        let dcol = if dresp.hovered() { p.red } else { p.muted };
+        icons::paint_close(ui.painter(), dr.center(), 3.5, dcol);
+        if dresp.clicked() {
+            actions.push(TabAction::RedisMemberOp {
+                tab_id: tab_id.to_string(),
+                key,
+                key_type: d.key_type.clone(),
+                op: "del".into(),
+                member: member.to_string(),
+                extra: String::new(),
+            });
+        }
     }
 }
 
@@ -938,6 +968,7 @@ fn draw_analyze_modal(
     let p = theme::c();
     let mut close = false;
     let mut run = false;
+    let mut clicked_key: Option<String> = None;
     let modal = egui::Modal::new(egui::Id::new("redis-analyze"))
         .frame(theme::modal_frame())
         .backdrop_color(p.overlay)
@@ -978,6 +1009,10 @@ fn draw_analyze_modal(
                 .color(p.muted),
             );
             ui.add_space(4.0);
+            if let Some(err) = &a.error {
+                ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(p.red));
+                ui.add_space(4.0);
+            }
             if a.ran && !a.running {
                 egui::ScrollArea::vertical()
                     .id_salt("redis-analyze-rows")
@@ -1069,9 +1104,10 @@ fn draw_analyze_modal(
                                 bar_col,
                             );
                             if resp.clicked() {
-                                // 跳到该 key
+                                // 跳到该 key:关弹窗并拉取详情
                                 close = true;
                                 rt.selected_key = Some(s.key.clone());
+                                clicked_key = Some(s.key.clone());
                             }
                         }
                     });
@@ -1092,11 +1128,13 @@ fn draw_analyze_modal(
         });
     }
     if close {
-        if let Some(a) = rt.analyze.as_ref() {
-            let key = a.stats.first().map(|_| rt.selected_key.clone()).flatten();
-            let _ = key;
-        }
         rt.analyze = None;
+        if let Some(k) = clicked_key {
+            actions.push(TabAction::RedisSelectKey {
+                tab_id: tab_id.to_string(),
+                key: k,
+            });
+        }
     } else if modal.should_close() {
         rt.analyze = None;
     }

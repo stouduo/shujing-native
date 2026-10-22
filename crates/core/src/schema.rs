@@ -417,9 +417,11 @@ async fn struct_pg(client: &tokio_postgres::Client, table: &str) -> Result<Table
     let mut out = TableStructure::default();
     let qualified = format!("public.{}", ident(table, false));
 
-    // 字段 + 注释
+    // 字段 + 注释(varchar 等带长度:不带长度回填会丢 n,设计器保存时会把
+    // varchar(n) 改写成无界 varchar)
     let sql = format!(
-        "SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, \
+        "SELECT c.column_name, c.data_type, c.character_maximum_length::text, \
+                c.is_nullable, c.column_default, \
                 col_description(pgc.oid, c.ordinal_position) \
          FROM information_schema.columns c \
          JOIN pg_catalog.pg_class pgc ON pgc.relname = c.table_name \
@@ -429,14 +431,20 @@ async fn struct_pg(client: &tokio_postgres::Client, table: &str) -> Result<Table
     );
     for msg in client.simple_query(&sql).await.map_err(es)? {
         if let SimpleQueryMessage::Row(row) = msg {
+            let mut data_type = row.get(1).unwrap_or_default().to_string();
+            // 长度列空串=NULL(数值/时间类型无长度)
+            let maxlen = row.get(2).unwrap_or_default();
+            if !maxlen.is_empty() {
+                data_type = format!("{data_type}({maxlen})");
+            }
             out.columns.push(ColumnDef {
                 name: row.get(0).unwrap_or_default().to_string(),
-                data_type: row.get(1).unwrap_or_default().to_string(),
-                nullable: row.get(2) == Some("YES"),
+                data_type,
+                nullable: row.get(3) == Some("YES"),
                 key: String::new(),
-                default: row.get(3).map(str::to_string),
+                default: row.get(4).map(str::to_string),
                 extra: String::new(),
-                comment: row.get(4).map(str::to_string).unwrap_or_default(),
+                comment: row.get(5).map(str::to_string).unwrap_or_default(),
             });
         }
     }
@@ -477,8 +485,54 @@ async fn struct_pg(client: &tokio_postgres::Client, table: &str) -> Result<Table
         }
     }
 
-    // DDL(pg 无内置 SHOW CREATE,后续版本生成)
+    // DDL:pg 无 SHOW CREATE,由列/主键/索引拼装
     let _ = qualified;
+    let qi = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
+    let mut lines: Vec<String> = out
+        .columns
+        .iter()
+        .map(|c| {
+            let mut seg = format!("  {} {}", qi(&c.name), c.data_type);
+            if !c.nullable {
+                seg.push_str(" NOT NULL");
+            }
+            if let Some(d) = &c.default {
+                if !d.is_empty() {
+                    seg.push_str(&format!(" DEFAULT {d}"));
+                }
+            }
+            if !c.comment.is_empty() {
+                seg.push_str(&format!(" -- {}", c.comment));
+            }
+            seg
+        })
+        .collect();
+    let pks: Vec<String> = out
+        .columns
+        .iter()
+        .filter(|c| c.key == "PRI")
+        .map(|c| qi(&c.name))
+        .collect();
+    if !pks.is_empty() {
+        lines.push(format!("  PRIMARY KEY ({})", pks.join(", ")));
+    }
+    out.ddl = format!(
+        "-- 由列信息拼装(pg 无 SHOW CREATE TABLE)\nCREATE TABLE {} (\n{}\n);",
+        qi(table),
+        lines.join(",\n")
+    );
+    for idx in &out.indexes {
+        if idx.name.eq_ignore_ascii_case("primary") || idx.name.starts_with("pg_") {
+            continue;
+        }
+        out.ddl.push_str(&format!(
+            "\nCREATE {}INDEX {} ON {} ({});",
+            if idx.unique { "UNIQUE " } else { "" },
+            qi(&idx.name),
+            qi(table),
+            idx.columns
+        ));
+    }
     Ok(out)
 }
 

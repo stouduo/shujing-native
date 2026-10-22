@@ -84,6 +84,9 @@ pub enum TabAction {
     SaveDesigner {
         tab_id: String,
     },
+    ReloadDesigner {
+        tab_id: String,
+    },
     /// 从结构页跳设计器(结构页拿不到 app,经动作中转)
     OpenDesigner {
         conn_id: String,
@@ -178,22 +181,11 @@ pub enum TabAction {
     OptimizeQuery {
         tab_id: String,
     },
-    /// 全局数据搜索
-    GlobalSearch {
-        conn_id: String,
-        keyword: String,
-    },
     /// ER 图点击节点 → 打开表数据
     ErOpenTable {
         conn_id: String,
         table: String,
         database: Option<String>,
-    },
-    /// 点击搜索命中:打开表并按关键词筛选
-    GotoHit {
-        conn_id: String,
-        table: String,
-        keyword: String,
     },
 }
 
@@ -1179,6 +1171,11 @@ pub(crate) fn draw_table_view(
                 .show(ctx, |ui| {
                     close_detail = detail_body(ui, &tab_id_s, &cols, &row_vals, row_no);
                 });
+            // Esc 关闭详情;输入框聚焦时不抢(避免打断编辑中的 Esc 取消)
+            let editing_any = matches!(tab.editing, Some(_));
+            if !editing_any && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                close_detail = true;
+            }
             if close_detail {
                 tab.detail = false;
             }
@@ -2506,6 +2503,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 });
             });
         }
+        TabAction::ReloadDesigner { tab_id } => app.load_designer_structure(&tab_id),
         TabAction::SaveDesigner { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
                 return;
@@ -2542,6 +2540,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 d.is_create(),
                 &d.table_name,
                 &d.columns,
+                &d.baseline,
             );
             let mut stmts: Vec<String> = Vec::new();
             if let Some(create) = &out.create {
@@ -2568,6 +2567,8 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 return;
             }
             let conn_id = d.conn_id.clone();
+            // 保存必须带库:多库连接下 CREATE/ALTER 落到标签页所在库
+            let database = d.database.clone();
             let tid = tab_id.clone();
             let tx = app.event_tx.clone();
             let service = app.service.clone();
@@ -2575,7 +2576,9 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             net::spawn(async move {
                 let mut exec_result: Result<(), String> = Ok(());
                 for stmt in &stmts {
-                    let rs = service.run_sql(&conn_id, stmt.clone(), Some(1)).await;
+                    let rs = service
+                        .run_sql_db(&conn_id, stmt.clone(), Some(1), database.as_deref())
+                        .await;
                     if let Err(e) = rs {
                         exec_result = Err(e);
                         break;
@@ -2609,6 +2612,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             let Some(table) = q.result_table.clone() else {
                 return;
             };
+            let database = q.result_db.clone();
             let Some(r) = q.results.get(q.active_set) else {
                 return;
             };
@@ -2645,7 +2649,6 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 return;
             }
             let conn_id = q.conn_id.clone();
-            let database = q.database.clone();
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             let tid = tab_id.clone();
@@ -2685,57 +2688,6 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             let db =
                 database.or_else(|| app.trees.get(&conn_id).and_then(|t| t.expanded_db.clone()));
             app.open_table(&conn_id, &table, db);
-        }
-        TabAction::GlobalSearch { conn_id, keyword } => {
-            let tx = app.event_tx.clone();
-            let service = app.service.clone();
-            let cid = conn_id.clone();
-            net::spawn(async move {
-                let result = service.search_all_tables(&cid, &keyword, 50).await;
-                let _ = tx.send(BgEvent::SearchDone { result });
-            });
-        }
-        TabAction::GotoHit {
-            conn_id,
-            table,
-            keyword,
-        } => {
-            let had = app.tabs.iter().any(|t| {
-                matches!(&t.kind, TabKind::Table(tt)
-                    if tt.conn_id == conn_id && tt.table == table)
-            });
-            app.open_table(&conn_id, &table, None);
-            if !had {
-                // 新开标签:激活的就是它
-                if let Some(t) = app.tabs.get_mut(app.active_tab) {
-                    if let TabKind::Table(tt) = &mut t.kind {
-                        tt.filter = keyword.clone();
-                        tt.active_filter = Some(crate::app::build_like_filter(
-                            &tt.columns,
-                            &keyword,
-                            crate::app::mysql_quote(&app.conns, &conn_id),
-                        ));
-                    }
-                }
-                let id = app.tabs[app.active_tab].id.clone();
-                app.load_rows(&id);
-            } else if let Some(i) = app.tabs.iter().position(|t| {
-                matches!(&t.kind, TabKind::Table(tt) if tt.conn_id == conn_id && tt.table == table)
-            }) {
-                app.active_tab = i;
-                if let Some(t) = app.tabs.get_mut(i) {
-                    if let TabKind::Table(tt) = &mut t.kind {
-                        tt.filter = keyword.clone();
-                        tt.active_filter = Some(crate::app::build_like_filter(
-                            &tt.columns,
-                            &keyword,
-                            crate::app::mysql_quote(&app.conns, &conn_id),
-                        ));
-                    }
-                }
-                let id = app.tabs[i].id.clone();
-                app.load_rows(&id);
-            }
         }
         TabAction::ExportQueryCsv { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
@@ -3082,10 +3034,6 @@ fn default_port(t: shujing_core::DbType) -> &'static str {
 }
 
 /// 连接标识色板(与 dbclient 一致的 6 色 + 无色)
-pub(crate) fn conn_colors() -> &'static [(&'static str, Color32)] {
-    CONN_COLORS
-}
-
 pub const CONN_COLORS: &[(&str, Color32)] = &[
     ("无", Color32::TRANSPARENT),
     ("Indigo", Color32::from_rgb(0x85, 0x87, 0xF6)),
@@ -3217,6 +3165,7 @@ impl eframe::App for ShujingApp {
         if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command && i.modifiers.shift) {
             self.global_search = Some(crate::app::GlobalSearchState {
                 conn_id: String::new(),
+                db: None,
                 keyword: String::new(),
                 searching: false,
                 searched: false,
@@ -3245,12 +3194,19 @@ impl eframe::App for ShujingApp {
             && !self.tabs.is_empty()
         {
             let id = self.tabs[self.active_tab].id.clone();
-            let dirty = self
+            let table_dirty = self
                 .table_tab(&id)
                 .map(|t| !t.changes.is_empty())
                 .unwrap_or(false);
-            if dirty {
+            let query_dirty = self
+                .tabs
+                .get(self.active_tab)
+                .map(|t| matches!(&t.kind, TabKind::Query(q) if !q.q_changes.is_empty()))
+                .unwrap_or(false);
+            if table_dirty {
                 execute_tab_action(self, ctx, TabAction::SaveChanges { tab_id: id });
+            } else if query_dirty {
+                execute_tab_action(self, ctx, TabAction::SaveQueryChanges { tab_id: id });
             }
         }
 

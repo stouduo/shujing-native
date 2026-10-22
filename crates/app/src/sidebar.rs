@@ -109,7 +109,7 @@ impl ShujingApp {
         egui::ScrollArea::vertical()
             .id_salt("sidebar-scroll")
             .auto_shrink([false, false])
-            .max_height((ui.available_height() - bottom_bar_h).max(80.0))
+            .max_height((ui.available_height() - bottom_bar_h).max(40.0))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let _ = ctx;
@@ -191,10 +191,11 @@ impl ShujingApp {
             name_galley.clone(),
             if online { p.text } else { p.text2 },
         );
+        // 名字右侧的徽标链(只读 chip / SQLite 徽标):x 依次右移,避免互相压字
+        let mut badge_x = rect.left() + 17.0 + name_galley.size().x + 6.0;
         if c.read_only {
-            let nx = rect.left() + 17.0 + name_galley.size().x + 6.0;
             let chip = egui::Rect::from_center_size(
-                egui::pos2(nx + 17.0, rect.center().y),
+                egui::pos2(badge_x + 17.0, rect.center().y),
                 egui::vec2(34.0, 15.0),
             );
             painter.rect_filled(chip, egui::CornerRadius::same(4), theme::tint(AMBER, 40));
@@ -205,6 +206,7 @@ impl ShujingApp {
                 theme::bold(9.0),
                 AMBER,
             );
+            badge_x = chip.right() + 6.0;
         }
         if c.db_type == shujing_core::DbType::Sqlite {
             let sg = painter.layout_no_wrap(
@@ -214,7 +216,7 @@ impl ShujingApp {
             );
             painter.galley(
                 egui::pos2(
-                    rect.left() + 17.0 + name_galley.size().x + 6.0,
+                    badge_x,
                     baseline - icons::baseline_top(&sg, 11.5),
                 ),
                 sg,
@@ -279,16 +281,28 @@ impl ShujingApp {
             Some("query") => self.open_query_tab(Some(conn_id.to_string())),
             Some("dbfilter") => self.open_db_filter(conn_id),
             Some("refresh") => {
-                // 重拉库列表 + 当前展开库的表
+                // 重拉库列表 + 当前展开库的表(展开库的表不会随 DatabasesLoaded 自动刷新)
                 let tx = self.event_tx.clone();
                 let service = self.service.clone();
                 let cid = conn_id.to_string();
+                let expanded = self
+                    .trees
+                    .get(conn_id)
+                    .and_then(|t| t.expanded_db.clone());
                 crate::net::spawn(async move {
                     let databases = service.list_databases(&cid).await.unwrap_or_default();
                     let _ = tx.send(BgEvent::DatabasesLoaded {
-                        conn_id: cid,
+                        conn_id: cid.clone(),
                         databases,
                     });
+                    if let Some(db) = expanded {
+                        let tables = service.list_tables(&cid, Some(db.clone())).await;
+                        let _ = tx.send(BgEvent::TablesLoaded {
+                            conn_id: cid,
+                            database: Some(db),
+                            tables: tables.unwrap_or_default(),
+                        });
+                    }
                 });
             }
             Some("importsql") => self.import_sql_file(conn_id),
@@ -429,10 +443,17 @@ impl ShujingApp {
             let is_open = expanded.as_deref() == Some(db.as_str());
             if is_open {
                 let tables = tables_by_db.get(&db).cloned().unwrap_or_default();
-                // 表直接铺在库下(与原型一致);视图/程序对象才额外分组
-                let table_count = tables.iter().filter(|m| m.kind == "table").count();
+                // 表直接铺在库下(与原型一致);视图/程序对象才额外分组;
+                // Redis 伪条目(redis-db:idx:keys)走 draw_table_row 内置分流
+                let table_count = tables
+                    .iter()
+                    .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:"))
+                    .count();
                 self.draw_db_header(ui, conn_id, &db, loading, table_count);
-                for m in tables.iter().filter(|m| m.kind == "table") {
+                for m in tables
+                    .iter()
+                    .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:"))
+                {
                     self.draw_table_row(ui, conn_id, &db, &m.name);
                 }
                 let groups: [(&str, &str, Box<dyn Fn(&shujing_core::TableMeta) -> bool>); 2] = [
@@ -466,6 +487,9 @@ impl ShujingApp {
                         for m in items {
                             if gkey == "prog" {
                                 self.draw_prog_row(ui, conn_id, &db, &m.name, &m.kind);
+                            } else {
+                                // 视图:与表同款行,点击打开数据页
+                                self.draw_table_row(ui, conn_id, &db, &m.name);
                             }
                         }
                     }
@@ -835,7 +859,11 @@ impl ShujingApp {
             .trees
             .get(conn_id)
             .and_then(|t| t.tables_by_db.get(db))
-            .map(|v| v.len())
+            .map(|v| {
+                v.iter()
+                    .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:"))
+                    .count()
+            })
             .unwrap_or(0);
         let g = ui.painter().layout_no_wrap(
             format!("{count}"),
@@ -1010,7 +1038,8 @@ impl ShujingApp {
                 ui.close_menu();
             }
             if ui.button("复制 SELECT *").clicked() {
-                let ident = crate::app::quote_ident_by(name, true);
+                let mysql = crate::app::mysql_quote(&self.conns, conn_id);
+                let ident = crate::app::quote_ident_by(name, mysql);
                 ui.ctx()
                     .copy_text(format!("SELECT * FROM {ident} LIMIT 100;"));
                 ui.close_menu();
@@ -1117,14 +1146,14 @@ impl ShujingApp {
                         conn_id,
                         "清空表数据",
                         &format!(
-                            "确认清空表 {name} 的全部数据?{}",
+                            "确认清空表 {name} 的全部数据?不可恢复!\n输入表名以确认:{}",
                             if mysql {
                                 ""
                             } else {
                                 "(SQLite 用 DELETE 逐行清空)"
                             }
                         ),
-                        None,
+                        Some(name.to_string()),
                         sql,
                     );
                 }
@@ -1220,6 +1249,38 @@ impl ShujingApp {
 
     pub(crate) fn toggle_connect(&mut self, c: &shujing_core::ConnInfo) {
         if self.trees.get(&c.id).map(|t| t.online).unwrap_or(false) {
+            // 有未保存修改的标签:断开前确认(关闭标签不绕过脏检查)
+            if !self.dirty_override
+                && self.pending.is_none()
+                && self.conn_has_dirty_tabs(&c.id)
+            {
+                let n = self
+                    .tabs
+                    .iter()
+                    .filter(|t| match &t.kind {
+                        crate::app::TabKind::Table(tt) => {
+                            tt.conn_id == c.id && !tt.changes.is_empty()
+                        }
+                        crate::app::TabKind::Query(q) => {
+                            q.conn_id == c.id && !q.q_changes.is_empty()
+                        }
+                        _ => false,
+                    })
+                    .count();
+                self.open_confirm(
+                    &c.id.clone(),
+                    "断开连接",
+                    &format!("连接「{}」下有 {n} 个标签存在未保存修改,断开将一并关闭并丢弃。\n继续?",
+                        c.name,
+                    ),
+                    None,
+                    String::new(),
+                );
+                if let Some(cf) = self.confirm.as_mut() {
+                    cf.action = Some(format!("disconnect-conn:{}", c.id));
+                }
+                return;
+            }
             self.trees.remove(&c.id);
             // 断开的连接:相关标签一并关闭,避免残留标签对失效连接报错
             self.close_tabs_for_connection(&c.id);

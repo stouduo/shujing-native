@@ -482,7 +482,6 @@ fn render_value(v: redis::Value, depth: usize) -> Vec<String> {
         redis::Value::Set(items) => items.into_iter().flat_map(|v| render_value(v, depth + 1)).collect(),
         redis::Value::Double(d) => vec![format!("(double) {d}")],
         redis::Value::Boolean(b) => vec![format!("(bool) {b}")],
-        other => vec![format!("{other:?}")],
         redis::Value::Array(items) => {
             let mut out = Vec::new();
             for (i, it) in items.iter().enumerate() {
@@ -492,6 +491,7 @@ fn render_value(v: redis::Value, depth: usize) -> Vec<String> {
             }
             if out.is_empty() { vec!["(empty array)".into()] } else { out }
         }
+        other => vec![format!("{other:?}")],
     }
 }
 

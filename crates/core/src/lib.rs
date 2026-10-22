@@ -170,13 +170,14 @@ impl Service {
     pub async fn search_all_tables(
         &self,
         id: &str,
+        database: Option<&str>,
         keyword: &str,
         max_hits: usize,
     ) -> Result<Vec<search::SearchHit>, String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
-        search::search_tables(&mut guard.backend, &info, keyword, max_hits).await
+        search::search_tables(&mut guard.backend, &info, database, keyword, max_hits).await
     }
 
     pub async fn apply_changes(
@@ -201,16 +202,6 @@ impl Service {
             inserts,
         )
         .await
-    }
-
-    /// 设置连接的会话库上下文(MySQL USE db / PG search_path),
-    /// 之后该连接上执行的 SQL 不带库限定也落在该库(查询页执行前调用)
-    pub async fn use_database(&self, id: &str, db: &str) {
-        let Some(live) = self.state.live(id) else {
-            return;
-        };
-        let mut guard = live.lock().await;
-        guard.backend.set_session_db(Some(db));
     }
 
     /// 判断错误是否为连接失效(空闲超时/网络中断等),可尝试重连
@@ -249,6 +240,18 @@ impl Service {
         sql: String,
         max_rows: Option<usize>,
     ) -> Result<Vec<ExecResult>, String> {
+        self.run_sql_db(id, sql, max_rows, None).await
+    }
+
+    /// 带会话库的执行:库上下文在同一把连接锁内设置并生效,
+    /// 避免多个查询标签并发时"先 USE 后执行"两步被交错到错误的库
+    pub async fn run_sql_db(
+        &self,
+        id: &str,
+        sql: String,
+        max_rows: Option<usize>,
+        db: Option<&str>,
+    ) -> Result<Vec<ExecResult>, String> {
         let sql = sql.trim().to_string();
         if sql.is_empty() {
             return Err("SQL 为空".into());
@@ -256,6 +259,9 @@ impl Service {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let cancel_state = self.state.cancel(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
+        if let Some(db) = db.map(str::trim).filter(|s| !s.is_empty()) {
+            guard.backend.set_session_db(Some(db));
+        }
         if guard.info.read_only && !model::is_readonly_sql(&sql) {
             return Err("只读连接:仅允许 SELECT/WITH/EXPLAIN/SHOW/DESCRIBE/PRAGMA".into());
         }
@@ -852,7 +858,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let hits = search::search_tables(&mut b, &info, "alpha", 50).await.unwrap();
+        let hits = search::search_tables(&mut b, &info, None, "alpha", 50).await.unwrap();
         assert_eq!(hits.len(), 2, "s1.alpha 与 s2.ALPHA note 都应命中");
         let tables: Vec<&str> = hits.iter().map(|h| h.table.as_str()).collect();
         assert!(tables.contains(&"s1"));

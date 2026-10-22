@@ -32,19 +32,22 @@ fn quote_ident(db_type: DbType, name: &str) -> String {
     }
 }
 
-/// "varchar(255)" / "INTEGER AUTOINCREMENT" → (基础类型大写, 长度)
+/// "varchar(255)" / "DECIMAL(10,2)" / "ENUM('a','b')" / "INTEGER AUTOINCREMENT"
+/// → (基础类型大写, 括号内原文长度)
+/// 长度保留完整括号内容(逗号/引号/大小写原样),DECIMAL(10,2) 不能只剩 "10"
 pub fn split_type_len(data_type: &str) -> (String, String) {
-    let upper = data_type.trim().to_uppercase();
-    if let Some(open) = upper.find('(') {
-        if let Some(close) = upper[open..].find(')') {
-            let base = upper[..open].trim().to_string();
-            let inner = upper[open + 1..open + close].trim();
-            let len = inner.split(',').next().unwrap_or("").trim().to_string();
+    let raw = data_type.trim();
+    if let Some(open) = raw.find('(') {
+        if let Some(close_rel) = raw[open..].rfind(')') {
+            let close = open + close_rel;
+            let base = raw[..open].trim().to_uppercase();
+            let len = raw[open + 1..close].trim().to_string();
             return (base, len);
         }
     }
     // SQLite 自增字段的 INTEGER AUTOINCREMENT / INTEGER PRIMARY KEY 形态
-    let base = upper
+    let base = raw
+        .to_uppercase()
         .replace("AUTOINCREMENT", "")
         .replace("PRIMARY KEY", "")
         .trim()
@@ -91,6 +94,14 @@ fn col_def(db_type: DbType, c: &ColumnSpec) -> String {
     if c.auto_inc && db_type == DbType::MySql {
         s.push_str(" AUTO_INCREMENT");
     }
+    // SQLite:INTEGER PRIMARY KEY AUTOINCREMENT 必须内联(rowid 别名语义)
+    if c.pk
+        && c.auto_inc
+        && db_type == DbType::Sqlite
+        && c.data_type.trim().eq_ignore_ascii_case("integer")
+    {
+        s.push_str(" PRIMARY KEY AUTOINCREMENT");
+    }
     if !c.nullable && !(c.pk && c.auto_inc && db_type == DbType::Sqlite) {
         s.push_str(" NOT NULL");
     }
@@ -113,12 +124,15 @@ fn col_def(db_type: DbType, c: &ColumnSpec) -> String {
     s
 }
 
-/// 生成建表/改表 SQL(预览与保存共用)
+/// 生成建表/改表 SQL(预览与保存共用)。
+/// 编辑模式传 `baseline`(加载时的列规格快照):只对实际改动的列生成 ALTER,
+/// 未改动的列不再重复 MODIFY/TYPE(MySQL MODIFY 是全量替换,会丢未建模属性)
 pub fn designer_sql(
     db_type: DbType,
     mode_create: bool,
     table_name: &str,
     cols: &[ColumnSpec],
+    baseline: &[ColumnSpec],
 ) -> DesignerSql {
     let qt = quote_ident(db_type, table_name.trim());
     let mut warnings: Vec<String> = Vec::new();
@@ -126,7 +140,13 @@ pub fn designer_sql(
     if mode_create {
         let mut defs: Vec<String> = cols.iter().map(|c| col_def(db_type, c)).collect();
         let pks: Vec<&ColumnSpec> = cols.iter().filter(|c| c.pk).collect();
-        if pks.len() > 1 {
+        // SQLite 单列整型自增主键已内联,其余一律表级 PRIMARY KEY
+        // (单列主键此前从不输出:MySQL 自增列无 key 报 1075,PG/SQLite 建出无主键表)
+        let sqlite_inline = db_type == DbType::Sqlite
+            && pks.len() == 1
+            && pks[0].auto_inc
+            && pks[0].data_type.trim().eq_ignore_ascii_case("integer");
+        if !pks.is_empty() && !sqlite_inline {
             let names: Vec<String> = pks.iter().map(|c| quote_ident(db_type, &c.name)).collect();
             defs.push(format!("PRIMARY KEY ({})", names.join(", ")));
         }
@@ -158,6 +178,11 @@ pub fn designer_sql(
         ));
     }
     for c in &existing {
+        // 与加载基线比对:没改动的列不生成任何语句
+        let base = baseline.iter().find(|b| b.name == c.name);
+        if base == Some(c) {
+            continue;
+        }
         match db_type {
             DbType::MySql => {
                 alters.push(format!(
@@ -167,18 +192,56 @@ pub fn designer_sql(
                 ));
             }
             DbType::Postgres => {
-                alters.push(format!(
-                    "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
-                    qt,
-                    quote_ident(db_type, &c.name),
-                    type_of(db_type, c)
-                ));
-                alters.push(format!(
-                    "ALTER TABLE {} ALTER COLUMN {} {};",
-                    qt,
-                    quote_ident(db_type, &c.name),
-                    if c.nullable { "DROP NOT NULL" } else { "SET NOT NULL" }
-                ));
+                let qi = quote_ident(db_type, &c.name);
+                // SERIAL 是伪类型不能 ALTER TYPE:自增列跳过类型语句
+                if !c.auto_inc {
+                    let base_type_changed = base
+                        .map(|b| b.data_type != c.data_type || b.length != c.length)
+                        .unwrap_or(true);
+                    if base_type_changed {
+                        alters.push(format!(
+                            "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
+                            qt,
+                            qi,
+                            type_of(db_type, c)
+                        ));
+                    }
+                    let base_null_changed = base.map(|b| b.nullable != c.nullable).unwrap_or(true);
+                    if base_null_changed {
+                        alters.push(format!(
+                            "ALTER TABLE {} ALTER COLUMN {} {};",
+                            qt,
+                            qi,
+                            if c.nullable { "DROP NOT NULL" } else { "SET NOT NULL" }
+                        ));
+                    }
+                }
+                let base_default = base.map(|b| b.default.clone()).unwrap_or_default();
+                if base_default != c.default {
+                    if c.default.is_empty() {
+                        alters.push(format!("ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT;", qt, qi));
+                    } else {
+                        let d = c.default.trim();
+                        let lit = if d.parse::<f64>().is_ok() {
+                            d.to_string()
+                        } else {
+                            format!("'{}'", d.replace('\'', "''"))
+                        };
+                        alters.push(format!(
+                            "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
+                            qt, qi, lit
+                        ));
+                    }
+                }
+                let base_comment = base.map(|b| b.comment.clone()).unwrap_or_default();
+                if base_comment != c.comment {
+                    alters.push(format!(
+                        "COMMENT ON COLUMN {}.{} IS '{}';",
+                        qt,
+                        qi,
+                        c.comment.replace('\'', "''")
+                    ));
+                }
             }
             DbType::Sqlite => {
                 warnings.push(format!("SQLite 无法修改已有列「{}」,已跳过", c.name));
@@ -186,7 +249,7 @@ pub fn designer_sql(
             DbType::Redis => {}
         }
     }
-    if added.is_empty() && existing.is_empty() {
+    if alters.is_empty() && warnings.is_empty() {
         warnings.push("没有可保存的变更".to_string());
     }
     DesignerSql {
@@ -221,10 +284,11 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let out = designer_sql(DbType::MySql, true, "users", &cols);
+        let out = designer_sql(DbType::MySql, true, "users", &cols, &[]);
         let sql = out.create.unwrap();
         assert!(sql.starts_with("CREATE TABLE `users` ("));
         assert!(sql.contains("`id` INTEGER AUTO_INCREMENT"));
+        assert!(sql.contains("PRIMARY KEY (`id`)"), "{sql}");
         assert!(sql.contains("`name` VARCHAR(255) DEFAULT '无名' COMMENT '姓名'"));
     }
 
@@ -238,9 +302,10 @@ mod tests {
             auto_inc: true,
             ..Default::default()
         }];
-        let out = designer_sql(DbType::Sqlite, true, "t", &cols);
+        let out = designer_sql(DbType::Sqlite, true, "t", &cols, &[]);
         let sql = out.create.unwrap();
         assert!(sql.contains("\"id\" INTEGER"), "{sql}");
+        assert!(sql.contains("PRIMARY KEY AUTOINCREMENT"), "{sql}");
         assert!(!sql.contains("NOT NULL"), "{sql}");
     }
 
@@ -250,7 +315,7 @@ mod tests {
             ColumnSpec { name: "a".into(), data_type: "INT".into(), pk: true, ..Default::default() },
             ColumnSpec { name: "b".into(), data_type: "INT".into(), pk: true, ..Default::default() },
         ];
-        let out = designer_sql(DbType::MySql, true, "t", &cols);
+        let out = designer_sql(DbType::MySql, true, "t", &cols, &[]);
         assert!(out.create.unwrap().contains("PRIMARY KEY (`a`, `b`)"));
     }
 
@@ -260,7 +325,7 @@ mod tests {
             ColumnSpec { name: "id".into(), data_type: "INT".into(), nullable: true, existing: true, ..Default::default() },
             ColumnSpec { name: "age".into(), data_type: "INT".into(), nullable: true, existing: false, ..Default::default() },
         ];
-        let out = designer_sql(DbType::MySql, false, "t", &cols);
+        let out = designer_sql(DbType::MySql, false, "t", &cols, &[]);
         assert_eq!(
             out.alters,
             vec![
@@ -280,7 +345,7 @@ mod tests {
             existing: true,
             ..Default::default()
         }];
-        let out = designer_sql(DbType::Postgres, false, "t", &cols);
+        let out = designer_sql(DbType::Postgres, false, "t", &cols, &[]);
         assert_eq!(
             out.alters,
             vec![
@@ -298,7 +363,7 @@ mod tests {
             existing: true,
             ..Default::default()
         }];
-        let out = designer_sql(DbType::Sqlite, false, "t", &cols);
+        let out = designer_sql(DbType::Sqlite, false, "t", &cols, &[]);
         assert!(out.alters.is_empty());
         assert_eq!(out.warnings.len(), 1);
     }
@@ -309,10 +374,64 @@ mod tests {
             ColumnSpec { name: "a".into(), data_type: "INT".into(), default: "-5".into(), ..Default::default() },
             ColumnSpec { name: "b".into(), data_type: "TEXT".into(), default: "it's".into(), ..Default::default() },
         ];
-        let out = designer_sql(DbType::MySql, true, "t", &cols);
+        let out = designer_sql(DbType::MySql, true, "t", &cols, &[]);
         let sql = out.create.unwrap();
         assert!(sql.contains("DEFAULT -5"));
         assert!(sql.contains("DEFAULT 'it''s'"));
+    }
+
+    #[test]
+    fn edit_skips_unchanged_columns() {
+        // 与基线完全一致 → 不生成任何 ALTER
+        let c = ColumnSpec {
+            name: "n".into(),
+            data_type: "VARCHAR".into(),
+            length: "80".into(),
+            nullable: false,
+            existing: true,
+            ..Default::default()
+        };
+        let out = designer_sql(DbType::MySql, false, "t", std::slice::from_ref(&c), std::slice::from_ref(&c));
+        assert!(out.alters.is_empty(), "{:?}", out.alters);
+        assert!(out.warnings.iter().any(|w| w.contains("没有可保存")));
+
+        // 只改 nullable → 只出一条 MODIFY
+        let mut c2 = c.clone();
+        c2.nullable = true;
+        let out = designer_sql(DbType::MySql, false, "t", &[c2], &[c]);
+        assert_eq!(out.alters.len(), 1);
+    }
+
+    #[test]
+    fn edit_pg_serial_skips_type_default_comment() {
+        // serial 列改注释:不生成 TYPE SERIAL(非法),只出 COMMENT ON
+        let base = ColumnSpec {
+            name: "id".into(),
+            data_type: "SERIAL".into(),
+            nullable: false,
+            auto_inc: true,
+            existing: true,
+            ..Default::default()
+        };
+        let mut c = base.clone();
+        c.comment = "主键".into();
+        let out = designer_sql(DbType::Postgres, false, "t", &[c], &[base]);
+        assert_eq!(
+            out.alters,
+            vec!["COMMENT ON COLUMN \"t\".\"id\" IS '主键';".to_string()],
+            "{:?}",
+            out.alters
+        );
+    }
+
+    #[test]
+    fn decimal_length_keeps_comma() {
+        let (base, len) = split_type_len("decimal(10,2)");
+        assert_eq!(base, "DECIMAL");
+        assert_eq!(len, "10,2");
+        let (b2, l2) = split_type_len("enum('a','b')");
+        assert_eq!(b2, "ENUM");
+        assert_eq!(l2, "'a','b'");
     }
 
     #[test]

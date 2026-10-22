@@ -553,6 +553,7 @@ fn render_query_view() {
         error: None,
         optimize: None,
         result_table: None,
+        result_db: None,
         result_pk: vec![],
         pk_checked: false,
         q_changes: vec![],
@@ -601,10 +602,54 @@ fn render_query_view() {
         read_only: false,
     }];
     let cell = std::cell::RefCell::new(Some(q));
+    let dbs = vec!["dramato".to_string(), "shop".to_string(), "stats".to_string()];
     render("query", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
-        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &[], false);
+        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true);
+    });
+}
+
+/// 带库下拉的查询工具栏在窄窗口下不应溢出/换行塌陷
+#[test]
+fn render_query_view_narrow_with_db() {
+    let mut q = QueryTab {
+        conn_id: "c1".into(),
+        database: Some("dramato".into()),
+        sql: "SELECT 1".into(),
+        history: vec![],
+        results: vec![],
+        active_set: 0,
+        running: false,
+        error: None,
+        optimize: None,
+        result_table: None,
+        result_db: None,
+        result_pk: vec![],
+        pk_checked: false,
+        q_changes: vec![],
+        q_editing: None,
+        q_draft: String::new(),
+    };
+    let conns = vec![shujing_core::ConnInfo {
+        id: "c1".into(),
+        name: "dramato-dev".into(),
+        db_type: shujing_core::DbType::MySql,
+        host: Some("10.0.0.3".into()),
+        port: Some(3306),
+        user: Some("dev".into()),
+        password: None,
+        database: None,
+        file_path: None,
+        color: None,
+        read_only: false,
+    }];
+    let cell = std::cell::RefCell::new(Some(q));
+    let dbs = vec!["dramato".to_string(), "shop".to_string()];
+    render("query_narrow_db", 1024.0, 700.0, true, move |ctx| {
+        let mut b = cell.borrow_mut();
+        let q = b.as_mut().unwrap();
+        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true);
     });
 }
 
@@ -896,6 +941,7 @@ fn session_save_restore_roundtrip() {
         error: None,
         optimize: None,
         result_table: None,
+        result_db: None,
         result_pk: vec![],
         pk_checked: false,
         q_changes: vec![],

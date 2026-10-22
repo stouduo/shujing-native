@@ -70,9 +70,12 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                     ui.spacing_mut().item_spacing.x = 6.0;
                     if theme::button(ui, "重置布局", theme::BtnKind::Secondary).clicked() {
                         e.positions.clear();
+                        e.refit = true;
+                        e.fit_tries = 0;
                     }
                     if theme::button(ui, "适配", theme::BtnKind::Secondary).clicked() {
                         e.refit = true;
+                        e.fit_tries = 0;
                     }
                 });
             });
@@ -134,9 +137,13 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                         fit_rect.contains(world_to_screen(e, *pos))
                             && fit_rect.contains(world_to_screen(e, *pos + Vec2::new(NODE_W, h)))
                     });
-                    if all_inside {
+                    // 视口不稳时多重试几帧;内容大到最小缩放也放不下时
+                    // 不能无限重试覆盖 zoom/pan(否则用户缩放/平移/拖拽全部失效)
+                    e.fit_tries += 1;
+                    if all_inside || e.fit_tries > 30 {
                         e.fit_done = true;
                         e.refit = false;
+                        e.fit_tries = 0;
                     }
                 } else {
                     e.fit_done = true;
@@ -188,7 +195,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                     );
                     r.contains(pointer)
                 });
-            if !on_node && ui.rect_contains_pointer(canvas) {
+            if e.dragging_node.is_none() && !on_node && ui.rect_contains_pointer(canvas) {
                 e.pan += drag_delta;
             }
 
@@ -246,11 +253,14 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                     continue;
                 }
                 let resp = ui.interact(rect, egui::Id::new(("er-node", name)), Sense::click_and_drag());
-                // 拖节点
+                // 拖节点(记录进行中的节点:期间画布不平移,防双重位移)
                 if resp.dragged_by(egui::PointerButton::Primary) {
+                    e.dragging_node = Some(name.clone());
                     let delta = resp.drag_delta() / e.zoom;
                     let entry = e.positions.entry(name.clone()).or_insert(*pos);
                     *entry += delta;
+                } else if e.dragging_node.as_deref() == Some(name.as_str()) {
+                    e.dragging_node = None;
                 }
                 if resp.clicked() {
                     node_clicked = Some(name.clone());

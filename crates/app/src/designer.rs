@@ -6,21 +6,6 @@ use crate::{icons, theme};
 use egui::{Align, Color32, Layout, RichText, Sense};
 
 /// 常用类型(与 dbclient typeOptions 一致)
-const TYPE_OPTIONS: &[&str] = &[
-    "INTEGER",
-    "BIGINT",
-    "TEXT",
-    "VARCHAR",
-    "REAL",
-    "DOUBLE",
-    "DECIMAL",
-    "BOOLEAN",
-    "DATE",
-    "DATETIME",
-    "TIMESTAMP",
-    "BLOB",
-    "JSON",
-];
 
 pub fn draw_designer_view(
     ctx: &egui::Context,
@@ -112,7 +97,9 @@ pub fn draw_designer_view(
                     }
                     if is_edit && !d.saving && icons::refresh(ui, p.text2).clicked() {
                         // 放弃本地改动,重拉结构
-                        d.columns.clear();
+                        actions.push(TabAction::ReloadDesigner {
+                            tab_id: tab_id.to_string(),
+                        });
                     }
                 });
             });
@@ -338,12 +325,14 @@ fn draw_column_row(ui: &mut egui::Ui, d: &mut DesignerTab, i: usize, is_edit: bo
         ) {
             c.nullable = !v;
         }
+        // 主键/自增只在建表模式可改:编辑模式 ADD COLUMN 会剥掉这两个属性,
+        // 已有列的 MODIFY 也不生成主键变更,勾选属静默无效 → 禁用
         if let Some(v) = bx(
             &mut ui,
             left0 + widths.3 + 6.0,
             widths.4,
             c.pk,
-            !lock_existing,
+            !is_edit,
         ) {
             c.pk = v;
         }
@@ -352,7 +341,7 @@ fn draw_column_row(ui: &mut egui::Ui, d: &mut DesignerTab, i: usize, is_edit: bo
             left0 + widths.3 + widths.4 + 12.0,
             widths.5,
             c.auto_inc,
-            !lock_existing,
+            !is_edit,
         ) {
             c.auto_inc = v;
         }
@@ -475,7 +464,13 @@ fn preview_sql(ctx: &egui::Context, d: &DesignerTab) -> String {
             .unwrap_or(shujing_core::DbType::MySql)
     });
     let out =
-        shujing_core::designer::designer_sql(db_type, d.is_create(), &d.table_name, &d.columns);
+        shujing_core::designer::designer_sql(
+            db_type,
+            d.is_create(),
+            &d.table_name,
+            &d.columns,
+            &d.baseline,
+        );
     let mut parts: Vec<String> = Vec::new();
     if let Some(create) = &out.create {
         parts.push(create.clone());

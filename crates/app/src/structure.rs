@@ -271,16 +271,14 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
         }
     })
     .body(|body| {
-        let mut band: Option<(f32, f32)> = None;
         body.rows(theme::ROW_H, cols.len(), |mut row| {
             let ri = row.index();
             let c = &cols[ri];
             let is_pk = c.key == "PRI";
             let mut hovered = false;
             row.col(|ui| {
-                let b = band.get_or_insert((ui.max_rect().top(), ui.max_rect().bottom()));
-                b.0 = b.0.min(ui.max_rect().top());
-                b.1 = b.1.max(ui.max_rect().bottom());
+                // 行悬停按本行自己的 y 波段判定(累积并工会把悬停行以下全部点亮)
+                let b = (ui.max_rect().top(), ui.max_rect().bottom());
                 hovered = ui
                     .input(|i| i.pointer.latest_pos())
                     .map(|pt| {
