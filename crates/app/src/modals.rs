@@ -975,23 +975,44 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     resp.clone().on_hover_text(*name);
                     if resp.clicked() {
                         theme::set_accent(i);
-                        // 持久化
-                        let json = serde_json::json!({
-                            "dark": theme::is_dark(),
-                            "accent": i,
-                        });
-                        let _ = std::fs::write(
-                            app.config_dir.join("settings.json"),
-                            json.to_string(),
-                        );
+                        app.save_theme_settings();
                     }
                 }
             });
-            ui.label(
-                RichText::new("主题切换在侧栏顶部 ☀/☾")
-                    .size(11.0)
-                    .color(p.muted),
-            );
+            ui.add_space(6.0);
+            ui.label(RichText::new("主题").size(11.0).color(p.muted));
+            ui.horizontal(|ui| {
+                // 跟随系统开关(手动点 ☀/☾ 会自动解除跟随)
+                let on = app.follow_system_theme;
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(38.0, 22.0), Sense::click());
+                ui.painter().rect_filled(
+                    rect,
+                    egui::CornerRadius::same(11),
+                    if on { p.accent } else { p.input_bg },
+                );
+                let knob_x = if on { rect.right() - 11.0 } else { rect.left() + 11.0 };
+                ui.painter().circle_filled(
+                    egui::pos2(knob_x, rect.center().y),
+                    8.0,
+                    p.text,
+                );
+                resp.clone().on_hover_text("系统切深浅色时应用自动跟随");
+                if resp.clicked() {
+                    app.follow_system_theme = !app.follow_system_theme;
+                    if app.follow_system_theme {
+                        // 打开即对齐一次当前系统外观
+                        let dark = crate::system_prefers_dark();
+                        app.set_theme_dark_inner(ui.ctx(), dark);
+                    }
+                    app.save_theme_settings();
+                }
+                ui.label(
+                    RichText::new(if on { "跟随系统外观" } else { "手动(侧栏 ☀/☾ 切换)" })
+                        .size(12.0)
+                        .color(p.text2),
+                );
+            });
             theme::modal_footer(ui, |ui| {
                 if theme::button(ui, "完成", theme::BtnKind::Primary).clicked() {
                     close = true;

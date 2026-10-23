@@ -4,13 +4,22 @@ use redis::aio::MultiplexedConnection;
 use redis::AsyncCommands;
 
 async fn get_con(backend: &mut Backend) -> Result<MultiplexedConnection, String> {
-    match backend {
-        Backend::Redis(c) => {
-            // 多路复用连接;SELECT 会影响该连接,故每命令前都显式 SELECT
-            c.get_multiplexed_async_connection().await.map_err(|e| format!("Redis 连接失败: {e}"))
-        }
-        _ => Err("非 Redis 连接".into()),
+    // 缓存多路复用连接(Clone 是同一驱动任务的句柄,断线由驱动自动重连);
+    // SELECT 影响该连接,故每命令前仍显式 SELECT
+    let Backend::Redis(rs) = backend else {
+        return Err("非 Redis 连接".into());
+    };
+    let mut guard = rs.con.lock().await;
+    if let Some(con) = guard.as_ref() {
+        return Ok(con.clone());
     }
+    let con = rs
+        .client
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(|e| format!("Redis 连接失败: {e}"))?;
+    *guard = Some(con.clone());
+    Ok(con)
 }
 
 /// 键空间概览:有数据的 DB 列表

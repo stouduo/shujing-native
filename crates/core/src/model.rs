@@ -112,7 +112,14 @@ pub enum Backend {
     Sqlite(rusqlite::Connection),
     MySql(MySqlPool),
     Pg(PgPool),
-    Redis(redis::Client),
+    Redis(RedisState),
+}
+
+/// Redis 连接状态:缓存多路复用连接(MultiplexedConnection 可 Clone 且驱动任务自动重连,
+/// 此前每条命令新建一次 TCP 连接)
+pub struct RedisState {
+    pub(crate) client: redis::Client,
+    pub(crate) con: tokio::sync::Mutex<Option<redis::aio::MultiplexedConnection>>,
 }
 
 /// PostgreSQL 连接池:多条会话轮发,单会话内的串行不再阻塞其他标签页

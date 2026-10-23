@@ -87,6 +87,11 @@ pub enum TabAction {
     ReloadDesigner {
         tab_id: String,
     },
+    /// 自动补全:懒加载某表列名
+    AcLoadColumns {
+        tab_id: String,
+        table: String,
+    },
     /// 从结构页跳设计器(结构页拿不到 app,经动作中转)
     OpenDesigner {
         conn_id: String,
@@ -2504,6 +2509,38 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             });
         }
         TabAction::ReloadDesigner { tab_id } => app.load_designer_structure(&tab_id),
+        TabAction::AcLoadColumns { tab_id, table } => {
+            // 补全列名懒加载:按查询页所在连接+库拉一次结构,缓存进 ac_columns
+            let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
+                return;
+            };
+            let crate::app::TabKind::Query(q) = &tab.kind else {
+                return;
+            };
+            let conn_id = q.conn_id.clone();
+            let db = q.database.clone().or_else(|| {
+                app.trees.get(&conn_id).and_then(|t| t.expanded_db.clone())
+            });
+            let key = format!(
+                "{conn_id}|{}|{table}",
+                db.clone().unwrap_or_default()
+            );
+            if app.ac_columns.contains_key(&key) {
+                return;
+            }
+            // 占位防重复拉取
+            app.ac_columns.insert(key.clone(), vec![]);
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            net::spawn(async move {
+                let cols = service
+                    .get_table_structure(&conn_id, &table, db)
+                    .await
+                    .map(|st| st.columns.into_iter().map(|c| c.name).collect())
+                    .unwrap_or_default();
+                let _ = tx.send(BgEvent::AcColumnsDone { key, cols });
+            });
+        }
         TabAction::SaveDesigner { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
                 return;
@@ -3089,7 +3126,19 @@ impl eframe::App for ShujingApp {
         if self.theme_toggle_requested {
             self.theme_toggle_requested = false;
             let dark = !theme::is_dark();
+            // 手动切换=解除跟随系统
+            self.follow_system_theme = false;
             self.set_theme_dark(ctx, dark);
+        }
+        // 跟随系统外观:每 60 帧查一次系统值,变化才切(UserDefaults 读取不受本进程强制外观影响)
+        self.frame_count = self.frame_count.wrapping_add(1);
+        if self.follow_system_theme && self.frame_count % 60 == 0 {
+            let sys_dark = crate::system_prefers_dark();
+            if sys_dark != self.dark_mode {
+                // 跟随模式只换外观不解除跟随
+                self.set_theme_dark_inner(ctx, sys_dark);
+                self.save_theme_settings();
+            }
         }
         // 会话持久化:标签/激活位/在线数/展开库变化即标脏,1 秒节流落盘
         let sig = (
@@ -3236,6 +3285,36 @@ impl eframe::App for ShujingApp {
                 TabKind::Query(q) => {
                     let conns = self.conns.clone();
                     let snippets = self.snippets.clone();
+                    // 补全环境:当前库表名 + 已缓存的列名
+                    let ac_db = q
+                        .database
+                        .clone()
+                        .or_else(|| {
+                            self.trees
+                                .get(&q.conn_id)
+                                .and_then(|t| t.expanded_db.clone())
+                        })
+                        .or_else(|| {
+                            self.trees
+                                .get(&q.conn_id)
+                                .and_then(|t| t.databases.first().cloned())
+                        });
+                    let ac_tables: Vec<String> = ac_db
+                        .as_ref()
+                        .and_then(|db| {
+                            self.trees
+                                .get(&q.conn_id)
+                                .and_then(|t| t.tables_by_db.get(db))
+                        })
+                        .map(|v| v.iter().map(|m| m.name.clone()).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    let prefix = format!("{}|{}|", q.conn_id, ac_db.clone().unwrap_or_default());
+                    let ac_columns: std::collections::HashMap<String, Vec<String>> = self
+                        .ac_columns
+                        .iter()
+                        .filter(|(k, _)| k.starts_with(&prefix))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
                     let dbs = self
                         .trees
                         .get(&q.conn_id)
@@ -3246,7 +3325,18 @@ impl eframe::App for ShujingApp {
                         .find(|c| c.id == q.conn_id)
                         .map(|c| c.db_type == shujing_core::DbType::MySql)
                         .unwrap_or(false);
-                    query::draw_query_view(&conns, ctx, &tab_id, q, &snippets, &dbs, show_db)
+                    query::draw_query_view(
+                        &conns,
+                        ctx,
+                        &tab_id,
+                        q,
+                        &snippets,
+                        &dbs,
+                        show_db,
+                        &ac_tables,
+                        &ac_columns,
+                        ac_db.as_deref(),
+                    )
                 }
                 TabKind::Designer(d) => {
                     // 方言信息给设计器(SQL 生成用)

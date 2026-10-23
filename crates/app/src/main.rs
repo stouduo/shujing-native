@@ -79,6 +79,45 @@ pub fn force_appearance(dark: bool) {
     }
 }
 
+/// 读系统外观偏好(AppleInterfaceStyle;UserDefaults 读的是系统全局值,
+/// 不受本进程 setAppearance 强制的影响)
+#[cfg(target_os = "macos")]
+pub fn system_prefers_dark() -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass as Class, AnyObject};
+    unsafe {
+        let Some(cls) = Class::get(c"NSUserDefaults") else {
+            return false;
+        };
+        let defaults: *mut AnyObject = msg_send![cls, standardUserDefaults];
+        if defaults.is_null() {
+            return false;
+        }
+        let Some(nsstring) = Class::get(c"NSString") else {
+            return false;
+        };
+        let key: *mut AnyObject = {
+            let alloc: *mut AnyObject = msg_send![nsstring, alloc];
+            msg_send![alloc, initWithUTF8String: c"AppleInterfaceStyle".as_ptr()]
+        };
+        let style: *mut AnyObject = msg_send![defaults, stringForKey: key];
+        if style.is_null() {
+            return false; // 未设置 = 浅色
+        }
+        let dark_str: *mut AnyObject = {
+            let alloc: *mut AnyObject = msg_send![nsstring, alloc];
+            msg_send![alloc, initWithUTF8String: c"Dark".as_ptr()]
+        };
+        let is_dark: bool = msg_send![style, isEqualToString: dark_str];
+        is_dark
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn system_prefers_dark() -> bool {
+    false
+}
+
 /// 从 DMG 挂载卷直接运行时:自动安装到 /Applications 并以正式身份重启(VS Code 安装器同款)
 #[cfg(target_os = "macos")]
 fn ensure_installed_from_dmg() {

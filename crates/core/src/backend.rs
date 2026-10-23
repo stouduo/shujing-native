@@ -74,7 +74,10 @@ pub async fn connect(
                 .query_async::<String>(&mut con)
                 .await
                 .map_err(|e| format!("Redis PING 失败: {e}"))?;
-            Ok(Backend::Redis(client))
+            Ok(Backend::Redis(crate::model::RedisState {
+                client,
+                con: tokio::sync::Mutex::new(None),
+            }))
         }
         DbType::Postgres => {
             let host = req(&info.host, "缺少主机地址")?;
@@ -216,8 +219,9 @@ impl Backend {
                     .map_err(es)?;
                 Ok(if version.is_empty() { "MySQL".into() } else { version })
             }
-            Backend::Redis(client) => {
-                let mut con = client
+            Backend::Redis(rs) => {
+                let mut con = rs
+                    .client
                     .get_async_connection()
                     .await
                     .map_err(es)?;

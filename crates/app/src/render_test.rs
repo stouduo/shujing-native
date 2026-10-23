@@ -146,12 +146,15 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         dirty_override: false,
         shot: None,
         dark_mode: true,
+        follow_system_theme: false,
+        frame_count: 0,
         auto_connect_done: true,
         quick_open: None,
         stats: None,
         import: None,
         new_table: None,
         global_search: None,
+        ac_columns: Default::default(),
         confirm: None,
         snippets: vec![],
         settings_open: false,
@@ -379,7 +382,7 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         }
         TabKind::Query(q) => {
             let conns = app.conns.clone();
-            let _ = query::draw_query_view(&conns, ctx, &tab_id, q, &[], &[], false);
+            let _ = query::draw_query_view(&conns, ctx, &tab_id, q, &[], &[], false, &[], &Default::default(), None);
         }
         TabKind::Designer(d) => {
             crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
@@ -559,6 +562,7 @@ fn render_query_view() {
         q_changes: vec![],
         q_editing: None,
         q_draft: String::new(),
+        ac: None,
     };
     let rows: Vec<Vec<Option<String>>> = (0..24)
         .map(|i| {
@@ -606,7 +610,7 @@ fn render_query_view() {
     render("query", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
-        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true);
+        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true, &[], &Default::default(), None);
     });
 }
 
@@ -630,6 +634,7 @@ fn render_query_view_narrow_with_db() {
         q_changes: vec![],
         q_editing: None,
         q_draft: String::new(),
+        ac: None,
     };
     let conns = vec![shujing_core::ConnInfo {
         id: "c1".into(),
@@ -649,7 +654,7 @@ fn render_query_view_narrow_with_db() {
     render("query_narrow_db", 1024.0, 700.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
-        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true);
+        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true, &[], &Default::default(), None);
     });
 }
 
@@ -947,6 +952,7 @@ fn session_save_restore_roundtrip() {
         q_changes: vec![],
         q_editing: None,
         q_draft: String::new(),
+        ac: None,
     };
     q.sql = "SELECT id FROM backend_role_privilege".into();
     app.tabs.push(Tab {
@@ -1236,4 +1242,71 @@ fn filter_bar_clicks_work() {
         .map(|t| t.conds[0].1.clone())
         .unwrap_or_default();
     assert_eq!(conds_op, "!=", "操作符下拉应可选,实际为 {conds_op:?}");
+}
+
+#[test]
+fn render_query_autocomplete() {
+    let mut q = QueryTab {
+        conn_id: "c1".into(),
+        database: None,
+        sql: "SELECT * FROM us".into(),
+        history: vec![],
+        results: vec![],
+        active_set: 0,
+        running: false,
+        error: None,
+        optimize: None,
+        result_table: None,
+        result_db: None,
+        result_pk: vec![],
+        pk_checked: false,
+        q_changes: vec![],
+        q_editing: None,
+        q_draft: String::new(),
+        ac: Some(crate::app::AcState {
+            word: "us".into(),
+            selected: 0,
+            forced: false,
+        }),
+    };
+    let conns = vec![shujing_core::ConnInfo {
+        id: "c1".into(),
+        name: "dramato-dev".into(),
+        db_type: shujing_core::DbType::MySql,
+        host: Some("10.0.0.3".into()),
+        port: Some(3306),
+        user: Some("dev".into()),
+        password: None,
+        database: Some("dramato".into()),
+        file_path: None,
+        color: None,
+        read_only: false,
+    }];
+    let cell = std::cell::RefCell::new(Some(q));
+    let tables = vec![
+        "users".to_string(),
+        "user_logs".to_string(),
+        "user_settings".to_string(),
+    ];
+    let mut cols = std::collections::HashMap::new();
+    cols.insert(
+        "c1|dramato|users".to_string(),
+        vec!["id".to_string(), "user_name".to_string(), "status".to_string()],
+    );
+    render("query_autocomplete", 1280.0, 780.0, true, move |ctx| {
+        let mut b = cell.borrow_mut();
+        let q = b.as_mut().unwrap();
+        let _ = query::draw_query_view(
+            &conns,
+            ctx,
+            "q1",
+            q,
+            &[],
+            &[],
+            false,
+            &tables,
+            &cols,
+            Some("dramato"),
+        );
+    });
 }

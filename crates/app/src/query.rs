@@ -14,6 +14,9 @@ pub fn draw_query_view(
     snippets: &[String],
     databases: &[String],
     show_db: bool,
+    ac_tables: &[String],
+    ac_columns: &std::collections::HashMap<String, Vec<String>>,
+    ac_db: Option<&str>,
 ) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let p = theme::c();
@@ -251,9 +254,29 @@ pub fn draw_query_view(
                                 job.wrap.max_width = wrap_width;
                                 ui.fonts(|f| f.layout_job(job))
                             };
-                            ui.add(
+                            // 补全弹层打开时先消费 ↑↓/Tab/Enter/Esc,TextEdit 不再响应
+                            let te_id = egui::Id::new(format!("sql-editor-{tab_id}"));
+                            let ac_was_open = q.ac.is_some() && !is_redis;
+                            let mut ac_key: Option<egui::Key> = None;
+                            if ac_was_open {
+                                for key in [
+                                    egui::Key::ArrowDown,
+                                    egui::Key::ArrowUp,
+                                    egui::Key::Tab,
+                                    egui::Key::Enter,
+                                    egui::Key::Escape,
+                                ] {
+                                    if ui
+                                        .input_mut(|i| i.consume_key(egui::Modifiers::NONE, key))
+                                    {
+                                        ac_key = Some(key);
+                                        break;
+                                    }
+                                }
+                            }
+                            let te_resp = ui.add(
                                 egui::TextEdit::multiline(&mut q.sql)
-                                    .id_salt(format!("sql-editor-{tab_id}"))
+                                    .id(te_id)
                                     .code_editor()
                                     .frame(false)
                                     .margin(egui::Margin::ZERO)
@@ -261,7 +284,7 @@ pub fn draw_query_view(
                                         RichText::new(if is_redis {
                                             "GET key    ⌘↵ 执行命令"
                                         } else {
-                                            "SELECT / INSERT / UPDATE / DDL …    ⌘↵ 运行"
+                                            "SELECT / INSERT / UPDATE / DDL …    ⌘↵ 运行    ⌃Space 补全"
                                         })
                                         .font(theme::mono(12.0))
                                         .color(p.muted),
@@ -270,6 +293,19 @@ pub fn draw_query_view(
                                     .desired_rows(5)
                                     .layouter(&mut layouter),
                             );
+                            if !is_redis {
+                                draw_autocomplete(
+                                    ui,
+                                    &te_resp,
+                                    te_id,
+                                    tab_id,
+                                    q,
+                                    ac_tables,
+                                    ac_columns,
+                                    ac_key,
+                                    &mut actions,
+                                );
+                            }
                         });
                 });
 
@@ -676,4 +712,383 @@ fn toggle_comment(sql: &mut String, sel_a: usize, sel_b: usize) {
         }
     }
     *sql = format!("{}{}{}", &sql[..line_start], out, &sql[line_end..]);
+}
+
+// ---------------------------------------------------------------- SQL 自动补全
+
+const SQL_KEYWORDS: &[&str] = &[
+    "SELECT", "FROM", "WHERE", "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET",
+    "INSERT INTO", "VALUES", "UPDATE", "SET", "DELETE FROM", "CREATE TABLE", "ALTER TABLE",
+    "DROP TABLE", "JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "ON", "AS", "AND", "OR",
+    "NOT", "NULL", "IS NULL", "IS NOT NULL", "IN", "LIKE", "BETWEEN", "EXISTS", "DISTINCT",
+    "UNION ALL", "CASE", "WHEN", "THEN", "ELSE", "END", "COUNT(*)", "SUM(", "AVG(", "MIN(",
+    "MAX(", "PRIMARY KEY", "FOREIGN KEY", "REFERENCES", "DEFAULT", "AUTO_INCREMENT",
+    "EXPLAIN", "SHOW TABLES", "SHOW DATABASES", "DESCRIBE", "WITH",
+];
+
+/// 从光标向前扫标识符词(字母数字_$ 与点,支持 表. / 库.表. 链)
+fn current_word(chars: &[char], cursor: usize) -> (String, usize) {
+    let cursor = cursor.min(chars.len());
+    let mut start = cursor;
+    while start > 0 {
+        let c = chars[start - 1];
+        if c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.' {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    (chars[start..cursor].iter().collect(), start)
+}
+
+/// 候选:(显示文本, 类别)。类别 "…" = 不可插入的提示行
+fn build_candidates(
+    word: &str,
+    forced: bool,
+    ac_tables: &[String],
+    ac_columns: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<(String, &'static str)> {
+    let mut out: Vec<(String, &'static str)> = Vec::new();
+    if let Some(dot) = word.rfind('.') {
+        // 表.列 补全:取点前最后一段作表名,在已过滤的列缓存里找
+        let typed = &word[dot + 1..];
+        let prefix = &word[..dot];
+        let table = prefix.rsplit('.').next().unwrap_or(prefix).trim();
+        if table.is_empty() {
+            return out;
+        }
+        let cols = ac_columns
+            .iter()
+            .find(|(k, _)| k.rsplit('|').next() == Some(table))
+            .map(|(_, v)| v.clone());
+        match cols {
+            Some(cols) if !cols.is_empty() => {
+                let tl = typed.to_lowercase();
+                for c in cols {
+                    if c.to_lowercase().starts_with(&tl) {
+                        out.push((c, "列"));
+                    }
+                }
+            }
+            _ => out.push((format!("{table}.*  列名加载中…"), "…")),
+        }
+        return out;
+    }
+    let wl = word.to_lowercase();
+    if word.chars().count() >= 2 || forced {
+        for t in ac_tables {
+            if t.to_lowercase().starts_with(&wl) {
+                out.push((t.clone(), "表"));
+            }
+        }
+        for k in SQL_KEYWORDS {
+            if k.to_lowercase().starts_with(&wl)
+                && !ac_tables.iter().any(|t| t.eq_ignore_ascii_case(k))
+            {
+                out.push((k.to_string(), "关键字"));
+            }
+        }
+    }
+    out
+}
+
+/// 插入候选:按 char 下标替换 [word_start..cursor]
+fn ac_insert(
+    ctx: &egui::Context,
+    te_id: egui::Id,
+    q: &mut QueryTab,
+    word_start: usize,
+    cursor: usize,
+    repl: &str,
+) {
+    let chars: Vec<char> = q.sql.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let head: String = chars[..word_start].iter().collect();
+    let tail: String = chars[cursor..].iter().collect();
+    q.sql = format!("{head}{repl}{tail}");
+    let new_pos = word_start + repl.chars().count();
+    if let Some(mut st) = egui::TextEdit::load_state(ctx, te_id) {
+        st.cursor.set_char_range(Some(egui::text_selection::CCursorRange::one(
+            egui::text::CCursor::new(new_pos),
+        )));
+        egui::TextEdit::store_state(ctx, te_id, st);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_autocomplete(
+    ui: &mut egui::Ui,
+    te_resp: &egui::Response,
+    te_id: egui::Id,
+    tab_id: &str,
+    q: &mut QueryTab,
+    ac_tables: &[String],
+    ac_columns: &std::collections::HashMap<String, Vec<String>>,
+    ac_key: Option<egui::Key>,
+    actions: &mut Vec<TabAction>,
+) {
+    let p = theme::c();
+    let ctrl_space = ui.input(|i| i.key_pressed(egui::Key::Space) && i.modifiers.command);
+    // 读光标(TextEdit 本帧已更新 state)
+    let cursor = egui::TextEdit::load_state(ui.ctx(), te_id)
+        .and_then(|s| s.cursor.char_range())
+        .map(|r| r.primary.index)
+        .unwrap_or(0);
+    let chars: Vec<char> = q.sql.chars().collect();
+    let (word, word_start) = current_word(&chars, cursor);
+
+    // Ctrl+Space:切换强制展开
+    if ctrl_space {
+        match &mut q.ac {
+            Some(a) => {
+                a.forced = !a.forced;
+                if !a.forced && word.chars().count() < 2 {
+                    q.ac = None;
+                }
+            }
+            None => {
+                q.ac = Some(crate::app::AcState {
+                    word: word.clone(),
+                    selected: 0,
+                    forced: true,
+                });
+            }
+        }
+    }
+
+    let forced = q.ac.as_ref().map(|a| a.forced).unwrap_or(false);
+    let cands = build_candidates(&word, forced, ac_tables, ac_columns);
+    let insertable = |c: &(String, &'static str)| c.1 != "…";
+
+    // 更新弹层状态(词变了重置选中)
+    let open = forced || (word.chars().count() >= 2 && cands.iter().any(insertable));
+    if open {
+        let reset = q
+            .ac
+            .as_ref()
+            .map(|a| a.word != word || a.forced != forced)
+            .unwrap_or(true);
+        match &mut q.ac {
+            Some(a) => {
+                a.word = word.clone();
+                a.forced = forced;
+                if reset {
+                    a.selected = 0;
+                }
+            }
+            None => {
+                q.ac = Some(crate::app::AcState {
+                    word: word.clone(),
+                    selected: 0,
+                    forced,
+                });
+            }
+        }
+        let n = cands.iter().filter(|c| insertable(c)).count();
+        let sel = q.ac.as_mut().unwrap();
+        if sel.selected >= n {
+            sel.selected = 0;
+        }
+    } else {
+        q.ac = None;
+    }
+
+    // 表.列 缺缓存时请求懒加载
+    if word.contains('.') && cands.iter().any(|c| c.1 == "…") {
+        if let Some(dot) = word.rfind('.') {
+            let table = word[..dot].rsplit('.').next().unwrap_or("").trim().to_string();
+            if !table.is_empty() {
+                actions.push(TabAction::AcLoadColumns {
+                    tab_id: tab_id.to_string(),
+                    table,
+                });
+            }
+        }
+    }
+
+    // 键盘操作
+    if let (Some(key), Some(a)) = (ac_key, q.ac.as_mut()) {
+        let n = cands.iter().filter(|c| insertable(c)).count();
+        match key {
+            egui::Key::ArrowDown => a.selected = (a.selected + 1) % n.max(1),
+            egui::Key::ArrowUp => a.selected = a.selected.saturating_sub(1).max(n.saturating_sub(1)),
+            egui::Key::Escape => q.ac = None,
+            egui::Key::Enter | egui::Key::Tab => {
+                // 插入当前选中(按"可插入序号"映射回候选)
+                if let Some((idx, _)) = cands
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| insertable(c))
+                    .nth(a.selected)
+                {
+                    let repl = cands[idx].0.clone();
+                    let ws = word_start;
+                    let cur = cursor;
+                    q.ac = None;
+                    ac_insert(ui.ctx(), te_id, q, ws, cur, &repl);
+                } else {
+                    q.ac = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 渲染弹层
+    if let Some(a) = &q.ac {
+        let rows: Vec<&(String, &'static str)> = cands.iter().collect();
+        if rows.is_empty() {
+            return;
+        }
+        let pos = te_resp.rect.left_bottom() + egui::vec2(0.0, 4.0);
+        let mut insert_idx: Option<usize> = None;
+        let mut close = false;
+        egui::Area::new(egui::Id::new(("ac-popup", tab_id)))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(p.elevated)
+                    .stroke(egui::Stroke::new(1.0, p.border))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::same(6))
+                    .shadow(egui::Shadow {
+                        offset: [0, 6],
+                        blur: 18,
+                        spread: 0,
+                        color: egui::Color32::from_black_alpha(80),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_min_width(230.0);
+                        ui.set_max_width(330.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(232.0)
+                            .auto_shrink([false, false])
+                            .id_salt("ac-list")
+                            .show(ui, |ui| {
+                                let mut vi = 0usize;
+                                for (ci, (label, kind)) in rows.iter().enumerate() {
+                                    let selectable = kind != &"…";
+                                    let selected = selectable && Some(vi) == Some(a.selected);
+                                    let (rect, resp) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), 24.0),
+                                        if selectable { Sense::click() } else { Sense::hover() },
+                                    );
+                                    if selected {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            egui::CornerRadius::same(5),
+                                            p.active_row,
+                                        );
+                                    } else if resp.hovered() {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            egui::CornerRadius::same(5),
+                                            p.row_hover,
+                                        );
+                                    }
+                                    let color = if *kind == "表" {
+                                        p.accent
+                                    } else if *kind == "列" {
+                                        p.green
+                                    } else {
+                                        p.text2
+                                    };
+                                    let g = icons::text_galley(
+                                        ui.painter(),
+                                        label.clone(),
+                                        theme::mono(12.0),
+                                        Color32::PLACEHOLDER,
+                                        rect.width() - 52.0,
+                                    );
+                                    ui.painter().galley(
+                                        egui::pos2(
+                                            rect.left() + 10.0,
+                                            rect.center().y - g.size().y / 2.0,
+                                        ),
+                                        g,
+                                        color,
+                                    );
+                                    // 右缘类别
+                                    ui.painter().text(
+                                        egui::pos2(rect.right() - 10.0, rect.center().y),
+                                        egui::Align2::RIGHT_CENTER,
+                                        *kind,
+                                        egui::FontId::proportional(10.0),
+                                        p.muted,
+                                    );
+                                    if selectable {
+                                        if resp.clicked() {
+                                            insert_idx = Some(ci);
+                                        }
+                                        vi += 1;
+                                    }
+                                }
+                            });
+                        ui.label(
+                            RichText::new("↑↓ 选择 · Tab/Enter 插入 · Esc 关闭")
+                                .size(10.0)
+                                .color(p.muted),
+                        );
+                    });
+            });
+        if let Some(ci) = insert_idx {
+            let repl = rows[ci].0.clone();
+            q.ac = None;
+            ac_insert(ui.ctx(), te_id, q, word_start, cursor, &repl);
+        }
+        let _ = close;
+    }
+}
+
+#[cfg(test)]
+mod ac_tests {
+    use super::*;
+
+    fn chars(s: &str) -> Vec<char> {
+        s.chars().collect()
+    }
+
+    #[test]
+    fn word_scan_basic_and_dotted() {
+        let c = chars("SELECT * FROM us");
+        assert_eq!(current_word(&c, c.len()), ("us".into(), 14));
+        let c = chars("SELECT u.");
+        assert_eq!(current_word(&c, c.len()), ("u.".into(), 7));
+        // 库.表. 链
+        let c = chars("FROM shop.users.");
+        assert_eq!(current_word(&c, c.len()), ("shop.users.".into(), 5));
+        // 空词
+        let c = chars("SELECT ");
+        assert_eq!(current_word(&c, c.len()), (String::new(), 7));
+    }
+
+    #[test]
+    fn candidates_tables_and_keywords() {
+        let tables = vec!["users".to_string(), "user_logs".to_string()];
+        let mut cols = std::collections::HashMap::new();
+        cols.insert(
+            "c1|db|users".to_string(),
+            vec!["id".to_string(), "user_name".to_string()],
+        );
+        // 前缀 us → 两张表
+        let c = build_candidates("us", false, &tables, &cols);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0], ("users".to_string(), "表"));
+        // 前缀 US 大小写不敏感
+        assert_eq!(build_candidates("US", false, &tables, &cols).len(), 2);
+        // 词太短且未强制 → 空
+        assert!(build_candidates("u", false, &tables, &cols).is_empty());
+        // 强制空词 → 表+关键字
+        let c = build_candidates("", true, &tables, &cols);
+        assert!(c.iter().any(|(l, k)| l == "users" && *k == "表"));
+        assert!(c.iter().any(|(l, k)| l == "SELECT" && *k == "关键字"));
+        // 表.列
+        let c = build_candidates("users.id", false, &tables, &cols);
+        assert_eq!(c, vec![("id".to_string(), "列")]);
+        // 列缓存缺失 → 加载中提示(不可插入)
+        let c = build_candidates("orders.o", false, &tables, &cols);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].1, "…");
+    }
 }

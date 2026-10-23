@@ -183,6 +183,11 @@ pub enum BgEvent {
         tab_id: String,
         cols: Vec<String>,
     },
+    /// 自动补全:某表的列名(懒加载)
+    AcColumnsDone {
+        key: String,
+        cols: Vec<String>,
+    },
     /// 一次性 SQL 执行完成(导入 SQL 文件),成功提示用 msg
     SqlDone {
         msg: String,
@@ -395,6 +400,15 @@ pub struct StructureTab {
 }
 
 /// 查询标签
+/// SQL 自动补全弹层状态(每帧由光标位置重建候选,selected 跨帧保留)
+pub struct AcState {
+    /// 当前触发词(空=无触发;含 "表." 前缀时补列名)
+    pub word: String,
+    pub selected: usize,
+    /// Ctrl+Space 强制展开(空词也显示全部候选)
+    pub forced: bool,
+}
+
 pub struct QueryTab {
     pub conn_id: String,
     /// 会话库上下文(None=连接默认库;执行前 USE,避免多库连接报 No database selected)
@@ -418,6 +432,8 @@ pub struct QueryTab {
     pub q_changes: Vec<(usize, String, Option<String>)>,
     pub q_editing: Option<(usize, usize)>,
     pub q_draft: String,
+    /// SQL 自动补全(None=关闭)
+    pub ac: Option<AcState>,
 }
 
 /// 优化分析弹窗状态
@@ -752,6 +768,10 @@ pub struct ShujingApp {
     pub dirty_override: bool,
     /// 深色主题(持久化到 settings.json)
     pub dark_mode: bool,
+    /// 跟随系统外观(手动切换主题会自动解除)
+    pub follow_system_theme: bool,
+    /// 帧计数(跟随系统外观的低频轮询用)
+    pub frame_count: u64,
     pub auto_connect_done: bool,
     pub quick_open: Option<QuickOpen>,
     pub stats: Option<(
@@ -762,6 +782,8 @@ pub struct ShujingApp {
     pub import: Option<ImportState>,
     pub new_table: Option<NewTableState>,
     pub global_search: Option<GlobalSearchState>,
+    /// SQL 自动补全的列名缓存(键 "conn|db|table",懒加载)
+    pub ac_columns: std::collections::HashMap<String, Vec<String>>,
     pub confirm: Option<ConfirmState>,
     /// 会话持久化
     pub snippets: Vec<String>,
@@ -807,10 +829,18 @@ impl ShujingApp {
             conns.len()
         );
         let (event_tx, events) = std::sync::mpsc::channel();
-        let dark = Self::load_dark_pref(&config_dir);
-        let accent = std::fs::read_to_string(config_dir.join("settings.json"))
+        let mut dark = Self::load_dark_pref(&config_dir);
+        let settings = std::fs::read_to_string(config_dir.join("settings.json"))
             .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let follow_system = settings
+            .as_ref()
+            .and_then(|v| v.get("followSystem").and_then(|f| f.as_bool()))
+            .unwrap_or(false);
+        if follow_system {
+            dark = crate::system_prefers_dark();
+        }
+        let accent = settings
             .and_then(|v| v.get("accent").and_then(|a| a.as_u64()))
             .unwrap_or(0) as usize;
         crate::theme::set_accent(accent);
@@ -840,6 +870,7 @@ impl ShujingApp {
             import: None,
             new_table: None,
             global_search: None,
+            ac_columns: Default::default(),
             confirm: None,
             snippets,
             settings_open: false,
@@ -852,6 +883,8 @@ impl ShujingApp {
             pending_expanded: HashMap::new(),
             last_session_sig: (0, 0, false, 0, vec![]),
             dark_mode: dark,
+            follow_system_theme: follow_system,
+            frame_count: 0,
             auto_connect_done: false,
             shot: std::env::var("SHUJING_SCREENSHOT")
                 .ok()
@@ -1068,15 +1101,26 @@ impl ShujingApp {
     }
 
     pub fn set_theme_dark(&mut self, ctx: &egui::Context, dark: bool) {
+        self.set_theme_dark_inner(ctx, dark);
+        self.save_theme_settings();
+    }
+
+    pub fn set_theme_dark_inner(&mut self, ctx: &egui::Context, dark: bool) {
         self.dark_mode = dark;
         crate::theme::set_dark(dark);
         crate::theme::apply(ctx);
-        let path = self.config_dir.join("settings.json");
-        let json =
-            serde_json::json!({ "dark": dark, "accent": crate::theme::accent_idx() }).to_string();
-        let _ = std::fs::write(path, json);
         #[cfg(target_os = "macos")]
         crate::force_appearance(dark);
+    }
+
+    pub fn save_theme_settings(&self) {
+        let path = self.config_dir.join("settings.json");
+        let json = serde_json::json!({
+            "dark": self.dark_mode,
+            "accent": crate::theme::accent_idx(),
+            "followSystem": self.follow_system_theme,
+        });
+        let _ = std::fs::write(path, json.to_string());
     }
 
     /// 自截图:每帧驱动重绘;表数据就绪后延时 20 帧(字体/布局稳定)请求截图,
@@ -1555,7 +1599,8 @@ impl ShujingApp {
         }
     }
 
-    /// SCAN 后批量拉类型 + TTL 徽标
+    /// SCAN 后批量拉类型 + TTL 徽标(增量:只拉还没有类型的 key,
+    /// "继续扫描"累计超过首批后新增 key 也能拿到徽标)
     pub fn redis_fetch_badges(&mut self, tab_id: &str) {
         let tab_id = tab_id.to_string();
         let tx = self.event_tx.clone();
@@ -1566,7 +1611,13 @@ impl ShujingApp {
         let TabKind::Redis(rt) = &tab.kind else {
             return;
         };
-        let keys: Vec<String> = rt.keys.iter().take(200).cloned().collect();
+        let keys: Vec<String> = rt
+            .keys
+            .iter()
+            .filter(|k| !rt.key_types.contains_key(*k))
+            .take(200)
+            .cloned()
+            .collect();
         if keys.is_empty() {
             return;
         }
@@ -1660,6 +1711,7 @@ impl ShujingApp {
                 q_changes: vec![],
                 q_editing: None,
                 q_draft: String::new(),
+                ac: None,
             }),
         });
         self.active_tab = self.tabs.len() - 1;
@@ -2404,6 +2456,7 @@ impl ShujingApp {
                             q_changes: vec![],
                             q_editing: None,
                             q_draft: String::new(),
+                            ac: None,
                         }),
                     });
                 }
@@ -3102,11 +3155,14 @@ impl ShujingApp {
                             if reset {
                                 rt.keys = keys;
                             } else {
-                                for k in keys {
-                                    if !rt.keys.contains(&k) {
-                                        rt.keys.push(k);
-                                    }
-                                }
+                                // HashSet 去重追加(此前 Vec::contains 逐个线性扫,O(n²))
+                                let known: std::collections::HashSet<String> =
+                                    rt.keys.iter().cloned().collect();
+                                let fresh: Vec<String> = keys
+                                    .into_iter()
+                                    .filter(|k| !known.contains(k))
+                                    .collect();
+                                rt.keys.extend(fresh);
                             }
                             self.redis_fetch_badges(&tab_id);
                         }
@@ -3254,6 +3310,9 @@ impl ShujingApp {
                         Ok(plan) => o.plan = Some(plan),
                         Err(e) => o.error = Some(e),
                     }
+                }
+                BgEvent::AcColumnsDone { key, cols } => {
+                    self.ac_columns.insert(key, cols);
                 }
                 BgEvent::QueryPkDone { tab_id, cols } => {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
