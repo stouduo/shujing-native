@@ -3,15 +3,60 @@ use crate::model::{es, Backend, ConnInfo, DbType};
 use redis::aio::MultiplexedConnection;
 use redis::AsyncCommands;
 
-async fn get_con(backend: &mut Backend) -> Result<MultiplexedConnection, String> {
+/// 命令句柄:Deref 到多路复用连接;持有期间独占串行锁
+pub(crate) struct RedisHandle<'a> {
+    pub con: MultiplexedConnection,
+    _serialize: tokio::sync::MutexGuard<'a, ()>,
+}
+
+impl redis::aio::ConnectionLike for RedisHandle<'_> {
+    fn req_packed_command<'a>(
+        &'a mut self,
+        cmd: &'a redis::Cmd,
+    ) -> redis::RedisFuture<'a, redis::Value> {
+        self.con.req_packed_command(cmd)
+    }
+
+    fn req_packed_commands<'a>(
+        &'a mut self,
+        cmd: &'a redis::Pipeline,
+        offset: usize,
+        count: usize,
+    ) -> redis::RedisFuture<'a, Vec<redis::Value>> {
+        self.con.req_packed_commands(cmd, offset, count)
+    }
+
+    fn get_db(&self) -> i64 {
+        self.con.get_db()
+    }
+}
+
+impl std::ops::Deref for RedisHandle<'_> {
+    type Target = MultiplexedConnection;
+    fn deref(&self) -> &Self::Target {
+        &self.con
+    }
+}
+
+impl std::ops::DerefMut for RedisHandle<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.con
+    }
+}
+
+async fn get_con<'a>(backend: &'a mut Backend) -> Result<RedisHandle<'a>, String> {
     // 缓存多路复用连接(Clone 是同一驱动任务的句柄,断线由驱动自动重连);
-    // SELECT 影响该连接,故每命令前仍显式 SELECT
+    // SELECT 影响该共享连接,先拿串行锁保证 SELECT+命令成对执行
     let Backend::Redis(rs) = backend else {
         return Err("非 Redis 连接".into());
     };
+    let serialize = rs.op_lock.lock().await;
     let mut guard = rs.con.lock().await;
     if let Some(con) = guard.as_ref() {
-        return Ok(con.clone());
+        return Ok(RedisHandle {
+            con: con.clone(),
+            _serialize: serialize,
+        });
     }
     let con = rs
         .client
@@ -19,7 +64,10 @@ async fn get_con(backend: &mut Backend) -> Result<MultiplexedConnection, String>
         .await
         .map_err(|e| format!("Redis 连接失败: {e}"))?;
     *guard = Some(con.clone());
-    Ok(con)
+    Ok(RedisHandle {
+        con,
+        _serialize: serialize,
+    })
 }
 
 /// 键空间概览:有数据的 DB 列表

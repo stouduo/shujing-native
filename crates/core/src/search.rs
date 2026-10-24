@@ -35,8 +35,9 @@ pub async fn search_tables(
     let mysql = info.db_type == crate::model::DbType::MySql;
     let pg = info.db_type == crate::model::DbType::Postgres;
     let like_op = if pg { "ILIKE" } else { "LIKE" };
-    // SQL 字面量转义
-    let lit = format!("'%{}%'", kw.replace('\'', "''"));
+    // SQL 字面量转义;LIKE 通配符一并转义(否则 % 会额外匹配、白占每表 5 行预算)
+    let escaped = kw.replace('\'', "''").replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let lit = format!("'%{escaped}%'");
     let kw_lower = kw.to_lowercase();
 
     let tables = backend.list_tables_in(info, database).await?;
@@ -54,12 +55,24 @@ pub async fn search_tables(
         if st.columns.is_empty() {
             continue;
         }
+        // PG:数值/日期列 ILIKE 直接报 42883,整表被跳过——只对文本类型列拼条件
+        let text_like = |c: &crate::model::ColumnDef| -> bool {
+            if !pg {
+                return true;
+            }
+            let t = c.data_type.to_lowercase();
+            t.contains("char") || t.contains("text") || t.contains("uuid") || t.contains("name")
+        };
         let conds = st
             .columns
             .iter()
+            .filter(|c| text_like(c))
             .map(|c| format!("{} {} {}", quote(&c.name, mysql), like_op, lit))
             .collect::<Vec<_>>()
             .join(" OR ");
+        if conds.is_empty() {
+            continue;
+        }
         // 多库连接必须带库限定,否则裸表名在无默认库时报 No database selected
         let full = match database.map(str::trim).filter(|s| !s.is_empty()) {
             Some(db) => format!("{}.{}", quote(db, mysql), quote(&t.name, mysql)),

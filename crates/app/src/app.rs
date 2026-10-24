@@ -122,8 +122,14 @@ pub enum BgEvent {
     ImportDone {
         result: Result<usize, String>,
     },
+    /// CSV 导入:目标表列回填
+    ImportColsDone {
+        cols: Vec<String>,
+    },
     DdlDone {
         result: Result<(), String>,
+        /// 操作描述(用于成功提示;空=创建表路径)
+        msg: String,
     },
     /// 设计器编辑模式:初始结构拉取完成
     DesignerLoaded {
@@ -218,9 +224,9 @@ pub struct QuickOpen {
     pub sel: usize,
 }
 
-/// 表统计弹窗键
-pub fn stats_key(conn: &str, table: &str) -> String {
-    format!("{conn}/{table}")
+/// 表统计弹窗键(带库:同连接不同库的同名表不串台)
+pub fn stats_key(conn: &str, database: &str, table: &str) -> String {
+    format!("{conn}/{database}/{table}")
 }
 
 /// CSV 导入状态
@@ -230,6 +236,8 @@ pub struct ImportState {
     pub table: String,
     pub path: String,
     pub headers: Vec<String>,
+    /// 导入进行中(防重复提交,完成前禁用按钮)
+    pub running: bool,
     /// 源列 -> 目标表列索引(None=跳过)
     pub col_map: Vec<Option<usize>>,
     pub batch_errors: Option<String>,
@@ -3010,7 +3018,18 @@ impl ShujingApp {
                         }
                     }
                 }
-                BgEvent::ImportDone { result } => match result {
+                BgEvent::ImportColsDone { cols } => {
+                    if let Some(im) = self.import.as_mut() {
+                        if im.target_cols.is_empty() && !cols.is_empty() {
+                            im.target_cols = cols;
+                        }
+                    }
+                }
+                BgEvent::ImportDone { result } => {
+                    if let Some(im) = self.import.as_mut() {
+                        im.running = false;
+                    }
+                    match result {
                     Ok(n) => {
                         self.import = None;
                         self.toast_error(format!("已导入 {n} 行"));
@@ -3032,11 +3051,17 @@ impl ShujingApp {
                             self.toast_error(format!("导入失败: {e}"));
                         }
                     }
+                    }
                 },
-                BgEvent::DdlDone { result } => match result {
+                BgEvent::DdlDone { result, msg } => match result {
                     Ok(()) => {
-                        self.new_table = None;
-                        self.toast_error("创建成功".to_string()); // 重新载入所有在线树的表
+                        // 建表路径(msg 空)关新建表弹窗;其余 DDL 用各自的操作名做提示
+                        if msg.is_empty() {
+                            self.new_table = None;
+                            self.toast_error("创建成功".to_string());
+                        } else {
+                            self.toast_error(format!("{msg}成功"));
+                        } // 重新载入所有在线树的表
                         let ids: Vec<String> = self.trees.keys().cloned().collect();
                         for cid in ids {
                             let dbs = self
@@ -3364,18 +3389,22 @@ pub fn mysql_quote(conns: &[ConnInfo], conn_id: &str) -> bool {
         .iter()
         .find(|c| c.id == conn_id)
         .map(|c| c.db_type == shujing_core::DbType::MySql)
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 /// 全列 LIKE 筛选:列名按方言引注,值转义单引号
 pub fn build_like_filter(columns: &[String], query: &str, mysql: bool) -> String {
     let escaped = query.replace('\'', "''");
     let pattern = format!("'%{escaped}%'");
-    columns
-        .iter()
-        .map(|c| format!("{} LIKE {}", quote_ident_by(c, mysql), pattern))
-        .collect::<Vec<_>>()
-        .join(" OR ")
+    // 整体加括号:与筛选栏条件 AND 拼接时,无括号的 OR 串会被 SQL 优先级改写语义
+    format!(
+        "({})",
+        columns
+            .iter()
+            .map(|c| format!("{} LIKE {}", quote_ident_by(c, mysql), pattern))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    )
 }
 
 /// 筛选栏条件 → WHERE 片段(数字裸值,其余引号转义;自由模式原文并入)
@@ -3399,7 +3428,7 @@ pub fn build_cond_where(
         if v.is_empty() {
             continue;
         }
-        let literal = if v.parse::<f64>().is_ok() && op != "LIKE" {
+        let literal = if v.parse::<f64>().map(|f| f.is_finite()).unwrap_or(false) && op != "LIKE" {
             v.to_string()
         } else {
             // LIKE 语义 = 包含:两侧补通配符(用户自带 % 则原样保留)
@@ -3542,6 +3571,9 @@ impl ShujingApp {
         let Some(im) = self.import.as_ref() else {
             return;
         };
+        if im.running {
+            return; // 导入进行中,忽略重复提交
+        }
         let col_map: Vec<(usize, String)> = im
             .col_map
             .iter()
@@ -3563,6 +3595,9 @@ impl ShujingApp {
             Some(c) => c.clone(),
             None => return,
         };
+        if let Some(im) = self.import.as_mut() {
+            im.running = true;
+        }
         let service = self.service.clone();
         let tx = self.event_tx.clone();
         crate::net::spawn(async move {
@@ -3575,7 +3610,7 @@ impl ShujingApp {
 impl ShujingApp {
     /// 打开表统计弹窗并异步取数
     pub fn open_stats(&mut self, conn_id: &str, database: &str, table: &str) {
-        let key = crate::app::stats_key(conn_id, table);
+        let key = crate::app::stats_key(conn_id, database, table);
         self.stats = Some((key.clone(), None, None));
         let Some(info) = self.conns.iter().find(|c| c.id == conn_id).cloned() else {
             return;
@@ -3614,22 +3649,37 @@ impl ShujingApp {
                     })
                     .map(|tt| tt.columns.clone())
             })
-            .or_else(|| {
-                self.tabs
-                    .iter()
-                    .find_map(|t| t.table_data().map(|tt| tt.columns.clone()))
-            })
             .unwrap_or_default();
+        // 目标表标签未打开时异步拉结构回填(此前兜底抓"任意表标签"的列,映射会指错列)
         self.import = Some(ImportState {
             conn_id: conn_id.to_string(),
             database: Some(database.to_string()),
             table: table.to_string(),
             path: path.display().to_string(),
             headers: Vec::new(),
+            running: false,
             col_map: Vec::new(),
             batch_errors: None,
-            target_cols,
+            target_cols: target_cols.clone(),
         });
+        if target_cols.is_empty() {
+            // 目标表标签未打开:异步拉结构回填列映射候选
+            let (tx, service, cid, db, tbl) = (
+                self.event_tx.clone(),
+                self.service.clone(),
+                conn_id.to_string(),
+                database.to_string(),
+                table.to_string(),
+            );
+            crate::net::spawn(async move {
+                let cols = service
+                    .get_table_structure(&cid, &tbl, Some(db.clone()))
+                    .await
+                    .map(|st| st.columns.into_iter().map(|c| c.name).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                let _ = tx.send(BgEvent::ImportColsDone { cols });
+            });
+        }
     }
 }
 

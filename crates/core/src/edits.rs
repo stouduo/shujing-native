@@ -10,14 +10,10 @@ pub struct CellUpdate {
 }
 
 /// 供组合模块引用的标识符引注(mysql=反引号,其余双引号)
-pub fn quote_ident_pub(database: &Option<String>, name: &str) -> String {
+pub fn quote_ident_pub(database: &Option<String>, name: &str, mysql: bool) -> String {
     match database {
-        Some(db) => format!(
-            "{}.{}",
-            quote(db, false),
-            quote(name, false)
-        ),
-        None => quote(name, false),
+        Some(db) => format!("{}.{}", quote(db, mysql), quote(name, mysql)),
+        None => quote(name, mysql),
     }
 }
 
@@ -37,9 +33,14 @@ fn quote(name: &str, mysql: bool) -> String {
     }
 }
 
-/// 字符串字面量(统一加引号,三库都能隐式接受数字/日期文本)
-fn literal(v: &str) -> String {
-    format!("'{}'", v.replace('\'', "''"))
+/// 字符串字面量(统一加引号,三库都能隐式接受数字/日期文本;
+/// MySQL 默认把反斜杠当转义符,须同时双写,否则尾部反斜杠会吃掉收尾引号)
+fn literal(v: &str, mysql: bool) -> String {
+    let mut out = v.replace('\'', "''");
+    if mysql {
+        out = out.replace('\\', "\\\\");
+    }
+    format!("'{out}'")
 }
 
 fn where_of(pk: &[(String, String)], mysql: bool) -> Result<String, String> {
@@ -48,7 +49,7 @@ fn where_of(pk: &[(String, String)], mysql: bool) -> Result<String, String> {
     }
     Ok(pk
         .iter()
-        .map(|(c, v)| format!("{} = {}", quote(c, mysql), literal(v)))
+        .map(|(c, v)| format!("{} = {}", quote(c, mysql), literal(v, mysql)))
         .collect::<Vec<_>>()
         .join(" AND "))
 }
@@ -75,7 +76,7 @@ pub async fn apply_changes(
             .sets
             .iter()
             .map(|(c, v)| match v {
-                Some(s) => format!("{} = {}", quote(c, mysql), literal(s)),
+                Some(s) => format!("{} = {}", quote(c, mysql), literal(s, mysql)),
                 None => format!("{} = NULL", quote(c, mysql)),
             })
             .collect::<Vec<_>>()
@@ -94,7 +95,7 @@ pub async fn apply_changes(
             continue;
         }
         let cols = ins.iter().map(|(c, _)| quote(c, mysql)).collect::<Vec<_>>().join(", ");
-        let vals = ins.iter().map(|(_, v)| literal(v)).collect::<Vec<_>>().join(", ");
+        let vals = ins.iter().map(|(_, v)| literal(v, mysql)).collect::<Vec<_>>().join(", ");
         let sql = format!("INSERT INTO {} ({}) VALUES ({})", table, cols, vals);
         affected += backend.run_one(&sql, 1).await?.affected.max(0);
     }

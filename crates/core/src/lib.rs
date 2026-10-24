@@ -262,8 +262,12 @@ impl Service {
         if let Some(db) = db.map(str::trim).filter(|s| !s.is_empty()) {
             guard.backend.set_session_db(Some(db));
         }
-        if guard.info.read_only && !model::is_readonly_sql(&sql) {
-            return Err("只读连接:仅允许 SELECT/WITH/EXPLAIN/SHOW/DESCRIBE/PRAGMA".into());
+        if guard.info.read_only {
+            // 多语句逐条校验:此前只看整体前缀,`SELECT 1; DROP TABLE t` 能绕过
+            let stmts = exec::split_statements(&sql);
+            if stmts.is_empty() || stmts.iter().any(|s| !model::is_readonly_sql(s)) {
+                return Err("只读连接:仅允许 SELECT/SHOW/EXPLAIN/查询型 PRAGMA".into());
+            }
         }
         let max_rows = max_rows.unwrap_or(exec::DEFAULT_MAX_ROWS);
         match guard

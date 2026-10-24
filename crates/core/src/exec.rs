@@ -47,12 +47,16 @@ fn one(columns: Vec<String>, rows: Vec<Vec<Option<String>>>, truncated: bool, af
 
 /// 按分号拆分多语句,正确跳过字符串/标识符引号、注释,以及
 /// BEGIN...END 块内的分号(触发器/存储过程体)。
-fn split_statements(sql: &str) -> Vec<String> {
+/// 多语句切分(字符串/注释内的分号保护);pub 供只读拦截逐条校验
+pub fn split_statements(sql: &str) -> Vec<String> {
     let cs: Vec<char> = sql.chars().collect();
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quote = '\0';
     let mut depth: i32 = 0;
+    // 过程体上下文:CREATE TRIGGER/PROCEDURE/FUNCTION 之后的 BEGIN..END 块
+    let mut in_routine = false;
+    let mut pending_routine = false;
     let mut i = 0;
     while i < cs.len() {
         let c = cs[i];
@@ -75,10 +79,34 @@ fn split_statements(sql: &str) -> Vec<String> {
                 w.push(cs[i]);
                 i += 1;
             }
-            match w.to_ascii_uppercase().as_str() {
-                "BEGIN" => depth += 1,
-                "END" => depth = (depth - 1).max(0),
-                _ => {}
+            let upper = w.to_ascii_uppercase();
+            if in_routine {
+                // 存储过程/触发器体内:BEGIN..END / CASE..END / IF..END IF / LOOP..END LOOP
+                // 每个开场对应一个 END(表达式里的 IF() 函数没有 END,不受影响)
+                match upper.as_str() {
+                    "BEGIN" | "CASE" | "IF" | "LOOP" | "WHILE" | "REPEAT" => depth += 1,
+                    "END" => {
+                        depth = (depth - 1).max(0);
+                        // 过程体闭合:回到普通语句模式(同脚本后续 BEGIN 是事务)
+                        if depth == 0 {
+                            in_routine = false;
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                match upper.as_str() {
+                    // CREATE TRIGGER/PROCEDURE/FUNCTION 进入"过程体"上下文,
+                    // 之后第一个 BEGIN 开始按块计数
+                    "CREATE" => pending_routine = true,
+                    // 事务 BEGIN/COMMIT 是普通语句边界,不再粘连后续语句
+                    _ => {}
+                }
+                if pending_routine && upper == "BEGIN" {
+                    depth += 1;
+                    in_routine = true;
+                    pending_routine = false;
+                }
             }
             cur.push_str(&w);
             continue;
@@ -114,6 +142,7 @@ fn split_statements(sql: &str) -> Vec<String> {
                     out.push(t.to_string());
                 }
                 cur.clear();
+                pending_routine = false;
             }
             _ => cur.push(c),
         }
@@ -138,7 +167,6 @@ fn run_sqlite(conn: &rusqlite::Connection, sql: &str, max: usize) -> Result<Vec<
             if !r.columns.is_empty() {
                 budget = budget.saturating_sub(r.rows.len());
             }
-            r.elapsed_ms = 0;
             results.push(r);
         }
         let elapsed = started.elapsed().as_millis() as u64;
@@ -215,7 +243,11 @@ async fn run_mysql_single(conn: &mut mysql_async::Conn, sql: &str, max: usize) -
         result
             .for_each(|row| {
                 if out.len() < max {
-                    out.push(row.unwrap().iter().map(fmt_mysql_value).collect());
+                    out.push(
+                        (0..row.len())
+                            .map(|i| row.as_ref(i).and_then(|v| fmt_mysql_value(v)))
+                            .collect(),
+                    );
                 } else {
                     truncated = true;
                 }
@@ -245,7 +277,6 @@ async fn run_mysql(conn: &mut mysql_async::Conn, sql: &str, max: usize) -> Resul
             if !r.columns.is_empty() {
                 budget = budget.saturating_sub(r.rows.len());
             }
-            r.elapsed_ms = 0;
             results.push(r);
         }
         let elapsed = started.elapsed().as_millis() as u64;
@@ -378,5 +409,35 @@ impl Backend {
             });
         }
         Ok(results.remove(0))
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+
+    #[test]
+    fn transaction_begin_does_not_glue() {
+        // 事务 BEGIN 此前被当块开头,整段粘成一条导致结果集丢失
+        let ss = split_statements("BEGIN; UPDATE t SET a=1; COMMIT; SELECT 2;");
+        assert_eq!(ss.len(), 4, "{ss:?}");
+        assert_eq!(ss[3], "SELECT 2");
+    }
+
+    #[test]
+    fn routine_body_kept_intact() {
+        let sql = "CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW BEGIN INSERT INTO log VALUES (1); END; SELECT 1;";
+        let ss = split_statements(sql);
+        assert_eq!(ss.len(), 2, "{ss:?}");
+        assert!(ss[0].starts_with("CREATE TRIGGER"), "{ss:?}");
+        assert!(ss[0].contains("INSERT INTO log"));
+        assert_eq!(ss[1], "SELECT 1");
+    }
+
+    #[test]
+    fn string_semicolon_protected() {
+        let ss = split_statements("SELECT 'a;b'; SELECT 2");
+        assert_eq!(ss.len(), 2);
+        assert_eq!(ss[0], "SELECT 'a;b'");
     }
 }

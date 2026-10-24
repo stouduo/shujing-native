@@ -1125,8 +1125,10 @@ pub(crate) fn draw_table_view(
                                 ));
                             }
                         });
-                    // 回车应用
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.command) {
+                    // 回车应用(单元格编辑中不抢 Enter)
+                    if tab.editing.is_none()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.command)
+                    {
                         actions.push(TabAction::ApplyFilterBar {
                             tab_id: tab_id_s.clone(),
                         });
@@ -1329,6 +1331,13 @@ pub(crate) fn draw_table_view(
                     tab_id: tab_id_s.clone(),
                 });
             }
+            // 可视列 → 全量列映射(网格事件里的列下标都是可视下标)
+            let vis_idx: Vec<usize> = columns
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| !tab.hidden_cols.contains(c))
+                .map(|(i, _)| i)
+                .collect();
             if col_clear_sort {
                 *sort = None;
                 actions.push(TabAction::Reload {
@@ -1358,9 +1367,12 @@ pub(crate) fn draw_table_view(
             if copy_text.is_none() && editing.is_none() {
                 if let Some((sr, sc)) = *selected {
                     if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) {
+                        // selected 存的是可视列下标,须映射回全量列(隐藏列存在时两者不同)
+                        let full_sc = vis_idx.get(sc).copied().unwrap_or(sc);
                         if let Some(r) = rows.get(sr) {
-                            if let Some(v) = r.get(sc) {
-                                copy_text = v.clone();
+                            if let Some(v) = r.get(full_sc) {
+                                // NULL 单元格复制为 "NULL" 文本(此前静默不复制)
+                                copy_text = Some(v.clone().unwrap_or_else(|| "NULL".into()));
                             }
                         }
                     }
@@ -1381,16 +1393,26 @@ pub(crate) fn draw_table_view(
                     page: 1,
                 });
             }
+            // 网格内 ci 是可视列下标:映射回全量列,否则隐藏列存在时写错列(数据损坏级)
             if let Some((ri, ci, val)) = commit {
-                let col_name = columns[ci].clone();
-                let new_val = (!val.is_empty()).then_some(val);
-                rows[ri][ci] = new_val.clone();
-                changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
-                changes.push((ri, col_name, new_val));
+                let full_ci = vis_idx.get(ci).copied().unwrap_or(ci);
+                let col_name = columns[full_ci].clone();
+                // 与原值相同不记改动(此前双击后原样回车也会产生假"未保存 1 处")
+                let unchanged = rows[ri][full_ci].as_deref() == Some(val.as_str())
+                    || (rows[ri][full_ci].is_none() && val.is_empty());
+                if unchanged {
+                    changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
+                } else {
+                    let new_val = (!val.is_empty()).then_some(val);
+                    rows[ri][full_ci] = new_val.clone();
+                    changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
+                    changes.push((ri, col_name, new_val));
+                }
             }
             if let Some((ri, ci)) = set_null {
-                let col_name = columns[ci].clone();
-                rows[ri][ci] = None;
+                let full_ci = vis_idx.get(ci).copied().unwrap_or(ci);
+                let col_name = columns[full_ci].clone();
+                rows[ri][full_ci] = None;
                 changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
                 changes.push((ri, col_name, None));
             }
@@ -1775,8 +1797,15 @@ fn draw_data_table(
         });
     })
     .body(|body| {
-        // 行悬停:由行号列的 y 波段判定,整行单元格共享
-        let mut row_band: Option<(f32, f32)> = None;
+        // 行悬停:每格用自身矩形判定(同行的格共享同一 y 波段);
+        // 此前跨行累积并集会把悬停行下方全部行点亮
+        let hovers = |rect: egui::Rect| {
+            pointer
+                .map(|pt| {
+                    pt.y >= rect.top() && pt.y < rect.bottom() && pt.x >= table_left && pt.x <= table_right
+                })
+                .unwrap_or(false)
+        };
         body.rows(theme::ROW_H, rows.len(), |mut row| {
             let ri = row.index();
             let rowdata = &rows[ri];
@@ -1786,19 +1815,8 @@ fn draw_data_table(
             let mut hovered = false;
             if show_rowno {
                 row.col(|ui| {
-                    let band =
-                        row_band.get_or_insert((ui.max_rect().top(), ui.max_rect().bottom()));
-                    band.0 = band.0.min(ui.max_rect().top());
-                    band.1 = band.1.max(ui.max_rect().bottom());
-                    hovered = pointer
-                        .map(|pt| {
-                            pt.y >= band.0
-                                && pt.y < band.1
-                                && pt.x >= table_left
-                                && pt.x <= table_right
-                        })
-                        .unwrap_or(false);
                     let rect = ui.max_rect();
+                    hovered = hovers(rect);
                     if row_selected {
                         ui.painter().rect_filled(rect, 0, p.selected_row);
                     } else if hovered {
@@ -1866,6 +1884,7 @@ fn draw_data_table(
                     let v = &rowdata[ci];
                     let is_sel = matches!(*selected, Some((sr, sc)) if sr == ri && sc == ci);
                     row.col(|ui| {
+                        hovered = hovers(ui.max_rect());
                         draw_data_cell(
                             ui,
                             v,
@@ -1897,6 +1916,7 @@ fn draw_data_table(
             }
             // 末尾占位列:延续行背景/悬停/选中和行线
             row.col(|ui| {
+                hovered = hovers(ui.max_rect());
                 let rect = ui.max_rect();
                 if row_selected {
                     ui.painter().rect_filled(rect, 0, p.selected_row);
@@ -2224,7 +2244,10 @@ fn app_tabs_set_saving(app: &mut ShujingApp, tab_id: &str, saving: bool) {
 fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabAction) {
     // 未保存修改防护:会重载数据的动作先拦截
     let tab_id_for_gate = match &action {
-        TabAction::Reload { tab_id } | TabAction::SetPage { tab_id, .. } => Some(tab_id.clone()),
+        TabAction::Reload { tab_id }
+        | TabAction::SetPage { tab_id, .. }
+        | TabAction::ApplyFilterBar { tab_id }
+        | TabAction::ClearFilterBar { tab_id } => Some(tab_id.clone()),
         _ => None,
     };
     if let Some(tid) = tab_id_for_gate {
@@ -2317,6 +2340,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 return;
             }
             let mut updates = Vec::new();
+            let mut skipped_empty_pk = 0usize;
             for (ri, col, val) in &t.changes {
                 let Some(row) = t.rows.get(*ri) else { continue };
                 let pk: Vec<(String, String)> = pk_idxs
@@ -2324,6 +2348,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                     .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
                     .collect();
                 if pk.iter().any(|(_, v)| v.is_empty()) {
+                    skipped_empty_pk += 1;
                     continue;
                 }
                 updates.push(shujing_core::edits::CellUpdate {
@@ -2331,13 +2356,18 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                     sets: vec![(col.clone(), val.clone())],
                 });
             }
-            if updates.is_empty() {
-                app.toast_error("没有可保存的修改".to_string());
-                return;
-            }
             let conn_id = t.conn_id.clone();
             let table = t.table.clone();
             let database = t.database.clone();
+            if skipped_empty_pk > 0 {
+                app.toast_error(format!("跳过 {skipped_empty_pk} 行(主键值为空,无法定位)"));
+            }
+            if updates.is_empty() {
+                if skipped_empty_pk == 0 {
+                    app.toast_error("没有可保存的修改".to_string());
+                }
+                return;
+            }
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             net::spawn(async move {
@@ -3132,12 +3162,16 @@ impl eframe::App for ShujingApp {
         }
         // 跟随系统外观:每 60 帧查一次系统值,变化才切(UserDefaults 读取不受本进程强制外观影响)
         self.frame_count = self.frame_count.wrapping_add(1);
-        if self.follow_system_theme && self.frame_count % 60 == 0 {
-            let sys_dark = crate::system_prefers_dark();
-            if sys_dark != self.dark_mode {
-                // 跟随模式只换外观不解除跟随
-                self.set_theme_dark_inner(ctx, sys_dark);
-                self.save_theme_settings();
+        if self.follow_system_theme {
+            // 空闲时也保持约每秒一帧,轮询才能推进
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            if cfg!(target_os = "macos") && self.frame_count % 60 == 0 {
+                let sys_dark = crate::system_prefers_dark();
+                if sys_dark != self.dark_mode {
+                    // 跟随模式只换外观不解除跟随
+                    self.set_theme_dark_inner(ctx, sys_dark);
+                    self.save_theme_settings();
+                }
             }
         }
         // 会话持久化:标签/激活位/在线数/展开库变化即标脏,1 秒节流落盘
@@ -3174,17 +3208,27 @@ impl eframe::App for ShujingApp {
         if ui_input_new_query(ctx) {
             self.open_query_tab(None);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command) {
+        // 弹窗打开时屏蔽全局快捷键(输入框打字时 ⌘W/⌘S/⌘F 不应作用于底层界面)
+        let modal_open = self.confirm.is_some()
+            || self.pending.is_some()
+            || self.quick_open.is_some()
+            || self.import.is_some()
+            || self.new_table.is_some()
+            || self.conn_modal.is_some()
+            || self.global_search.is_some()
+            || self.settings_open
+            || self.db_filter.is_some();
+        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command) {
             if self.conn_modal.is_none() {
                 self.conn_modal = Some(ConnModal::new());
             }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.command)
+        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.command)
             && !self.tabs.is_empty()
         {
             self.close_tab(self.active_tab);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.command)
+        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.command)
             && !self.tabs.is_empty()
         {
             let id = self.tabs[self.active_tab].id.clone();
@@ -3195,23 +3239,28 @@ impl eframe::App for ShujingApp {
             } else if is_query {
                 self.run_query(&id);
             } else {
-                self.load_rows(&id);
+                // 表标签:走动作通道(带未保存修改拦截;直接 load_rows 会静默清空改动)
+                execute_tab_action(
+                    self,
+                    ctx,
+                    TabAction::Reload { tab_id: id },
+                );
             }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command) {
+        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command) {
             ctx.memory_mut(|m| m.request_focus(egui::Id::new("table-filter")));
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::L) && i.modifiers.command && i.modifiers.shift) {
+        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::L) && i.modifiers.command && i.modifiers.shift) {
             let dark = !theme::is_dark();
             self.set_theme_dark(ctx, dark);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command) {
+        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command) {
             self.quick_open = Some(crate::app::QuickOpen {
                 query: String::new(),
                 sel: 0,
             });
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command && i.modifiers.shift) {
+        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command && i.modifiers.shift) {
             self.global_search = Some(crate::app::GlobalSearchState {
                 conn_id: String::new(),
                 db: None,
@@ -3235,11 +3284,14 @@ impl eframe::App for ShujingApp {
                 egui::Key::Num8,
                 egui::Key::Num9,
             ][n - 1];
-            if ctx.input(|i| i.key_pressed(key) && i.modifiers.command) && self.tabs.len() >= n {
+            if !modal_open
+                && ctx.input(|i| i.key_pressed(key) && i.modifiers.command)
+                && self.tabs.len() >= n
+            {
                 self.active_tab = n - 1;
             }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command)
+        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command)
             && !self.tabs.is_empty()
         {
             let id = self.tabs[self.active_tab].id.clone();
@@ -3580,9 +3632,9 @@ pub fn export_rows_json(columns: &[String], rows: &[Vec<Option<String>>]) -> Str
         }
         out.push_str("\n  },\n");
     }
-    if out.ends_with(",\n") {
-        out.truncate(out.len() - 3);
-        out.push_str("\n");
+    if out.ends_with("},\n") {
+        out.truncate(out.len() - 2);
+        out.push('\n');
     }
     out.push(']');
     out

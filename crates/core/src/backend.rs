@@ -77,6 +77,7 @@ pub async fn connect(
             Ok(Backend::Redis(crate::model::RedisState {
                 client,
                 con: tokio::sync::Mutex::new(None),
+                op_lock: tokio::sync::Mutex::new(()),
             }))
         }
         DbType::Postgres => {

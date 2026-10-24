@@ -792,6 +792,14 @@ fn build_candidates(
     out
 }
 
+/// 插入起点:词内含点时只替换最后一个点之后的部分("users.id"→只换 "id" 段)
+fn insert_start(word: &str, word_start: usize) -> usize {
+    word
+        .rfind('.')
+        .map(|d| word_start + word[..d].chars().count() + 1)
+        .unwrap_or(word_start)
+}
+
 /// 插入候选:按 char 下标替换 [word_start..cursor]
 fn ac_insert(
     ctx: &egui::Context,
@@ -860,8 +868,9 @@ fn draw_autocomplete(
     let cands = build_candidates(&word, forced, ac_tables, ac_columns);
     let insertable = |c: &(String, &'static str)| c.1 != "…";
 
-    // 更新弹层状态(词变了重置选中)
-    let open = forced || (word.chars().count() >= 2 && cands.iter().any(insertable));
+    // 更新弹层状态(词变了重置选中;无候选时强制模式也不算开,避免吞按键)
+    let open = (forced && !cands.is_empty())
+        || (word.chars().count() >= 2 && cands.iter().any(insertable));
     if open {
         let reset = q
             .ac
@@ -914,7 +923,8 @@ fn draw_autocomplete(
             egui::Key::ArrowUp => a.selected = a.selected.saturating_sub(1).max(n.saturating_sub(1)),
             egui::Key::Escape => q.ac = None,
             egui::Key::Enter | egui::Key::Tab => {
-                // 插入当前选中(按"可插入序号"映射回候选)
+                // 插入当前选中(按"可插入序号"映射回候选);
+                // 带点词只替换最后一个点之后的部分,保留 "表."/"库.表." 前缀
                 if let Some((idx, _)) = cands
                     .iter()
                     .enumerate()
@@ -922,7 +932,7 @@ fn draw_autocomplete(
                     .nth(a.selected)
                 {
                     let repl = cands[idx].0.clone();
-                    let ws = word_start;
+                    let ws = insert_start(&word, word_start);
                     let cur = cursor;
                     q.ac = None;
                     ac_insert(ui.ctx(), te_id, q, ws, cur, &repl);
@@ -1034,8 +1044,9 @@ fn draw_autocomplete(
             });
         if let Some(ci) = insert_idx {
             let repl = rows[ci].0.clone();
+            let ws = insert_start(&word, word_start);
             q.ac = None;
-            ac_insert(ui.ctx(), te_id, q, word_start, cursor, &repl);
+            ac_insert(ui.ctx(), te_id, q, ws, cursor, &repl);
         }
         let _ = close;
     }
@@ -1061,6 +1072,20 @@ mod ac_tests {
         // 空词
         let c = chars("SELECT ");
         assert_eq!(current_word(&c, c.len()), (String::new(), 7));
+    }
+
+    #[test]
+    fn insert_start_keeps_dot_prefix() {
+        // 无点词:整词替换
+        assert_eq!(insert_start("us", 14), 14);
+        // 带点:只替换最后一个点之后的段(保留 表./库.表. 前缀)
+        assert_eq!(insert_start("users.id", 10), 10 + "users.".chars().count());
+        assert_eq!(
+            insert_start("shop.users.id", 5),
+            5 + "shop.users.".chars().count()
+        );
+        // 词尾就是点:插入点 = 词尾
+        assert_eq!(insert_start("users.", 10), 16);
     }
 
     #[test]

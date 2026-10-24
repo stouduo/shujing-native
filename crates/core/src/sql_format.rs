@@ -91,9 +91,7 @@ pub fn format_sql(sql: &str) -> String {
         .filter(|l| !l.trim().is_empty())
         .collect();
     let mut joined = lines.join("\n");
-    if !sql.trim_end().ends_with(';') && !joined.ends_with(';') {
-        // 保持无分号输入不补分号
-    }
+    // 保持无分号输入不补分号
     joined.push('\n');
     joined
 }
@@ -101,12 +99,15 @@ pub fn format_sql(sql: &str) -> String {
 /// 分词:字符串/注释原样为一个 token,其余按空白切
 fn tokenize(sql: &str) -> Vec<String> {
     let mut out = Vec::new();
+    // 按"字节索引 + char"推进:bytes[i] as char 会把多字节字符的高位字节
+    // 误判为拉丁字母并在字符中间切开(SQLite 允许无引号中文标识符,会 panic)
     let bytes = sql.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let c = sql[i..].chars().next().unwrap_or('\0');
+        let clen = c.len_utf8();
         if c.is_whitespace() {
-            i += 1;
+            i += clen;
             continue;
         }
         // 注释 -- 与 #
@@ -158,15 +159,16 @@ fn tokenize(sql: &str) -> Vec<String> {
         let start = i;
         if c.is_alphanumeric() || c == '_' || c == '.' || c == '$' {
             while i < bytes.len() {
-                let ch = bytes[i] as char;
+                let ch = sql[i..].chars().next().unwrap_or('\0');
+                let ch_len = ch.len_utf8();
                 if ch.is_alphanumeric() || ch == '_' || ch == '.' || ch == '$' {
-                    i += 1;
+                    i += ch_len;
                 } else {
                     break;
                 }
             }
         } else {
-            i += 1;
+            i += clen;
         }
         out.push(sql[start..i].to_string());
     }
@@ -215,5 +217,18 @@ mod tests {
     fn parens_indent() {
         let out = format_sql("select * from t where id in (1,2,3)");
         assert!(out.contains("IN (\n  1"));
+    }
+}
+
+#[cfg(test)]
+mod char_tests {
+    use super::*;
+
+    #[test]
+    fn format_cjk_identifier_no_panic() {
+        // SQLite 允许无引号中文标识符:此前按字节切词会 panic
+        let out = format_sql("select 姓名 from 订单表 where 金额 > 100");
+        assert!(out.to_uppercase().contains("SELECT"), "{out}");
+        assert!(out.contains("姓名"), "{out}");
     }
 }

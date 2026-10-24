@@ -1,7 +1,7 @@
 //! 功能弹窗:⌘P 快速打开 / CSV 导入向导 / 表统计 / 新建表。
 //! 统一使用 egui::Modal(背景压暗 + 居中)+ theme 控件。
 
-use crate::app::{BgEvent, NewTableState, ShujingApp};
+use crate::app::{BgEvent, ShujingApp};
 use crate::net;
 use crate::icons;
 use crate::theme;
@@ -18,6 +18,14 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
     // 候选:所有在线树的表(排序稳定,避免 HashMap 迭代乱序)
     let query = q.query.to_lowercase();
     let mut candidates: Vec<(String, String, Option<String>, String)> = Vec::new();
+    // "表名 条件" 模式:候选按表名部分过滤(整句 contains 永远匹配不到)
+    let filter_word = {
+        let r = q.query.trim();
+        match r.split_once(' ') {
+            Some((a, _)) if !r.to_lowercase().starts_with("select") => a.to_lowercase(),
+            _ => q.query.trim().to_lowercase(),
+        }
+    };
     for (cid, tree) in &app.trees {
         if !tree.online {
             continue;
@@ -30,7 +38,8 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
             .unwrap_or_else(|| cid.clone());
         for (db, tbls) in &tree.tables_by_db {
             for t in tbls {
-                if t.kind == "table" && (query.is_empty() || t.name.to_lowercase().contains(&query))
+                if t.kind == "table"
+                    && (filter_word.is_empty() || t.name.to_lowercase().contains(&filter_word))
                 {
                     candidates.push((
                         cid.clone(),
@@ -61,9 +70,18 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
     // ③ 纯表名 → 过滤/直接打开
     let raw = q.query.trim().to_string();
     let lower = raw.to_lowercase();
-    let is_sql = ["select", "with", "show", "desc", "describe", "explain", "pragma"]
-        .iter()
-        .any(|k| lower.starts_with(k));
+    // 词边界:showcase/withdraw/description 这类表名不能被当成 SQL 关键字前缀
+    let is_sql = ["select", "with", "show", "desc", "describe", "explain", "pragma"].iter().any(
+        |k| {
+            lower == *k
+                || (lower.starts_with(k)
+                    && lower[k.len()..]
+                        .chars()
+                        .next()
+                        .map(|c| c.is_whitespace())
+                        .unwrap_or(false))
+        },
+    );
     let table_cond = if !is_sql && raw.contains(' ') {
         raw.split_once(' ').map(|(a, b)| (a.to_string(), b.to_string()))
     } else {
@@ -196,10 +214,12 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
         app.conn_modal = Some(crate::app::ConnModal::new());
         return;
     }
-    if let Some(conn) = run_sql {
-        // SQL 直接执行:开查询标签并运行
+    if let Some(sql) = run_sql {
+        // SQL 直接执行:开查询标签并运行(继承激活标签的连接;
+        // 此前把 SQL 文本当连接 id 传入,标签永远"连接未建立")
+        let _ = sql;
         app.quick_open = None;
-        app.open_query_tab(Some(conn));
+        app.open_query_tab(None);
         let idx = app.tabs.len() - 1;
         if let Some(t) = app.tabs.get_mut(idx) {
             if let crate::app::TabKind::Query(q2) = &mut t.kind {
@@ -212,6 +232,13 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
     }
     if let Some((conn, table, db)) = picked {
         app.quick_open = None;
+        // 模式②的条件只对得上首词表:用户点了别的候选行时丢弃条件
+        let cond_ok = picked_cond.is_some() && {
+            raw.split_once(' ')
+                .map(|(a, _)| a == table)
+                .unwrap_or(false)
+        };
+        let picked_cond = if cond_ok { picked_cond } else { None };
         let had = app.tabs.iter().any(|t| {
             matches!(&t.kind, crate::app::TabKind::Table(tt)
                 if tt.conn_id == conn && tt.table == table)
@@ -340,7 +367,7 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 }
 
                 theme::modal_footer(ui, |ui| {
-                    let can_import = !im.headers.is_empty();
+                    let can_import = !im.headers.is_empty() && !im.running;
                     let kind = if can_import {
                         theme::BtnKind::Primary
                     } else {
@@ -399,13 +426,20 @@ pub fn draw_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     };
     let p = theme::c();
     let open = Cell::new(true);
-    let _ = &key;
+    // key = "conn/db/table" → 标题带上表名与库
+    let title = {
+        let parts: Vec<&str> = key.split('/').collect();
+        match parts.as_slice() {
+            [_, db, tbl] => format!("表统计 · {tbl} @ {db}"),
+            _ => "表统计".to_string(),
+        }
+    };
     let modal = egui::Modal::new(egui::Id::new("stats-modal"))
         .frame(theme::modal_frame())
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(360.0);
-            theme::modal_title(ui, "表统计");
+            theme::modal_title(ui, &title);
             match (data, err) {
                 (Some((rows, data_len, idx_len)), _) => {
                     egui::Grid::new("stats-grid")
@@ -565,9 +599,15 @@ pub fn draw_new_table_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         let Some(st) = app.new_table.as_ref() else {
             return;
         };
+        let mysql = app
+            .conns
+            .iter()
+            .find(|c| c.id == st.conn_id)
+            .map(|c| c.db_type == shujing_core::DbType::MySql)
+            .unwrap_or(false);
         let full_sql = format!(
             "CREATE TABLE {} (\n{}\n)",
-            shujing_core::edits::quote_ident_pub(&st.database, &st.name.trim()),
+            shujing_core::edits::quote_ident_pub(&st.database, &st.name.trim(), mysql),
             st.sql.trim().trim_end_matches(';')
         );
         let conn = st.conn_id.clone();
@@ -579,6 +619,7 @@ pub fn draw_new_table_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 let r = shujing_core::Service::run_sql_standalone(&service, &info, &full_sql).await;
                 let _ = tx.send(crate::app::BgEvent::DdlDone {
                     result: r.map(|_| ()),
+                    msg: String::new(),
                 });
             });
         }
@@ -746,10 +787,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     }
                 });
         });
-    if app.global_search.as_ref().unwrap().searching {
-        // 搜索按钮放在弹层外响应会丢:这里用快捷键回车触发,补一个按钮
-    }
-    // 底部按钮(在 modal 之外画不了,利用 footer 空隙省略;回车即可搜索)
+    // 回车即可搜索,弹层外不再补按钮
     let _ = &modal;
     if do_search {
         let gs = app.global_search.as_mut().unwrap();
@@ -827,7 +865,14 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 }
             }
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, "确认", theme::BtnKind::Primary).clicked() {
+                // {v} 占位需要用户输入:留空时禁止确认(否则把字面 {v} 发给数据库)
+                let need_input = c.sql.contains("{v}") && c.input.trim().is_empty();
+                let kind = if need_input {
+                    theme::BtnKind::Secondary
+                } else {
+                    theme::BtnKind::Primary
+                };
+                if theme::button(ui, "确认", kind).clicked() && !need_input {
                     proceed = true;
                 }
                 ui.add_space(6.0);
@@ -865,6 +910,7 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 let conn_id = c.conn_id.clone();
                 let mysql = crate::app::mysql_quote(&app.conns, &conn_id);
                 let sql = c.resolved_sql(mysql);
+                let ddl_msg = c.title.clone();
                 app.confirm = None;
                 let tx = app.event_tx.clone();
                 let service = app.service.clone();
@@ -873,7 +919,10 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         .run_sql(&conn_id, sql, Some(1))
                         .await
                         .map(|_| ());
-                    let _ = tx.send(BgEvent::DdlDone { result });
+                    let _ = tx.send(BgEvent::DdlDone {
+                        result,
+                        msg: ddl_msg,
+                    });
                 });
             }
         }

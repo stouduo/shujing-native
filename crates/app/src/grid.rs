@@ -100,26 +100,22 @@ pub fn result_rows(
                 });
             })
             .body(|body| {
-                let mut row_band: Option<(f32, f32)> = None;
+                // 行悬停:每格用自身矩形判定(跨行累积并工会点亮悬停行下方全部行)
                 body.rows(theme::ROW_H, rows.len(), |mut row| {
                     let ri = row.index();
                     let rowdata = &rows[ri];
                     let mut hovered = false;
                     row.col(|ui| {
-                        let band =
-                            row_band.get_or_insert((ui.max_rect().top(), ui.max_rect().bottom()));
-                        band.0 = band.0.min(ui.max_rect().top());
-                        band.1 = band.1.max(ui.max_rect().bottom());
+                        let rect = ui.max_rect();
                         hovered = ui
                             .input(|i| i.pointer.latest_pos())
                             .map(|pt| {
-                                pt.y >= band.0
-                                    && pt.y < band.1
+                                pt.y >= rect.top()
+                                    && pt.y < rect.bottom()
                                     && pt.x >= table_left
                                     && pt.x <= table_right
                             })
                             .unwrap_or(false);
-                        let rect = ui.max_rect();
                         if hovered {
                             ui.painter().rect_filled(rect, 0, p.row_hover);
                         }
@@ -136,6 +132,15 @@ pub fn result_rows(
                         let v = &rowdata[ci];
                         row.col(|ui| {
                             let rect = ui.max_rect();
+                            hovered = ui
+                                .input(|i| i.pointer.latest_pos())
+                                .map(|pt| {
+                                    pt.y >= rect.top()
+                                        && pt.y < rect.bottom()
+                                        && pt.x >= table_left
+                                        && pt.x <= table_right
+                                })
+                                .unwrap_or(false);
                             let painter = ui.painter().with_clip_rect(rect);
                             if hovered {
                                 painter.rect_filled(rect, 0, p.row_hover);
@@ -305,26 +310,22 @@ pub fn result_rows_editable(
                 });
             })
             .body(|body| {
-                let mut row_band: Option<(f32, f32)> = None;
+                // 行悬停:每格用自身矩形判定(跨行累积并工会点亮悬停行下方全部行)
                 body.rows(theme::ROW_H, rows.len(), |mut row| {
                     let ri = row.index();
                     let rowdata = &rows[ri];
                     let mut hovered = false;
                     row.col(|ui| {
-                        let band =
-                            row_band.get_or_insert((ui.max_rect().top(), ui.max_rect().bottom()));
-                        band.0 = band.0.min(ui.max_rect().top());
-                        band.1 = band.1.max(ui.max_rect().bottom());
+                        let rect = ui.max_rect();
                         hovered = ui
                             .input(|i| i.pointer.latest_pos())
                             .map(|pt| {
-                                pt.y >= band.0
-                                    && pt.y < band.1
+                                pt.y >= rect.top()
+                                    && pt.y < rect.bottom()
                                     && pt.x >= table_left
                                     && pt.x <= table_right
                             })
                             .unwrap_or(false);
-                        let rect = ui.max_rect();
                         if hovered {
                             ui.painter().rect_filled(rect, 0, p.row_hover);
                         }
@@ -341,6 +342,15 @@ pub fn result_rows_editable(
                         let v = &rowdata[ci];
                         row.col(|ui| {
                             let rect = ui.max_rect();
+                            hovered = ui
+                                .input(|i| i.pointer.latest_pos())
+                                .map(|pt| {
+                                    pt.y >= rect.top()
+                                        && pt.y < rect.bottom()
+                                        && pt.x >= table_left
+                                        && pt.x <= table_right
+                                })
+                                .unwrap_or(false);
                             let painter = ui.painter().with_clip_rect(rect);
                             let is_editing = *editing == Some((ri, ci));
                             let changed = changes.iter().any(|(r, c, _)| *r == ri && c == col);
@@ -364,7 +374,12 @@ pub fn result_rows_editable(
                                         .frame(false)
                                         .desired_width(inner.width().max(80.0)),
                                 );
-                                if enter || resp.lost_focus() {
+                                // 双击出现编辑框后立即抢焦点,否则打字仍进原焦点控件
+                                resp.request_focus();
+                                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                if esc {
+                                    *editing = None;
+                                } else if enter || resp.lost_focus() {
                                     commit = Some((ri, ci, draft.clone()));
                                     *editing = None;
                                 }

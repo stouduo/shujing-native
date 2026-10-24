@@ -21,6 +21,8 @@ pub fn parse_csv(path: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> 
 }
 
 pub fn parse_csv_str(raw: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    // UTF-8 BOM:不剥会让首列表头带 \u{FEFF},按名映射列时静默失配
+    let raw = raw.strip_prefix('\u{FEFF}').unwrap_or(raw);
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut cur: Vec<String> = Vec::new();
     let mut field = String::new();
@@ -46,6 +48,10 @@ pub fn parse_csv_str(raw: &str) -> Result<(Vec<String>, Vec<Vec<String>>), Strin
                 }
                 '\r' => {}
                 '\n' => {
+                    // 完全空的行(含文件末尾多余空行)跳过,不产出 [""] 行
+                    if cur.is_empty() && field.is_empty() {
+                        continue;
+                    }
                     cur.push(std::mem::take(&mut field));
                     rows.push(std::mem::take(&mut cur));
                 }
@@ -64,20 +70,31 @@ pub fn parse_csv_str(raw: &str) -> Result<(Vec<String>, Vec<Vec<String>>), Strin
     Ok((header, rows))
 }
 
+/// 字符串字面量:单引号双写;MySQL 默认把反斜杠当转义符,须同时双写
+fn literal_by(v: &str, mysql: bool) -> String {
+    let mut out = v.replace('\'', "''");
+    if mysql {
+        out = out.replace('\\', "\\\\");
+    }
+    format!("'{out}'")
+}
+
 /// 导入:按 col_map 拼 INSERT,单事务批量执行。返回写入行数。
 pub async fn import_csv(
     service: &Arc<crate::Service>,
     info: ConnInfo,
     imp: CsvImport,
 ) -> Result<usize, String> {
-    let (headers, rows) = parse_csv(&imp.path)?;
-    if imp.has_header && rows.len() == 1 {
-        return Err("除表头外没有数据行".into());
+    // parse_csv 已把首行剥为表头;此前这里又切了一次 rows[1..],
+    // 首条数据行永远丢失、且"恰好 1 行数据"被误判为没有数据行
+    let (_, rows) = parse_csv(&imp.path)?;
+    let data_rows = &rows[..];
+    if data_rows.is_empty() {
+        return Err("没有数据行".into());
     }
-    let data_rows = if imp.has_header { &rows[1..] } else { &rows[..] };
 
+    let mysql = info.db_type == crate::model::DbType::MySql;
     let cols: Vec<String> = imp.col_map.iter().map(|(_, c)| c.clone()).collect();
-    let total = data_rows.len();
     const BATCH: usize = 200;
     let mut done = 0usize;
     for chunk in data_rows.chunks(BATCH) {
@@ -95,7 +112,7 @@ pub async fn import_csv(
                                     if v.is_empty() {
                                         "NULL".into()
                                     } else {
-                                        format!("'{}'", v.replace('\'', "''"))
+                                        literal_by(v, mysql)
                                     }
                                 })
                                 .unwrap_or_else(|| "NULL".into())
@@ -103,9 +120,9 @@ pub async fn import_csv(
                         .collect();
                     format!(
                         "INSERT INTO {} ({}) VALUES ({});",
-                        crate::edits::quote_ident_pub(&imp.database, &imp.table),
+                        crate::edits::quote_ident_pub(&imp.database, &imp.table, mysql),
                         cols.iter()
-                            .map(|c| crate::edits::quote_ident_pub(&imp.database, c))
+                            .map(|c| crate::edits::quote_ident_pub(&imp.database, c, mysql))
                             .collect::<Vec<_>>()
                             .join(", "),
                         list.join(", ")
@@ -129,7 +146,28 @@ pub async fn table_stats(
     database: Option<String>,
     table: &str,
 ) -> Result<(u64, Option<u64>, Option<u64>), String> {
-    let n = service.count_rows(&info.id, table).await?;
+    // 行数按目标库限定(count_rows 不带库,多库连接下数错表)
+    let mysql = info.db_type == crate::model::DbType::MySql;
+    let full = match database.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(db) => crate::edits::qualified_table(table, Some(db), mysql),
+        None => match info.db_type {
+            crate::model::DbType::Postgres => format!("public.{}", crate::edits::qualified_table(table, None, false)),
+            _ => crate::edits::qualified_table(table, None, mysql),
+        },
+    };
+    let rs = crate::Service::run_sql_standalone(
+        service,
+        info,
+        &format!("SELECT COUNT(*) FROM {full}"),
+    )
+    .await?;
+    let n = rs
+        .first()
+        .and_then(|r| r.rows.first())
+        .and_then(|row| row.first())
+        .and_then(|v| v.as_deref())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     if info.db_type == crate::model::DbType::MySql {
         let sql = format!(
             "SELECT data_length, index_length FROM information_schema.tables WHERE table_schema = '{}' AND table_name = '{}'",
@@ -150,4 +188,26 @@ pub async fn table_stats(
         }
     }
     Ok((n, None, None))
+}
+
+#[cfg(test)]
+mod csv_tests {
+    use super::*;
+
+    #[test]
+    fn parse_strips_bom_and_blank_lines() {
+        let (header, rows) = parse_csv_str("\u{FEFF}id,name\n1,a\n\n2,b\n").unwrap();
+        assert_eq!(header, vec!["id", "name"]);
+        // 空行不产出 [""] 行;数据行完整(表头只剥一次)
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0], vec!["1", "a"]);
+        assert_eq!(rows[1], vec!["2", "b"]);
+    }
+
+    #[test]
+    fn quoted_newline_and_comma() {
+        let (_, rows) = parse_csv_str("a,b\n\"x,y\",\"line1\nline2\"\n").unwrap();
+        assert_eq!(rows[0][0], "x,y");
+        assert_eq!(rows[0][1], "line1\nline2");
+    }
 }

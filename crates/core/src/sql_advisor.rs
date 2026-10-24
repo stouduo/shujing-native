@@ -182,7 +182,7 @@ fn col_idx(r: &ExecResult, names: &[&str]) -> i32 {
     -1
 }
 
-fn cell(r: &ExecResult, row: &[Option<String>], i: i32) -> String {
+fn cell(row: &[Option<String>], i: i32) -> String {
     if i < 0 {
         return String::new();
     }
@@ -200,14 +200,14 @@ fn check_mysql(r: &ExecResult, out: &mut Vec<Finding>) {
     let iid = col_idx(r, &["id"]);
     for row in &r.rows {
         let scope = if iid >= 0 {
-            format!("(表 {})", cell(r, row, iid - 1))
+            format!("(表 {})", cell(row, iid - 1))
         } else {
             String::new()
         };
-        let ty = cell(r, row, it);
-        let key = cell(r, row, ik);
-        let rows = cell(r, row, ir);
-        let extra = cell(r, row, ie);
+        let ty = cell(row, it);
+        let key = cell(row, ik);
+        let rows = cell(row, ir);
+        let extra = cell(row, ie);
 
         if ty == "ALL" {
             out.push(finding(
@@ -257,7 +257,7 @@ fn check_sqlite(r: &ExecResult, out: &mut Vec<Finding>) {
     let id = col_idx(r, &["detail"]);
     for row in &r.rows {
         let detail = if id >= 0 {
-            cell(r, row, id)
+            cell(row, id)
         } else {
             row.iter()
                 .map(|v| v.clone().unwrap_or_default())

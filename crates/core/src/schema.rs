@@ -104,7 +104,7 @@ async fn fk_pg(client: &tokio_postgres::Client) -> Result<Vec<FkMeta>, String> {
 
 /// 表名来自我们查出的列表,仍做标识符转义防注入
 /// 列出服务器上所有数据库
-pub async fn list_databases(backend: &mut Backend, info: &ConnInfo) -> Result<Vec<String>, String> {
+pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<Vec<String>, String> {
     match backend {
         Backend::Sqlite(_) => Ok(vec![]),
         Backend::MySql(mp) => {
@@ -653,7 +653,7 @@ impl Backend {
         self.list_tables_in(info, info.database.as_deref()).await
     }
 
-    pub async fn list_tables_in(&mut self, info: &crate::model::ConnInfo, database: Option<&str>) -> Result<Vec<TableMeta>, String> {
+    pub async fn list_tables_in(&mut self, _info: &crate::model::ConnInfo, database: Option<&str>) -> Result<Vec<TableMeta>, String> {
         match self {
             Backend::Sqlite(conn) => schema_sqlite(conn),
             Backend::MySql(mp) => {
