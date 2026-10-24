@@ -3601,7 +3601,7 @@ impl ShujingApp {
         let service = self.service.clone();
         let tx = self.event_tx.clone();
         crate::net::spawn(async move {
-            let r = shujing_core::composite::import_csv(&service, info, imp).await;
+            let r = shujing_core::excel::import_table_file(&service, info, imp).await;
             let _ = tx.send(BgEvent::ImportDone { result: r });
         });
     }
@@ -3632,7 +3632,7 @@ impl ShujingApp {
     pub fn open_import(&mut self, conn_id: &str, database: &str, table: &str) {
         // 打开系统文件选择框,读表结构填目标列
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("CSV", &["csv", "txt"])
+            .add_filter("表格", &["csv", "txt", "xlsx"])
             .pick_file()
         else {
             return;

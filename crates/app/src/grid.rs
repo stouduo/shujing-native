@@ -34,13 +34,25 @@ pub fn result_rows(
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width().max(desired_w));
-            // 拖拽平移:按住结果网格左右拖 = 横向滚动(只读网格无编辑态)
+            // 拖拽平移:按住结果网格表体左右拖 = 横向滚动(只读网格无编辑态);
+            // 起点须在表头下方内容区,拖列宽手柄/滚动条不连带平移
             {
-                let drag_pan = ui.input(|i| {
-                    i.pointer.button_down(egui::PointerButton::Primary)
-                        && i.pointer.is_decidedly_dragging()
+                let content = ui.max_rect();
+                let (drag_pan, started) = ui.input(|i| {
+                    (
+                        i.pointer.button_down(egui::PointerButton::Primary)
+                            && i.pointer.is_decidedly_dragging(),
+                        i.pointer.press_origin(),
+                    )
                 });
-                if drag_pan {
+                let in_body: bool = started
+                    .map(|p| {
+                        content.contains(p)
+                            && p.y > content.top() + theme::HEADER_H
+                            && p.x < content.right() - 16.0
+                    })
+                    .unwrap_or(false);
+                if drag_pan && in_body {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     if dx.abs() > 0.1 {
                         ui.scroll_with_delta(egui::vec2(-dx, 0.0));
@@ -245,13 +257,24 @@ pub fn result_rows_editable(
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width().max(desired_w));
-            // 拖拽平移(编辑态除外)
+            // 拖拽平移(编辑态除外;起点须在表头下方内容区)
             if !editing_active {
-                let drag_pan = ui.input(|i| {
-                    i.pointer.button_down(egui::PointerButton::Primary)
-                        && i.pointer.is_decidedly_dragging()
+                let content = ui.max_rect();
+                let (drag_pan, started) = ui.input(|i| {
+                    (
+                        i.pointer.button_down(egui::PointerButton::Primary)
+                            && i.pointer.is_decidedly_dragging(),
+                        i.pointer.press_origin(),
+                    )
                 });
-                if drag_pan {
+                let in_body: bool = started
+                    .map(|p| {
+                        content.contains(p)
+                            && p.y > content.top() + theme::HEADER_H
+                            && p.x < content.right() - 16.0
+                    })
+                    .unwrap_or(false);
+                if drag_pan && in_body {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     if dx.abs() > 0.1 {
                         ui.scroll_with_delta(egui::vec2(-dx, 0.0));

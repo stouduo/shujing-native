@@ -125,6 +125,19 @@ pub fn draw_query_view(
                             tab_id: tab_id.to_string(),
                         });
                     }
+                    if has_grid
+                        && theme::button(ui, "导出 Excel", theme::BtnKind::Secondary).clicked()
+                    {
+                        if let Some(r) = q.results.get(q.active_set) {
+                            if !r.columns.is_empty() {
+                                actions.push(TabAction::ExportXlsx {
+                                    suggest: "查询结果.xlsx".into(),
+                                    columns: r.columns.clone(),
+                                    rows: r.rows.clone(),
+                                });
+                            }
+                        }
+                    }
                     if !is_redis
                         && theme::button(ui, "格式化", theme::BtnKind::Secondary)
                             .on_hover_text("美化 SQL(关键字大写+换行缩进)")

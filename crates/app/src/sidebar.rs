@@ -1012,7 +1012,7 @@ impl ShujingApp {
                     .memory_mut(|m| m.data.insert_temp(menu_id, "stats".to_string()));
                 ui.close_menu();
             }
-            if ui.button("导入 CSV…").clicked() {
+            if ui.button("导入表格(CSV/Excel)…").clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "import".to_string()));
                 ui.close_menu();

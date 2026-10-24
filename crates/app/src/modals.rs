@@ -292,7 +292,7 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             .backdrop_color(p.overlay)
             .show(ctx, |ui| {
                 ui.set_width(560.0);
-                theme::modal_title(ui, &format!("导入 CSV → {}", im.table));
+                theme::modal_title(ui, &format!("导入表格 → {}", im.table));
                 ui.label(
                     RichText::new(format!("文件: {}", icons::clip(&im.path, 62)))
                         .size(11.0)
@@ -390,7 +390,12 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if parse_now {
         if let Some(im) = app.import.as_mut() {
             let path = im.path.clone();
-            match shujing_core::composite::parse_csv(&path) {
+            let parsed = if path.to_lowercase().ends_with(".xlsx") {
+                shujing_core::excel::parse_xlsx(&path)
+            } else {
+                shujing_core::composite::parse_csv(&path)
+            };
+            match parsed {
                 Ok((headers, _rows)) => {
                     im.col_map = headers
                         .iter()

@@ -72,6 +72,12 @@ pub enum TabAction {
     ExportQueryCsv {
         tab_id: String,
     },
+    /// 导出 Excel(表页/查询页共用,弹保存框)
+    ExportXlsx {
+        suggest: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<Option<String>>>,
+    },
     DeleteRow {
         tab_id: String,
         ri: usize,
@@ -715,6 +721,14 @@ pub(crate) fn draw_table_view(
                                 });
                                 ui.close_menu();
                             }
+                            if ui.button("导出 Excel(.xlsx)").clicked() {
+                                actions.push(TabAction::ExportXlsx {
+                                    suggest: format!("{}.xlsx", tab.table),
+                                    columns: tab.columns.clone(),
+                                    rows: tab.rows.clone(),
+                                });
+                                ui.close_menu();
+                            }
                             if ui.button("导出 SQL").clicked() {
                                 actions.push(TabAction::ExportSql {
                                     tab_id: tab_id_s.clone(),
@@ -1247,12 +1261,11 @@ pub(crate) fn draw_table_view(
                     .filter(|(_, c)| !tab.hidden_cols.contains(c))
                     .map(|(i, _)| i)
                     .collect();
-                let vis_cols: Vec<String> = vis_idx.iter().map(|&i| columns[i].clone()).collect();
-                let vis_rows: Vec<Vec<Option<String>>> = rows
-                    .iter()
-                    .map(|r| vis_idx.iter().map(|&i| r[i].clone()).collect())
-                    .collect();
-                let col_widths = fitted_widths(&vis_rows, &vis_cols, ui.available_width());
+                // 免投影:直接在全量行上采样可见列宽,不再每帧深拷贝整页数据
+                let col_widths = fitted_from_base(
+                    suggested_widths_vis(rows, columns, &vis_idx),
+                    ui.available_width(),
+                );
                 let desired_w =
                     if tab.show_rowno { 48.0 } else { 0.0 } + col_widths.iter().sum::<f32>();
                 // 注意:必须在外层 ui 上设置,ScrollArea 自己的滚动条不会读取闭包内 ui 的 spacing。
@@ -1272,13 +1285,26 @@ pub(crate) fn draw_table_view(
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width().max(desired_w));
-                        // 拖拽平移:按住网格区域左右拖 = 横向滚动(非编辑态)
+                        // 拖拽平移:按住表体左右拖 = 横向滚动(非编辑态)。
+                        // 起点必须落在表头下方的内容区——否则拖列宽手柄/拖滚动条/拖
+                        // 标签栏排序时会连带平移表格
                         if editing.is_none() {
-                            let drag_pan = ui.input(|i| {
-                                i.pointer.button_down(egui::PointerButton::Primary)
-                                    && i.pointer.is_decidedly_dragging()
+                            let content = ui.max_rect();
+                            let (dragging, started) = ui.input(|i| {
+                                (
+                                    i.pointer.button_down(egui::PointerButton::Primary)
+                                        && i.pointer.is_decidedly_dragging(),
+                                    i.pointer.press_origin(),
+                                )
                             });
-                            if drag_pan {
+                            let in_body: bool = started
+                                .map(|p| {
+                                    content.contains(p)
+                                        && p.y > content.top() + theme::HEADER_H
+                                        && p.x < content.right() - 16.0
+                                })
+                                .unwrap_or(false);
+                            if dragging && in_body {
                                 let dx = ui.input(|i| i.pointer.delta().x);
                                 if dx.abs() > 0.1 {
                                     ui.scroll_with_delta(egui::vec2(-dx, 0.0));
@@ -1290,8 +1316,9 @@ pub(crate) fn draw_table_view(
                             ui,
                             pointer,
                             &tab_id_s,
-                            &vis_rows,
-                            &vis_cols,
+                            rows,
+                            columns,
+                            &vis_idx,
                             editing,
                             draft,
                             changes,
@@ -1567,13 +1594,39 @@ pub(crate) fn suggested_widths(rows: &[Vec<Option<String>>], columns: &[String])
         .collect()
 }
 
+/// 免投影版本:直接在全量行上按可见列下标采样(避免每帧深拷贝整页数据)
+pub(crate) fn suggested_widths_vis(
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+    vis_idx: &[usize],
+) -> Vec<f32> {
+    let sample = rows.iter().take(80);
+    vis_idx
+        .iter()
+        .map(|&i| {
+            let c = &columns[i];
+            let head = text_width(c);
+            let data = sample
+                .clone()
+                .filter_map(|r| r.get(i).and_then(|v| v.as_deref()))
+                .map(text_width)
+                .fold(0.0_f32, f32::max);
+            (head.max(data) + 26.0).clamp(72.0, 720.0)
+        })
+        .collect()
+}
+
 /// 在内容宽度基础上把多余空间按比例分给各列(原型表格铺满内容区)
 pub(crate) fn fitted_widths(
     rows: &[Vec<Option<String>>],
     columns: &[String],
     available: f32,
 ) -> Vec<f32> {
-    let base = suggested_widths(rows, columns);
+    fitted_from_base(suggested_widths(rows, columns), available)
+}
+
+/// 已有基础列宽 → 按可用宽度摊开(多余空间按比例分给各列,单列封顶 720)
+pub(crate) fn fitted_from_base(base: Vec<f32>, available: f32) -> Vec<f32> {
     let sum: f32 = base.iter().sum();
     if sum <= 0.0 {
         return base;
@@ -1608,6 +1661,7 @@ fn draw_data_table(
     tab_id: &str,
     rows: &[Vec<Option<String>>],
     columns: &[String],
+    vis_idx: &[usize],
     editing: &mut Option<(usize, usize)>,
     draft: &mut String,
     changes: &mut Vec<(usize, String, Option<String>)>,
@@ -1643,6 +1697,9 @@ fn draw_data_table(
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .vscroll(true)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+    // 编辑行是否本帧被渲染(行虚拟化:滚出视口的行不渲染,
+    // editing 悬死会让 Enter 失效、拖拽平移被永久禁用)
+    let editing_row_rendered = std::cell::Cell::new(false);
     let mut tb = if show_rowno {
         builder.column(Column::exact(48.0))
     } else {
@@ -1650,10 +1707,10 @@ fn draw_data_table(
     };
     // 所有真实列都按内容宽度布局,末尾再补一个 remainder 占位列:
     // 内容窄时占位列把右侧铺满;内容宽时占位列收缩为 0,表格整体溢出并出现横向滚动条。
-    for (i, _c) in columns.iter().enumerate() {
+    for (vw, _vi) in vis_idx.iter().enumerate() {
         // 用 exact 固定内容宽度;auto 列会被 TableBuilder 压缩到视口内,永远不会溢出,
         // 横向滚动条也就不会出现。末尾 remainder 列负责在窄表时把右侧铺满。
-        tb = tb.column(Column::exact(col_widths[i]).resizable(true).clip(true));
+        tb = tb.column(Column::exact(col_widths[vw]).resizable(true).clip(true));
     }
     tb = tb.column(Column::remainder().at_least(0.0));
     tb.header(theme::HEADER_H, |mut header| {
@@ -1671,7 +1728,8 @@ fn draw_data_table(
                 header_bottom_line(ui);
             });
         }
-        for c in columns.iter() {
+        for &vi in vis_idx.iter() {
+            let c = &columns[vi];
             let sorted = srt
                 .as_ref()
                 .and_then(|(scn, asc)| (*scn == *c).then_some(*asc));
@@ -1810,6 +1868,9 @@ fn draw_data_table(
             let ri = row.index();
             let rowdata = &rows[ri];
             let is_editing_row = matches!(*editing, Some((er, _)) if er == ri);
+            if is_editing_row {
+                editing_row_rendered.set(true);
+            }
             let row_selected = matches!(*selected, Some((sr, _)) if sr == ri);
             let row_no = ri + 1;
             let mut hovered = false;
@@ -1840,7 +1901,8 @@ fn draw_data_table(
                 });
             }
 
-            for (ci, col_name) in columns.iter().enumerate() {
+            for (ci, &vi) in vis_idx.iter().enumerate() {
+                let col_name = &columns[vi];
                 let cell_editing = matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
                 let changed = changes.iter().any(|(r, cn, _)| *r == ri && cn == col_name);
                 if cell_editing {
@@ -1881,7 +1943,7 @@ fn draw_data_table(
                         }
                     });
                 } else {
-                    let v = &rowdata[ci];
+                    let v = &rowdata[vi];
                     let is_sel = matches!(*selected, Some((sr, sc)) if sr == ri && sc == ci);
                     row.col(|ui| {
                         hovered = hovers(ui.max_rect());
@@ -1931,6 +1993,10 @@ fn draw_data_table(
             let _ = is_editing_row;
         });
     });
+    // 编辑行滚出视口(本帧未渲染):取消编辑,避免悬死状态
+    if editing.is_some() && !editing_row_rendered.get() {
+        *editing = None;
+    }
 }
 
 fn header_bottom_line(ui: &egui::Ui) {
@@ -2755,6 +2821,26 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             let db =
                 database.or_else(|| app.trees.get(&conn_id).and_then(|t| t.expanded_db.clone()));
             app.open_table(&conn_id, &table, db);
+        }
+        TabAction::ExportXlsx {
+            suggest,
+            columns,
+            rows,
+        } => {
+            let Some(path) = rfd::FileDialog::new()
+                .set_file_name(&suggest)
+                .add_filter("Excel", &["xlsx"])
+                .save_file()
+            else {
+                return;
+            };
+            let path = path.display().to_string();
+            let tx = app.event_tx.clone();
+            net::spawn(async move {
+                let result = shujing_core::excel::export_xlsx(&columns, &rows, &path)
+                    .map(|_| path.clone());
+                let _ = tx.send(BgEvent::ExportDone { result });
+            });
         }
         TabAction::ExportQueryCsv { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {

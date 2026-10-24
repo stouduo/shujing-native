@@ -88,6 +88,16 @@ pub async fn import_csv(
     // parse_csv 已把首行剥为表头;此前这里又切了一次 rows[1..],
     // 首条数据行永远丢失、且"恰好 1 行数据"被误判为没有数据行
     let (_, rows) = parse_csv(&imp.path)?;
+    import_rows(service, info, imp, rows).await
+}
+
+/// 已解析的数据行 → 批量 INSERT(CSV/XLSX 共用)
+pub async fn import_rows(
+    service: &Arc<crate::Service>,
+    info: ConnInfo,
+    imp: CsvImport,
+    rows: Vec<Vec<String>>,
+) -> Result<usize, String> {
     let data_rows = &rows[..];
     if data_rows.is_empty() {
         return Err("没有数据行".into());
