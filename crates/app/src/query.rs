@@ -473,6 +473,7 @@ pub fn draw_query_view(
                         &q.q_changes,
                         &mut q.q_editing,
                         &mut q.q_draft,
+                        &mut q.q_frozen,
                     );
                     if let Some((ri, ci, old)) = start {
                         q.q_editing = Some((ri, ci));
@@ -496,7 +497,13 @@ pub fn draw_query_view(
                         });
                     }
                 } else {
-                    grid::result_rows(ui, &format!("query-results-{tab_id}"), &r.columns, &r.rows);
+                    grid::result_rows(
+                        ui,
+                        &format!("query-results-{tab_id}"),
+                        &r.columns,
+                        &r.rows,
+                        &mut q.q_frozen,
+                    );
                 }
             }
         });
@@ -649,7 +656,14 @@ pub fn draw_optimize_modal(
                             .max_height(180.0)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                super::grid::result_rows(ui, "optimize-plan", &plan.columns, &plan.rows);
+                                let mut plan_frozen = 0usize;
+                                super::grid::result_rows(
+                                    ui,
+                                    "optimize-plan",
+                                    &plan.columns,
+                                    &plan.rows,
+                                    &mut plan_frozen,
+                                );
                             });
                     }
                 }

@@ -454,6 +454,8 @@ pub struct QueryTab {
     pub q_draft: String,
     /// SQL 自动补全(None=关闭)
     pub ac: Option<AcState>,
+    /// 结果网格冻结的前 N 列(0=不冻结)
+    pub q_frozen: usize,
 }
 
 /// 优化分析弹窗状态
@@ -1764,6 +1766,7 @@ impl ShujingApp {
                 q_editing: None,
                 q_draft: String::new(),
                 ac: None,
+                q_frozen: 0,
             }),
         });
         self.active_tab = self.tabs.len() - 1;
@@ -2510,6 +2513,7 @@ impl ShujingApp {
                             q_editing: None,
                             q_draft: String::new(),
                             ac: None,
+                            q_frozen: 0,
                         }),
                     });
                 }

@@ -564,6 +564,7 @@ fn render_query_view() {
         q_editing: None,
         q_draft: String::new(),
         ac: None,
+        q_frozen: 0,
     };
     let rows: Vec<Vec<Option<String>>> = (0..24)
         .map(|i| {
@@ -636,6 +637,7 @@ fn render_query_view_narrow_with_db() {
         q_editing: None,
         q_draft: String::new(),
         ac: None,
+        q_frozen: 0,
     };
     let conns = vec![shujing_core::ConnInfo {
         id: "c1".into(),
@@ -954,6 +956,7 @@ fn session_save_restore_roundtrip() {
         q_editing: None,
         q_draft: String::new(),
         ac: None,
+        q_frozen: 0,
     };
     q.sql = "SELECT id FROM backend_role_privilege".into();
     app.tabs.push(Tab {
@@ -1272,6 +1275,7 @@ fn render_query_autocomplete() {
             selected: 0,
             forced: false,
         }),
+        q_frozen: 0,
     };
     let conns = vec![shujing_core::ConnInfo {
         id: "c1".into(),
@@ -1475,4 +1479,122 @@ fn frozen_overlay_editor_and_unfreeze() {
     let img = harness.render().expect("render");
     let _ = std::fs::create_dir_all("/tmp/shujing_ui");
     img.save("/tmp/shujing_ui/frozen_edit.png").expect("保存 PNG 失败");
+}
+
+#[test]
+fn query_grid_frozen_columns_pin() {
+    // 查询结果网格冻结 1 列:横向滚动两段后,冻结区逐像素钉住;整幅画面必须已变化
+    let filler = "value-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    let mut q = QueryTab {
+        conn_id: "c1".into(),
+        database: None,
+        sql: "SELECT * FROM wide_table".into(),
+        history: vec![],
+        results: vec![],
+        active_set: 0,
+        running: false,
+        error: None,
+        optimize: None,
+        result_table: None,
+        result_db: None,
+        result_pk: vec![],
+        pk_checked: false,
+        q_changes: vec![],
+        q_editing: None,
+        q_draft: String::new(),
+        ac: None,
+        q_frozen: 1,
+    };
+    q.results = vec![shujing_core::ExecResult {
+        columns: (0..6).map(|i| format!("col_{i}")).collect(),
+        rows: (0..14)
+            .map(|i| {
+                (0..6)
+                    .map(|_| Some(format!("{filler}-{i}")))
+                    .collect()
+            })
+            .collect(),
+        affected: 0,
+        truncated: false,
+        elapsed_ms: 12,
+    }];
+    let conns = vec![shujing_core::ConnInfo {
+        id: "c1".into(),
+        name: "dramato-dev".into(),
+        db_type: shujing_core::DbType::MySql,
+        host: Some("10.0.0.3".into()),
+        port: Some(3306),
+        user: Some("dev".into()),
+        password: None,
+        database: Some("dramato".into()),
+        file_path: None,
+        color: None,
+        read_only: false,
+    }];
+    let cell = std::cell::RefCell::new(Some(q));
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1280.0, 780.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, cell: &mut std::cell::RefCell<Option<QueryTab>>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = cell.borrow_mut();
+                let q = b.as_mut().unwrap();
+                let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &[], false, &[], &Default::default(), None);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+
+    let crop_frozen = |h: &mut egui_kittest::Harness<std::cell::RefCell<Option<QueryTab>>>| -> Vec<u8> {
+        let img = h.render().expect("render");
+        let raw = img.as_raw();
+        let width = img.width() as usize;
+        // 逻辑 (250..360, 460..700) → 物理 ×2:冻结区内、分界线(≈x381)左侧、表头下、滚动条上
+        let (x0, x1, y0, y1) = (250usize * 2, 360usize * 2, 460usize * 2, 700usize * 2);
+        let mut out = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);
+        for y in y0..y1 {
+            let base = y * width * 4;
+            out.extend_from_slice(&raw[base + x0 * 4..base + x1 * 4]);
+        }
+        out
+    };
+    let wheel = |h: &mut egui_kittest::Harness<std::cell::RefCell<Option<QueryTab>>>, dx: f32| {
+        h.input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(640.0, 620.0)));
+        h.step();
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(-dx, 0.0),
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+        h.input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
+        h.step();
+        h.step();
+    };
+
+    wheel(&mut harness, 500.0);
+    let crop1 = crop_frozen(&mut harness);
+    let full1 = harness.render().expect("render").into_raw();
+    wheel(&mut harness, 500.0);
+    let crop2 = crop_frozen(&mut harness);
+    let full2 = harness.render().expect("render").into_raw();
+    assert_ne!(full1, full2, "第二次滚动后整幅画面应变化(网格在滚动)");
+    assert_eq!(crop1, crop2, "查询网格冻结区两次滚动位置应逐像素一致");
+
+    let img = harness.render().expect("render final");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/query_frozen.png").expect("保存 PNG 失败");
 }
