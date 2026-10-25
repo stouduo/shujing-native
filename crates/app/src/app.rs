@@ -311,6 +311,8 @@ pub struct TableTab {
     pub detail: bool,
     /// 多选行(⌘/Shift 点行号;批量删除/复制)
     pub multi_sel: Vec<usize>,
+    /// 冻结的前 N 个可见列(0=不冻结;横向滚动时钉在视口左侧)
+    pub frozen_vis: usize,
 }
 
 impl TableTab {
@@ -341,6 +343,7 @@ impl TableTab {
             insert_form: None,
             detail: false,
             multi_sel: vec![],
+            frozen_vis: 0,
             filter_bar_open: false,
             filter_mode: 0,
             conds: vec![],

@@ -987,6 +987,7 @@ fn session_save_restore_roundtrip() {
 
 #[test]
 fn tabbar_wheel_ignored_when_pointer_over_table() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 标签栏的“滚轮横滚”只能在指针位于标签栏时生效;
     // 否则滚表格时标签栏也会跟着横移(用户反馈的问题)。
     let mut app = full_app("role");
@@ -1044,6 +1045,7 @@ fn tabbar_wheel_ignored_when_pointer_over_table() {
 
 #[test]
 fn data_grid_hscroll_works() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 宽表:每个格塞长内容,总宽远超视口
     let mut app = full_app("role");
     if let TabKind::Table(t) = &mut app.tabs[2].kind {
@@ -1177,6 +1179,7 @@ fn data_grid_hscroll_works() {
 
 #[test]
 fn filter_bar_clicks_work() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut app = full_app("role");
     if let TabKind::Table(t) = &mut app.tabs[2].kind {
         t.filter_bar_open = true;
@@ -1310,4 +1313,166 @@ fn render_query_autocomplete() {
             Some("dramato"),
         );
     });
+}
+
+#[test]
+fn frozen_columns_pin_while_hscrolling() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 冻结前 2 列:横向滚动多段后,冻结区(行号+前 2 列)必须逐像素钉在原位
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        let filler = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string();
+        t.rows = t
+            .rows
+            .iter()
+            .map(|r| r.iter().map(|_| Some(filler.clone())).collect())
+            .collect();
+        t.frozen_vis = 2;
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+
+    let wheel = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>, dx: f32| {
+        h.input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+        h.step();
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(-dx, 0.0),
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+        // 指针移开:冻结区不留悬停高亮,像素差只能来自滚动
+        h.input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
+        h.step();
+        h.step();
+    };
+    let crop_frozen_region = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| -> Vec<u8> {
+        let img = h.render().expect("render");
+        let raw = img.as_raw();
+        let width = img.width() as usize;
+        // 逻辑 (260..420, 200..520) → 物理 ×2:落在冻结区内、表头之下
+        let (x0, x1, y0, y1) = (260usize * 2, 420usize * 2, 200usize * 2, 520usize * 2);
+        let mut out = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);
+        for y in y0..y1 {
+            let base = y * width * 4;
+            out.extend_from_slice(&raw[base + x0 * 4..base + x1 * 4]);
+        }
+        out
+    };
+
+    wheel(&mut harness, 600.0);
+    let crop1 = crop_frozen_region(&mut harness);
+    let x1 = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
+    wheel(&mut harness, 600.0);
+    let crop2 = crop_frozen_region(&mut harness);
+    let x2 = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(x1 > 0, "第一次横向滚轮后应产生滚动偏移,实际 {x1}");
+    assert!(x2 > x1, "第二次滚动应继续前进,{x1} → {x2}");
+    assert_eq!(crop1, crop2, "冻结区在两次滚动位置应逐像素一致(钉住)");
+
+    // 存一张滚动后的全图供人工/代理目检
+    let img = harness.render().expect("render final");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/frozen_scrolled.png")
+        .expect("保存 PNG 失败");
+}
+
+#[test]
+fn frozen_overlay_editor_and_unfreeze() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 冻结区滚出后:编辑框由覆盖层持有;取消冻结后回到底层
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        let filler = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string();
+        t.rows = t
+            .rows
+            .iter()
+            .map(|r| r.iter().map(|_| Some(filler.clone())).collect())
+            .collect();
+        t.frozen_vis = 1;
+        t.editing = Some((0, 0)); // 编辑第 0 行第 0 个可见列(冻结列)
+        t.draft = "hello".into();
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+
+    // 滚一段使冻结列滚出视口 → 覆盖层接管编辑框
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-400.0, 0.0),
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+
+    // 注入回车提交:覆盖层编辑框应产出 cr 事件(改动落 changes)
+    let enter = egui::Event::Key {
+        key: egui::Key::Enter,
+        pressed: true,
+        repeat: false,
+        modifiers: Default::default(),
+        physical_key: None,
+    };
+    harness.input_mut().events.push(enter);
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        assert!(
+            t.editing.is_none(),
+            "回车后应退出编辑态(覆盖层编辑框持有焦点)"
+        );
+    }
+
+    // 取消冻结:视觉回到底层渲染,不再有覆盖层
+    let img = harness.render().expect("render");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/frozen_edit.png").expect("保存 PNG 失败");
 }

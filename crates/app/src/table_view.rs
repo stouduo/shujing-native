@@ -1272,6 +1272,12 @@ pub(crate) fn draw_table_view(
             let mut col_clear_sort = false;
             let mut col_where_out: Option<(String, String, String)> = None;
             let mut col_stat_col: Option<String> = None;
+            let mut menu_action: Option<TabAction> = None;
+            // 冻结列:Some(N)=冻结前 N 个可见列,Some(-1)=取消
+            let mut frozen_out: Option<i64> = None;
+            let mut geom = FrozenGeom::default();
+            // 表格实际渲染列宽(body.widths(),含用户拖宽;供覆盖层对齐)
+            let actual_widths = std::cell::Cell::new(Vec::<f32>::new());
             {
                 let sc = &mut sort_click;
                 let cr = &mut commit;
@@ -1283,6 +1289,8 @@ pub(crate) fn draw_table_view(
                     .filter(|(_, c)| !tab.hidden_cols.contains(c))
                     .map(|(i, _)| i)
                     .collect();
+                // 冻结列数按当前可见列收敛(隐藏列后冻结数可能越界)
+                let frozen_vis = tab.frozen_vis.min(vis_idx.len());
                 // 免投影:直接在全量行上采样可见列宽,不再每帧深拷贝整页数据
                 let col_widths = fitted_from_base(
                     suggested_widths_vis(rows, columns, &vis_idx),
@@ -1363,15 +1371,67 @@ pub(crate) fn draw_table_view(
                             &mut col_stat_col,
                             mysql_quote_flag,
                             tab.show_rowno,
+                            frozen_vis,
+                            &mut geom,
+                            &actual_widths,
+                            &mut frozen_out,
                         );
                         if let Some(a) = menu_action {
                             actions.push(a);
                         }
                     });
+                // 冻结列编辑框归属判定用「上一帧」横向偏移(与表格渲染时的判定一致)
+                let prev_hscroll =
+                    LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
                 LAST_HSCROLL_X.store(
                     hout.state.offset.x as i32,
                     std::sync::atomic::Ordering::Relaxed,
                 );
+                // 冻结列覆盖层:横向滚动时把行号+前 N 列钉在视口左侧重绘
+                draw_frozen_overlay(
+                    ui,
+                    &tab_id_s,
+                    rows,
+                    columns,
+                    &vis_idx,
+                    frozen_vis,
+                    hout.state.offset.x,
+                    prev_hscroll,
+                    &actual_widths,
+                    tab.show_rowno,
+                    &geom,
+                    editing,
+                    draft,
+                    changes,
+                    pk_cols,
+                    selected,
+                    multi_sel,
+                    sort,
+                    &mut sort_click,
+                    &mut commit,
+                    &mut new_selection,
+                    &mut copy_text,
+                    &mut menu_action,
+                    view_cell,
+                    &mut set_null,
+                    detail,
+                    &mut col_set_sort,
+                    &mut col_clear_sort,
+                    &mut col_where_out,
+                    &mut col_stat_col,
+                    mysql_quote_flag,
+                    &mut frozen_out,
+                );
+                if let Some(a) = menu_action {
+                    actions.push(a);
+                }
+                if let Some(v) = frozen_out {
+                    tab.frozen_vis = if v < 0 {
+                        0
+                    } else {
+                        (v as usize).min(vis_idx.len())
+                    };
+                }
             }
             // 列头右键动作落地
             if let Some((c2, asc)) = col_set_sort {
@@ -1700,6 +1760,16 @@ fn text_width(s: &str) -> f32 {
 
 /// 数据表(TableBuilder):表头粘顶 + 行发丝线,由水平 ScrollArea 包裹
 #[allow(clippy::too_many_arguments)]
+/// 冻结列覆盖层需要的渲染几何(每帧由 draw_data_table 填充)
+#[derive(Default)]
+pub(crate) struct FrozenGeom {
+    /// 表头带顶部 y(屏幕坐标)
+    pub header_top: Option<f32>,
+    /// 本帧实际渲染的行号(按渲染顺序;行虚拟化,只有可见行)
+    pub vis_ri: Vec<usize>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_data_table(
     ui: &mut egui::Ui,
     pointer: Option<egui::Pos2>,
@@ -1729,7 +1799,12 @@ fn draw_data_table(
     col_stat_col: &mut Option<String>,
     mysql_q: bool,
     show_rowno: bool,
+    frozen_vis: usize,
+    geom: &mut FrozenGeom,
+    actual_widths: &std::cell::Cell<Vec<f32>>,
+    frozen_out: &mut Option<i64>,
 ) {
+    *geom = FrozenGeom::default();
     let p = theme::c();
     // TableBuilder 的行/列间距取自 item_spacing:清零才能得到原型的连续表头与 32pt 行高
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
@@ -1754,9 +1829,10 @@ fn draw_data_table(
     // 所有真实列都按内容宽度布局,末尾再补一个 remainder 占位列:
     // 内容窄时占位列把右侧铺满;内容宽时占位列收缩为 0,表格整体溢出并出现横向滚动条。
     for (vw, _vi) in vis_idx.iter().enumerate() {
-        // 用 exact 固定内容宽度;auto 列会被 TableBuilder 压缩到视口内,永远不会溢出,
-        // 横向滚动条也就不会出现。末尾 remainder 列负责在窄表时把右侧铺满。
-        tb = tb.column(Column::exact(col_widths[vw]).resizable(true).clip(true));
+        // initial(而非 exact):exact 把 width_range 钉死在 w..=w,拖拽调宽被钳到 0。
+        // 首帧用启发式宽度建状态,之后由 TableState 保持(可拖宽)。
+        tb = tb
+            .column(Column::initial(col_widths[vw]).resizable(true).clip(true).at_least(40.0));
     }
     tb = tb.column(Column::remainder().at_least(0.0));
     tb.header(theme::HEADER_H, |mut header| {
@@ -1774,13 +1850,16 @@ fn draw_data_table(
                 header_bottom_line(ui);
             });
         }
-        for &vi in vis_idx.iter() {
+        for (vw, &vi) in vis_idx.iter().enumerate() {
             let c = &columns[vi];
             let sorted = srt
                 .as_ref()
                 .and_then(|(scn, asc)| (*scn == *c).then_some(*asc));
             header.col(|ui| {
                 let rect = ui.max_rect();
+                if geom.header_top.is_none() {
+                    geom.header_top = Some(rect.top());
+                }
                 let painter = ui.painter().with_clip_rect(rect);
                 if sorted.is_some() {
                     painter.rect_filled(rect, 0, p.elevated);
@@ -1829,67 +1908,21 @@ fn draw_data_table(
                 if resp.clicked() {
                     *sc = Some(c.clone());
                 }
-                // 列头右键:排序/按列筛选/列统计
-                let mut col_menu: Option<u8> = None;
-                let _ = resp.clone().context_menu(|ui| {
-                    if ui.button("升序排序").clicked() {
-                        col_menu = Some(0);
-                        ui.close_menu();
-                    }
-                    if ui.button("降序排序").clicked() {
-                        col_menu = Some(1);
-                        ui.close_menu();
-                    }
-                    if ui.button("取消排序").clicked() {
-                        col_menu = Some(2);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button("筛选此值(=当前页首行值)").clicked() {
-                        col_menu = Some(3);
-                        ui.close_menu();
-                    }
-                    if ui.button("筛选 NULL 值").clicked() {
-                        col_menu = Some(4);
-                        ui.close_menu();
-                    }
-                    if ui.button("筛选非空值").clicked() {
-                        col_menu = Some(5);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button("列统计(当前页)").clicked() {
-                        col_menu = Some(6);
-                        ui.close_menu();
-                    }
-                });
-                if let Some(act) = col_menu {
-                    let col = c.clone();
-                    match act {
-                        0 => *set_sort = Some((col, true)),
-                        1 => *set_sort = Some((col, false)),
-                        2 => *clear_sort = true,
-                        3 => {
-                            if let Some(v) = rows.first().and_then(|r| {
-                                columns
-                                    .iter()
-                                    .position(|x| x == &col)
-                                    .and_then(|i| r[i].clone())
-                            }) {
-                                *col_where_out = Some((col, "=".to_string(), v));
-                            }
-                        }
-                        4 => {
-                            *col_where_out = Some((col, "IS NULL".to_string(), String::new()));
-                        }
-                        5 => {
-                            *col_where_out = Some((col, "IS NOT NULL".to_string(), String::new()));
-                        }
-                        _ => {
-                            *col_stat_col = Some(col);
-                        }
-                    }
-                }
+                // 列头右键:排序/按列筛选/列统计/冻结(与冻结覆盖层共用)
+                header_col_menu(
+                    &resp,
+                    c,
+                    vw,
+                    vis_idx.len(),
+                    frozen_vis,
+                    rows,
+                    columns,
+                    set_sort,
+                    clear_sort,
+                    col_where_out,
+                    col_stat_col,
+                    frozen_out,
+                );
                 header_bottom_line(ui);
             });
         }
@@ -1901,6 +1934,8 @@ fn draw_data_table(
         });
     })
     .body(|body| {
+        // 表格实际渲染列宽(TableState 可能保持/被拖宽,与启发式不同);冻结覆盖层用其对齐
+        actual_widths.set(body.widths().to_vec());
         // 行悬停:每格用自身矩形判定(同行的格共享同一 y 波段);
         // 此前跨行累积并集会把悬停行下方全部行点亮
         let hovers = |rect: egui::Rect| {
@@ -1912,6 +1947,7 @@ fn draw_data_table(
         };
         body.rows(theme::ROW_H, rows.len(), |mut row| {
             let ri = row.index();
+            geom.vis_ri.push(ri);
             let rowdata = &rows[ri];
             let is_editing_row = matches!(*editing, Some((er, _)) if er == ri);
             if is_editing_row {
@@ -1966,7 +2002,12 @@ fn draw_data_table(
 
             for (ci, &vi) in vis_idx.iter().enumerate() {
                 let col_name = &columns[vi];
-                let cell_editing = matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
+                // 冻结列已横向滚出视口:编辑框改由覆盖层绘制,底层画普通格避免双 TextEdit 抢焦点
+                let frozen_scrolled = frozen_vis > 0
+                    && ci < frozen_vis
+                    && LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32 > 0.5;
+                let cell_editing = matches!(*editing, Some((er, ec)) if er == ri && ec == ci)
+                    && !frozen_scrolled;
                 let changed = changes.iter().any(|(r, cn, _)| *r == ri && cn == col_name);
                 if cell_editing {
                     row.col(|ui| {
@@ -2060,6 +2101,400 @@ fn draw_data_table(
     // 编辑行滚出视口(本帧未渲染):取消编辑,避免悬死状态
     if editing.is_some() && !editing_row_rendered.get() {
         *editing = None;
+    }
+}
+
+/// 冻结列覆盖层:横向滚动时把「行号 + 前 frozen_vis 个可见列」钉在视口左侧重绘。
+/// 底层这些格已随内容滚出视口;覆盖层按表格实际渲染列宽对齐,
+/// 交互(排序/选中/多选/编辑/右键菜单)与普通格完全一致。
+#[allow(clippy::too_many_arguments)]
+fn draw_frozen_overlay(
+    ui: &mut egui::Ui,
+    tab_id: &str,
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+    vis_idx: &[usize],
+    frozen_vis: usize,
+    offset_x: f32,
+    prev_hscroll: f32,
+    actual_widths: &std::cell::Cell<Vec<f32>>,
+    show_rowno: bool,
+    geom: &FrozenGeom,
+    editing: &mut Option<(usize, usize)>,
+    draft: &mut String,
+    changes: &[(usize, String, Option<String>)],
+    pk_cols: &[String],
+    selected: &mut Option<(usize, usize)>,
+    multi_sel: &mut Vec<usize>,
+    sort: &Option<(String, bool)>,
+    sc: &mut Option<String>,
+    cr: &mut Option<(usize, usize, String)>,
+    new_selection: &mut Option<Option<(usize, usize)>>,
+    copy_text: &mut Option<String>,
+    menu_action: &mut Option<TabAction>,
+    view_cell: &mut Option<(String, String)>,
+    set_null: &mut Option<(usize, usize)>,
+    detail: &mut bool,
+    set_sort: &mut Option<(String, bool)>,
+    clear_sort: &mut bool,
+    col_where_out: &mut Option<(String, String, String)>,
+    col_stat_col: &mut Option<String>,
+    mysql_q: bool,
+    frozen_out: &mut Option<i64>,
+) {
+    if frozen_vis == 0 || offset_x <= 0.5 {
+        return;
+    }
+    let widths = actual_widths.replace(Vec::new());
+    let rowno_w = if show_rowno {
+        widths.first().copied().unwrap_or(48.0)
+    } else {
+        0.0
+    };
+    let frozen_ws: Vec<f32> = (0..frozen_vis)
+        .map(|v| {
+            widths
+                .get(if show_rowno { 1 + v } else { v })
+                .copied()
+                .unwrap_or(120.0)
+        })
+        .collect();
+    let p = theme::c();
+    let left = ui.max_rect().left();
+    let top = geom.header_top.unwrap_or_else(|| ui.max_rect().top());
+    let bottom = ui.max_rect().bottom();
+    let region_w = rowno_w + frozen_ws.iter().sum::<f32>();
+    if region_w < 1.0 || !(bottom > top) {
+        return;
+    }
+    let region =
+        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(region_w, bottom - top));
+    let painter = ui.painter().with_clip_rect(region);
+    // 先整块铺底色,再逐带画(行带之间与末行以下的空隙保持表底色)
+    painter.rect_filled(region, 0, p.bg);
+    let pointer = ui.input(|i| i.pointer.latest_pos());
+
+    // ---- 钉住的表头
+    let header_rect =
+        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(region_w, theme::HEADER_H));
+    painter.rect_filled(header_rect, 0, p.panel);
+    if show_rowno {
+        painter.text(
+            egui::pos2(left + rowno_w - 14.0, header_rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            "#",
+            egui::FontId::proportional(11.0),
+            p.muted,
+        );
+    }
+    let mut hx = left + rowno_w;
+    for (vw, &vi) in vis_idx.iter().enumerate().take(frozen_vis) {
+        let c = &columns[vi];
+        let w = frozen_ws[vw];
+        let rect = egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, theme::HEADER_H));
+        let cp = painter.with_clip_rect(rect);
+        let sorted = sort
+            .as_ref()
+            .and_then(|(scn, asc)| (*scn == *c).then_some(*asc));
+        if sorted.is_some() {
+            cp.rect_filled(rect, 0, p.elevated);
+        }
+        let color = if sorted.is_some() { p.accent } else { p.text2 };
+        let font = egui::FontId::proportional(theme::FS_HEADER);
+        let g = icons::text_galley(&cp, c.clone(), font, Color32::PLACEHOLDER, rect.width() - 24.0);
+        match sorted {
+            Some(asc) => {
+                cp.galley(
+                    egui::pos2(rect.left() + 12.0, rect.center().y - 6.0 - g.size().y / 2.0),
+                    g.clone(),
+                    color,
+                );
+                paint_sort_arrow(
+                    &cp,
+                    rect.left() + 12.0 + g.size().x / 2.0,
+                    rect.center().y + 10.0,
+                    asc,
+                    color,
+                );
+            }
+            None => {
+                cp.galley(
+                    egui::pos2(rect.left() + 12.0, rect.center().y - g.size().y / 2.0),
+                    g,
+                    color,
+                );
+            }
+        }
+        // 与底层列头一致的交互:点击排序、右键同款菜单
+        let resp = ui.interact(rect, egui::Id::new(("fz-h", tab_id, vw)), Sense::click());
+        let _ = resp.clone().on_hover_text("点击排序:升序 → 降序 → 取消;拖动列边缘调宽");
+        if resp.clicked() {
+            *sc = Some(c.clone());
+        }
+        header_col_menu(
+            &resp,
+            c,
+            vw,
+            vis_idx.len(),
+            frozen_vis,
+            rows,
+            columns,
+            set_sort,
+            clear_sort,
+            col_where_out,
+            col_stat_col,
+            frozen_out,
+        );
+        hx += w;
+    }
+    painter.line_segment(
+        [
+            egui::pos2(left, header_rect.bottom() - 0.5),
+            egui::pos2(header_rect.right(), header_rect.bottom() - 0.5),
+        ],
+        egui::Stroke::new(1.0, p.border),
+    );
+
+    // ---- 钉住的数据行
+    let body_top = top + theme::HEADER_H;
+    for (k, &ri) in geom.vis_ri.iter().enumerate() {
+        if ri >= rows.len() {
+            continue;
+        }
+        let y = body_top + k as f32 * theme::ROW_H;
+        if y >= bottom {
+            break;
+        }
+        let rowdata = &rows[ri];
+        let row_selected = matches!(*selected, Some((sr, _)) if sr == ri)
+            || multi_sel.binary_search(&ri).is_ok();
+        let hovered = pointer
+            .map(|pt| pt.y >= y && pt.y < y + theme::ROW_H && pt.x >= left && pt.x < left + region_w)
+            .unwrap_or(false);
+        let band = egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(region_w, theme::ROW_H));
+        if row_selected {
+            painter.rect_filled(band, 0, p.selected_row);
+        } else if hovered {
+            painter.rect_filled(band, 0, p.row_hover);
+        }
+        // 行号格(交互与底层行号列一致:单击单选 / ⌘ 切换 / Shift 范围)
+        if show_rowno {
+            painter.text(
+                egui::pos2(left + rowno_w - 14.0, y + theme::ROW_H / 2.0),
+                egui::Align2::RIGHT_CENTER,
+                format!("{}", ri + 1),
+                egui::FontId::proportional(11.0),
+                if row_selected { p.accent } else { p.muted },
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(left, y + theme::ROW_H - 0.5),
+                    egui::pos2(left + region_w, y + theme::ROW_H - 0.5),
+                ],
+                egui::Stroke::new(1.0, p.row_line),
+            );
+            let r = egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(rowno_w, theme::ROW_H));
+            let resp = ui.interact(r, egui::Id::new(("fz-r", tab_id, ri)), Sense::click());
+            let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+            if resp.clicked() {
+                *new_selection = Some(Some((ri, 0)));
+                if cmd {
+                    if let Some(pos) = multi_sel.iter().position(|&x| x == ri) {
+                        multi_sel.remove(pos);
+                    } else {
+                        multi_sel.push(ri);
+                        multi_sel.sort_unstable();
+                    }
+                } else if shift {
+                    let anchor = multi_sel.last().copied().unwrap_or(ri);
+                    let (lo, hi) = (anchor.min(ri), anchor.max(ri));
+                    *multi_sel = (lo..=hi).collect();
+                } else {
+                    multi_sel.clear();
+                }
+            }
+            if resp.double_clicked() && !pk_cols.is_empty() {
+                *detail = true;
+            }
+        }
+        // 冻结数据格:子 ui 定位到钉住矩形后复用 draw_data_cell(选中/编辑入口/右键菜单全套)
+        let mut x = left + rowno_w;
+        for (ci, &vi) in vis_idx.iter().enumerate().take(frozen_vis) {
+            let col_name = &columns[vi];
+            let w = frozen_ws[ci];
+            let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, theme::ROW_H));
+            let v = rowdata.get(vi).unwrap_or(&None);
+            let changed = changes.iter().any(|(r2, cn, _)| *r2 == ri && cn == col_name);
+            let cell_editing = matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
+            let mut cell_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            if cell_editing && prev_hscroll > 0.5 {
+                // 编辑框由覆盖层持有(底层此刻画普通格,避免双 TextEdit 抢焦点)
+                cell_ui.painter().rect_filled(rect, 0, p.bg);
+                let inner = rect.shrink2(egui::vec2(4.0, 3.0));
+                let mut eui = cell_ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(inner)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                let resp = eui.add(
+                    egui::TextEdit::singleline(draft)
+                        .frame(false)
+                        .margin(egui::Margin::symmetric(6, 0))
+                        .font(theme::mono(theme::FS_DATA))
+                        .desired_width(inner.width()),
+                );
+                resp.request_focus();
+                cell_ui.painter().rect_stroke(
+                    rect.shrink(1.0),
+                    egui::CornerRadius::same(3),
+                    egui::Stroke::new(1.0, p.accent),
+                    egui::StrokeKind::Inside,
+                );
+                let esc = cell_ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let enter = cell_ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if esc {
+                    *editing = None;
+                } else if resp.lost_focus() || enter {
+                    *cr = Some((ri, ci, draft.clone()));
+                    *editing = None;
+                }
+            } else {
+                let is_sel = matches!(*selected, Some((sr, sc2)) if sr == ri && sc2 == ci);
+                draw_data_cell(
+                    &mut cell_ui,
+                    v,
+                    changed,
+                    !pk_cols.is_empty(),
+                    ri,
+                    ci,
+                    is_sel,
+                    row_selected,
+                    hovered,
+                    editing,
+                    draft,
+                    selected,
+                    new_selection,
+                    copy_text,
+                    columns,
+                    rowdata,
+                    menu_action,
+                    tab_id,
+                    view_cell,
+                    set_null,
+                    detail,
+                    col_name,
+                    col_where_out,
+                    mysql_q,
+                    multi_sel,
+                );
+            }
+            x += w;
+        }
+    }
+    // 与滚动区分界的右缘竖线
+    painter.line_segment(
+        [
+            egui::pos2(left + region_w - 0.5, top),
+            egui::pos2(left + region_w - 0.5, bottom),
+        ],
+        egui::Stroke::new(2.0, p.border),
+    );
+}
+
+/// 列头右键菜单(底层列头与冻结覆盖层共用;动作经 out 参数由调用方落地)
+#[allow(clippy::too_many_arguments)]
+fn header_col_menu(
+    resp: &egui::Response,
+    col: &str,
+    vw: usize,
+    vis_len: usize,
+    frozen_vis: usize,
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+    set_sort: &mut Option<(String, bool)>,
+    clear_sort: &mut bool,
+    col_where_out: &mut Option<(String, String, String)>,
+    col_stat_col: &mut Option<String>,
+    frozen_out: &mut Option<i64>,
+) {
+    let mut col_menu: Option<u8> = None;
+    let _ = resp.clone().context_menu(|ui| {
+        if ui.button("升序排序").clicked() {
+            col_menu = Some(0);
+            ui.close_menu();
+        }
+        if ui.button("降序排序").clicked() {
+            col_menu = Some(1);
+            ui.close_menu();
+        }
+        if ui.button("取消排序").clicked() {
+            col_menu = Some(2);
+            ui.close_menu();
+        }
+        ui.separator();
+        if ui.button("筛选此值(=当前页首行值)").clicked() {
+            col_menu = Some(3);
+            ui.close_menu();
+        }
+        if ui.button("筛选 NULL 值").clicked() {
+            col_menu = Some(4);
+            ui.close_menu();
+        }
+        if ui.button("筛选非空值").clicked() {
+            col_menu = Some(5);
+            ui.close_menu();
+        }
+        ui.separator();
+        if ui.button("列统计(当前页)").clicked() {
+            col_menu = Some(6);
+            ui.close_menu();
+        }
+        ui.separator();
+        if vw + 1 < vis_len && ui.button("冻结到此列").clicked() {
+            col_menu = Some(7);
+            ui.close_menu();
+        }
+        if frozen_vis > 0 && ui.button("取消冻结列").clicked() {
+            col_menu = Some(8);
+            ui.close_menu();
+        }
+    });
+    if let Some(act) = col_menu {
+        let col = col.to_string();
+        match act {
+            0 => *set_sort = Some((col, true)),
+            1 => *set_sort = Some((col, false)),
+            2 => *clear_sort = true,
+            3 => {
+                if let Some(v) = rows.first().and_then(|r| {
+                    columns
+                        .iter()
+                        .position(|x| x == &col)
+                        .and_then(|i| r[i].clone())
+                }) {
+                    *col_where_out = Some((col, "=".to_string(), v));
+                }
+            }
+            4 => {
+                *col_where_out = Some((col, "IS NULL".to_string(), String::new()));
+            }
+            5 => {
+                *col_where_out = Some((col, "IS NOT NULL".to_string(), String::new()));
+            }
+            6 => {
+                *col_stat_col = Some(col);
+            }
+            7 => {
+                *frozen_out = Some(vw as i64 + 1);
+            }
+            _ => {
+                *frozen_out = Some(-1);
+            }
+        }
     }
 }
 
