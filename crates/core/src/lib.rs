@@ -538,6 +538,19 @@ impl Service {
         redis_ops::key_detail(&mut guard.backend, db, key).await
     }
 
+    /// Redis 详情追加一页(list/zset 分页)
+    pub async fn redis_key_detail_more(
+        &self,
+        id: &str,
+        db: u8,
+        key: &str,
+        offset: usize,
+    ) -> Result<redis_ops::RedisDetail, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        redis_ops::key_detail_page(&mut guard.backend, db, key, offset).await
+    }
+
     pub async fn redis_key_types(
         &self,
         id: &str,

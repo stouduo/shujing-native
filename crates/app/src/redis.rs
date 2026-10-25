@@ -574,6 +574,30 @@ fn draw_detail(
                     }
                 });
             }
+            // 分页:list/zset 已显示 < len 时给"加载更多"
+            if matches!(d.key_type.as_str(), "list" | "zset")
+                && d.len as usize > d.pairs.len()
+            {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    if theme::button(ui, "加载更多", theme::BtnKind::Secondary).clicked() {
+                        actions.push(TabAction::RedisLoadMore {
+                            tab_id: tab_id.to_string(),
+                            key: key.clone(),
+                        });
+                    }
+                    ui.label(
+                        RichText::new(format!(
+                            "已显示 {} / {}",
+                            d.pairs.len(),
+                            d.len
+                        ))
+                        .size(11.0)
+                        .color(p.muted),
+                    );
+                });
+            }
             // 添加成员
             if read_only {
                 return;

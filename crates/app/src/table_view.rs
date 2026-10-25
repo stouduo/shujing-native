@@ -82,6 +82,16 @@ pub enum TabAction {
         tab_id: String,
         ri: usize,
     },
+    /// 批量删除多选行(主键定位;空主键行跳过并提示)
+    DeleteRows {
+        tab_id: String,
+        ris: Vec<usize>,
+    },
+    /// Redis 详情加载更多
+    RedisLoadMore {
+        tab_id: String,
+        key: String,
+    },
     InsertRow {
         tab_id: String,
         values: Vec<(String, String)>,
@@ -951,6 +961,17 @@ pub(crate) fn draw_table_view(
                             .color(p.green),
                     );
                 }
+                if tab.multi_sel.len() > 1 {
+                    vsep(ui);
+                    ui.label(
+                        RichText::new(format!(
+                            "已选 {} 行 · ⌘C 复制 · 行右键批量删除",
+                            tab.multi_sel.len()
+                        ))
+                        .size(11.5)
+                        .color(p.accent),
+                    );
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let total_pages = tab
@@ -1236,6 +1257,7 @@ pub(crate) fn draw_table_view(
                 pk_cols,
                 sort,
                 selected,
+                multi_sel,
                 view_cell,
                 detail,
                 ..
@@ -1324,6 +1346,7 @@ pub(crate) fn draw_table_view(
                             changes,
                             pk_cols,
                             selected,
+                            multi_sel,
                             sort,
                             sc,
                             cr,
@@ -1392,7 +1415,29 @@ pub(crate) fn draw_table_view(
                 *selected = sel;
             }
             if copy_text.is_none() && editing.is_none() {
-                if let Some((sr, sc)) = *selected {
+                if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C))
+                    && multi_sel.len() > 1
+                {
+                    // 多选:复制整行 TSV(可见列)
+                    let lines: Vec<String> = multi_sel
+                        .iter()
+                        .filter_map(|&ri| rows.get(ri))
+                        .map(|r| {
+                            vis_idx
+                                .iter()
+                                .filter_map(|&vi| r.get(vi))
+                                .map(|v| {
+                                    v.as_deref()
+                                        .unwrap_or("NULL")
+                                        .replace('\t', " ")
+                                        .replace('\n', " ")
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\t")
+                        })
+                        .collect();
+                    copy_text = Some(lines.join("\n"));
+                } else if let Some((sr, sc)) = *selected {
                     if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) {
                         // selected 存的是可视列下标,须映射回全量列(隐藏列存在时两者不同)
                         let full_sc = vis_idx.get(sc).copied().unwrap_or(sc);
@@ -1667,6 +1712,7 @@ fn draw_data_table(
     changes: &mut Vec<(usize, String, Option<String>)>,
     pk_cols: &[String],
     selected: &mut Option<(usize, usize)>,
+    multi_sel: &mut Vec<usize>,
     sort: &mut Option<(String, bool)>,
     sc: &mut Option<String>,
     cr: &mut Option<(usize, usize, String)>,
@@ -1871,7 +1917,8 @@ fn draw_data_table(
             if is_editing_row {
                 editing_row_rendered.set(true);
             }
-            let row_selected = matches!(*selected, Some((sr, _)) if sr == ri);
+            let row_selected = matches!(*selected, Some((sr, _)) if sr == ri)
+                || multi_sel.binary_search(&ri).is_ok();
             let row_no = ri + 1;
             let mut hovered = false;
             if show_rowno {
@@ -1892,8 +1939,24 @@ fn draw_data_table(
                     );
                     row_bottom_line(ui);
                     let resp = ui.allocate_rect(rect, Sense::click());
+                    // 行号点击选择:单击=单选;⌘=切换多选;Shift=范围选(直接操作,不走弹窗)
+                    let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
                     if resp.clicked() {
                         *new_selection = Some(Some((ri, 0)));
+                        if cmd {
+                            if let Some(pos) = multi_sel.iter().position(|&r| r == ri) {
+                                multi_sel.remove(pos);
+                            } else {
+                                multi_sel.push(ri);
+                                multi_sel.sort_unstable();
+                            }
+                        } else if shift {
+                            let anchor = multi_sel.last().copied().unwrap_or(ri);
+                            let (lo, hi) = (anchor.min(ri), anchor.max(ri));
+                            *multi_sel = (lo..=hi).collect();
+                        } else {
+                            multi_sel.clear();
+                        }
                     }
                     if resp.double_clicked() && !pk_cols.is_empty() {
                         *detail = true;
@@ -1972,6 +2035,7 @@ fn draw_data_table(
                             col_name,
                             col_where_out,
                             mysql_q,
+                            multi_sel,
                         );
                     });
                 }
@@ -2062,6 +2126,7 @@ fn draw_data_cell(
     col_name: &str,
     col_where_out: &mut Option<(String, String, String)>,
     _mysql_q: bool,
+    multi_sel: &[usize],
 ) {
     let p = theme::c();
     let rect = ui.max_rect();
@@ -2186,7 +2251,19 @@ fn draw_data_cell(
             *set_null = Some((ri, ci));
             ui.close_menu();
         }
-        if ui
+        if multi_sel.len() > 1 && multi_sel.binary_search(&ri).is_ok() {
+            // 多选上下文:批量删除(直接操作)
+            if ui
+                .add_enabled(has_pk, egui::Button::new(format!("删除选中 {} 行…", multi_sel.len())))
+                .clicked()
+            {
+                *menu_action = Some(TabAction::DeleteRows {
+                    tab_id: tab_id.to_string(),
+                    ris: multi_sel.to_vec(),
+                });
+                ui.close_menu();
+            }
+        } else if ui
             .add_enabled(has_pk, egui::Button::new("删除此行…"))
             .clicked()
         {
@@ -2858,6 +2935,57 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             match export_rows_csv(&r.columns, &r.rows) {
                 Ok(path) => app.toast_error(format!("已导出到 {path}")),
                 Err(e) => app.toast_error(e),
+            }
+        }
+        TabAction::RedisLoadMore { tab_id, key } => app.redis_fetch_detail_more(&tab_id, &key),
+        TabAction::DeleteRows { tab_id, ris } => {
+            let Some(t) = app.table_tab_mut(&tab_id) else {
+                return;
+            };
+            if t.pk_cols.is_empty() {
+                app.toast_error("该表没有主键,无法删除行".to_string());
+                return;
+            }
+            let pk_idxs: Vec<usize> = t
+                .pk_cols
+                .iter()
+                .filter_map(|p| t.columns.iter().position(|c| c == p))
+                .collect();
+            let mut deletes: Vec<Vec<(String, String)>> = Vec::new();
+            let mut skipped = 0usize;
+            for ri in &ris {
+                let Some(row) = t.rows.get(*ri) else { continue };
+                let pk: Vec<(String, String)> = pk_idxs
+                    .iter()
+                    .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
+                    .collect();
+                if pk.iter().any(|(_, v)| v.is_empty()) {
+                    skipped += 1;
+                    continue;
+                }
+                deletes.push(pk);
+            }
+            if deletes.is_empty() {
+                app.toast_error("选中行均无有效主键,无法删除".to_string());
+                return;
+            }
+            let conn_id = t.conn_id.clone();
+            let table = t.table.clone();
+            let database = t.database.clone();
+            t.loading = true;
+            let tx = app.event_tx.clone();
+            let service = app.service.clone();
+            net::spawn(async move {
+                let result = service
+                    .apply_changes(&conn_id, &table, database.as_deref(), &[], &deletes, &[])
+                    .await;
+                let _ = tx.send(BgEvent::ChangesSaved {
+                    tab_id: tab_id.clone(),
+                    result: result.map(|r| r.affected),
+                });
+            });
+            if skipped > 0 {
+                app.toast_error(format!("跳过 {skipped} 行(主键值为空)"));
             }
         }
         TabAction::DeleteRow { tab_id, ri } => {

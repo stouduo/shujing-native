@@ -264,6 +264,7 @@ fn role_tab() -> TableTab {
     tab.active_filter = Some("auditor".into());
     tab.last_elapsed_ms = Some(24);
     tab.detail = false;
+    tab.multi_sel = vec![2, 3, 4];
     tab
 }
 

@@ -154,6 +154,12 @@ pub enum BgEvent {
         key: String,
         result: Result<shujing_core::redis_ops::RedisDetail, String>,
     },
+    /// Redis 详情追加页(加载更多)
+    RedisDetailMoreDone {
+        tab_id: String,
+        key: String,
+        result: Result<shujing_core::redis_ops::RedisDetail, String>,
+    },
     /// 批量键类型(key, type)
     RedisTypesDone {
         tab_id: String,
@@ -303,6 +309,8 @@ pub struct TableTab {
     pub insert_form: Option<Vec<(String, String)>>,
     /// 行详情面板(原型默认不显示,右键"查看整行"打开)
     pub detail: bool,
+    /// 多选行(⌘/Shift 点行号;批量删除/复制)
+    pub multi_sel: Vec<usize>,
 }
 
 impl TableTab {
@@ -332,6 +340,7 @@ impl TableTab {
             view_cell: None,
             insert_form: None,
             detail: false,
+            multi_sel: vec![],
             filter_bar_open: false,
             filter_mode: 0,
             conds: vec![],
@@ -1563,6 +1572,38 @@ impl ShujingApp {
     }
 
     /// 取 key 详情
+    /// Redis 详情"加载更多":追加后续一页成员
+    pub fn redis_fetch_detail_more(&mut self, tab_id: &str, key: &str) {
+        let tab_id = tab_id.to_string();
+        let key = key.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let crate::app::TabKind::Redis(rt) = &tab.kind else {
+            return;
+        };
+        let conn_id = rt.conn_id.clone();
+        let db = rt.db;
+        let offset = rt.detail.as_ref().map(|d| d.pairs.len()).unwrap_or(0);
+        if offset == 0 {
+            return;
+        }
+        let tid = tab_id.clone();
+        let k = key.to_string();
+        net::spawn(async move {
+            let result = service
+                .redis_key_detail_more(&conn_id, db, &k, offset)
+                .await;
+            let _ = tx.send(BgEvent::RedisDetailMoreDone {
+                tab_id: tid,
+                key,
+                result,
+            });
+        });
+    }
+
     pub fn redis_fetch_detail(&mut self, tab_id: &str, key: &str) {
         let tab_id = tab_id.to_string();
         let key = key.to_string();
@@ -1826,6 +1867,7 @@ impl ShujingApp {
         tab.loading = true;
         tab.changes.clear();
         tab.editing = None;
+        tab.multi_sel.clear();
         if !tab.pk_loaded {
             tab.pk_loaded = true;
             let (tx2, conn2, table2, db2, id2) = (
@@ -3212,6 +3254,29 @@ impl ShujingApp {
                     }
                     match result {
                         Ok(d) => rt.detail = Some(d),
+                        Err(e) => rt.error = Some(e),
+                    }
+                }
+                BgEvent::RedisDetailMoreDone {
+                    tab_id,
+                    key,
+                    result,
+                } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+                        continue;
+                    };
+                    let TabKind::Redis(rt) = &mut tab.kind else {
+                        continue;
+                    };
+                    if rt.selected_key.as_deref() != Some(key.as_str()) {
+                        continue;
+                    }
+                    match result {
+                        Ok(d) => {
+                            if let Some(cur) = rt.detail.as_mut() {
+                                cur.pairs.extend(d.pairs);
+                            }
+                        }
                         Err(e) => rt.error = Some(e),
                     }
                 }

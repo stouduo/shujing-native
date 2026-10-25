@@ -135,8 +135,44 @@ pub async fn key_detail(
     db: u8,
     key: &str,
 ) -> Result<RedisDetail, String> {
+    key_detail_page(backend, db, key, 0).await
+}
+
+/// 分页详情:offset>0 时仅对 list/zset 追加后续一页(len/ttl 不重拉)
+pub async fn key_detail_page(
+    backend: &mut Backend,
+    db: u8,
+    key: &str,
+    offset: usize,
+) -> Result<RedisDetail, String> {
+    const PAGE: isize = 200;
     let mut con = get_con(backend).await?;
     redis::cmd("SELECT").arg(db).query_async::<()>(&mut con).await.map_err(es)?;
+    if offset > 0 {
+        // 追加页:按类型续拉一段(list 按下标,zset 按排名)
+        let kt: String = redis::cmd("TYPE").arg(key).query_async(&mut con).await.map_err(es)?;
+        let mut d = RedisDetail { key_type: kt.clone(), ttl: -1, len: 0, text: None, pairs: vec![] };
+        match kt.as_str() {
+            "list" => {
+                let start = offset as isize;
+                let items: Vec<String> = con
+                    .lrange(key, start, start + PAGE - 1)
+                    .await
+                    .map_err(es)?;
+                d.pairs = items.into_iter().map(|v| (String::new(), v)).collect();
+            }
+            "zset" => {
+                let start = offset as isize;
+                let items: Vec<(String, f64)> = con
+                    .zrange_withscores(key, start, start + PAGE - 1)
+                    .await
+                    .map_err(es)?;
+                d.pairs = items.into_iter().map(|(m, s)| (m, format!("{s}"))).collect();
+            }
+            _ => return Err("该类型不支持分页".into()),
+        }
+        return Ok(d);
+    }
     let kt: String = redis::cmd("TYPE").arg(key).query_async(&mut con).await.map_err(es)?;
     let ttl: i64 = redis::cmd("TTL").arg(key).query_async(&mut con).await.map_err(es)?;
     let mut d = RedisDetail { key_type: kt.clone(), ttl, len: 0, text: None, pairs: vec![] };
@@ -147,7 +183,7 @@ pub async fn key_detail(
             d.text = v.map(|s| s.chars().take(50_000).collect());
         }
         "list" => {
-            let items: Vec<String> = con.lrange(key, 0, 199).await.map_err(es)?;
+            let items: Vec<String> = con.lrange(key, 0, PAGE - 1).await.map_err(es)?;
             d.len = redis::cmd("LLEN").arg(key).query_async(&mut con).await.map_err(es)?;
             d.pairs = items.into_iter().map(|v| (String::new(), v)).collect();
         }
@@ -158,7 +194,7 @@ pub async fn key_detail(
             d.pairs = items.into_iter().map(|v| (String::new(), v)).collect();
         }
         "zset" => {
-            let items: Vec<(String, f64)> = con.zrange_withscores(key, 0, 199).await.map_err(es)?;
+            let items: Vec<(String, f64)> = con.zrange_withscores(key, 0, PAGE - 1).await.map_err(es)?;
             d.len = redis::cmd("ZCARD").arg(key).query_async(&mut con).await.map_err(es)?;
             d.pairs = items.into_iter().map(|(m, s)| (m, format!("{s}"))).collect();
         }
