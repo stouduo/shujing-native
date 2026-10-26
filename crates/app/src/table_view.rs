@@ -961,7 +961,21 @@ pub(crate) fn draw_table_view(
                             .color(p.green),
                     );
                 }
-                if tab.multi_sel.len() > 1 {
+                if let Some(r) = tab.sel_range {
+                    let ((r1, c1), (r2, c2)) = norm_range(r);
+                    if r2 > r1 || c2 > c1 {
+                        vsep(ui);
+                        ui.label(
+                            RichText::new(format!(
+                                "已选 {}×{} · 输入值回车填充 · ⌘C 复制 · Delete 置 NULL",
+                                r2 - r1 + 1,
+                                c2 - c1 + 1
+                            ))
+                            .size(11.5)
+                            .color(p.accent),
+                        );
+                    }
+                } else if tab.multi_sel.len() > 1 {
                     vsep(ui);
                     ui.label(
                         RichText::new(format!(
@@ -1260,6 +1274,9 @@ pub(crate) fn draw_table_view(
                 multi_sel,
                 view_cell,
                 detail,
+                sel_range,
+                drag_sel,
+                drag_row,
                 ..
             } = tab;
 
@@ -1310,37 +1327,15 @@ pub(crate) fn draw_table_view(
                 ui.spacing_mut().scroll.bar_inner_margin = 2.0;
                 let hout = egui::ScrollArea::horizontal()
                     .id_salt(format!("data-hscroll-{tab_id_s}"))
+                    // 内建拖拽平移与矩形拖选冲突:拖动手势让位选区,平移走滚轮/滚动条
+                    .drag_to_scroll(false)
                     .auto_shrink([false, false])
                     // 常驻横向滚动条:即便没有溢出也显示,用户能明确知道表格可横向滚动
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width().max(desired_w));
-                        // 拖拽平移:按住表体左右拖 = 横向滚动(非编辑态)。
-                        // 起点必须落在表头下方的内容区——否则拖列宽手柄/拖滚动条/拖
-                        // 标签栏排序时会连带平移表格
-                        if editing.is_none() {
-                            let content = ui.max_rect();
-                            let (dragging, started) = ui.input(|i| {
-                                (
-                                    i.pointer.button_down(egui::PointerButton::Primary)
-                                        && i.pointer.is_decidedly_dragging(),
-                                    i.pointer.press_origin(),
-                                )
-                            });
-                            let in_body: bool = started
-                                .map(|p| {
-                                    content.contains(p)
-                                        && p.y > content.top() + theme::HEADER_H
-                                        && p.x < content.right() - 16.0
-                                })
-                                .unwrap_or(false);
-                            if dragging && in_body {
-                                let dx = ui.input(|i| i.pointer.delta().x);
-                                if dx.abs() > 0.1 {
-                                    ui.scroll_with_delta(egui::vec2(-dx, 0.0));
-                                }
-                            }
-                        }
+                        // 注:数据网格的“按住拖动平移”手势已移除——按住数据格拖动现在是
+                        // 矩形选区(直接操作);平移走滚轮/触控板/常驻滚动条
                         let mut menu_action: Option<TabAction> = None;
                         draw_data_table(
                             ui,
@@ -1375,6 +1370,9 @@ pub(crate) fn draw_table_view(
                             &mut geom,
                             &actual_widths,
                             &mut frozen_out,
+                            sel_range,
+                            drag_sel,
+                            drag_row,
                         );
                         if let Some(a) = menu_action {
                             actions.push(a);
@@ -1421,6 +1419,7 @@ pub(crate) fn draw_table_view(
                     &mut col_stat_col,
                     mysql_quote_flag,
                     &mut frozen_out,
+                    sel_range,
                 );
                 if let Some(a) = menu_action {
                     actions.push(a);
@@ -1474,8 +1473,72 @@ pub(crate) fn draw_table_view(
             if let Some(sel) = new_selection {
                 *selected = sel;
             }
+            // 矩形选区(直接操作):无焦点输入时直接打字 = 从锚点格编辑,回车提交到整个选区;
+            // Delete/Backspace = 选区置 NULL(暂存,保存前可丢弃)
+            let sel_spanning = sel_range
+                .map(|r| {
+                    let ((r1, c1), (r2, c2)) = norm_range(r);
+                    r2 > r1 || c2 > c1
+                })
+                .unwrap_or(false);
+            let field_focused = ui.ctx().memory(|m| m.focused().is_some());
+            if !field_focused && editing.is_none() {
+                let typed = ui.input(|i| {
+                    i.events.iter().find_map(|e| match e {
+                        egui::Event::Text(t)
+                            if !t.is_empty() && t.chars().next().is_some_and(|c| !c.is_control()) =>
+                        {
+                            t.chars().next().map(|c| c.to_string())
+                        }
+                        _ => None,
+                    })
+                });
+                if let Some(ch) = typed {
+                    let target = sel_range.map(|r| r.0).or(*selected);
+                    if let Some((tr, tc)) = target {
+                        if tr < rows.len() && tc < vis_idx.len() && !pk_cols.is_empty() {
+                            *editing = Some((tr, tc));
+                            *draft = ch;
+                        }
+                    }
+                } else if sel_spanning
+                    && !pk_cols.is_empty()
+                    && ui.input(|i| {
+                        i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
+                    })
+                {
+                    if let Some(r) = *sel_range {
+                        let (tl, _) = r;
+                        commit = Some((tl.0, tl.1, String::new()));
+                    }
+                }
+            }
             if copy_text.is_none() && editing.is_none() {
                 if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C))
+                    && sel_spanning
+                {
+                    // 矩形选区:复制 行×可见列 TSV
+                    if let Some(r) = *sel_range {
+                        let ((r1, c1), (r2, c2)) = norm_range(r);
+                        let mut lines = Vec::new();
+                        for ri in r1..=r2.min(rows.len().saturating_sub(1)) {
+                            if let Some(row) = rows.get(ri) {
+                                let cells: Vec<String> = (c1..=c2)
+                                    .filter_map(|ci| vis_idx.get(ci))
+                                    .filter_map(|&vi| row.get(vi))
+                                    .map(|v| {
+                                        v.as_deref()
+                                            .unwrap_or("NULL")
+                                            .replace('\t', " ")
+                                            .replace('\n', " ")
+                                    })
+                                    .collect();
+                                lines.push(cells.join("\t"));
+                            }
+                        }
+                        copy_text = Some(lines.join("\n"));
+                    }
+                } else if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C))
                     && multi_sel.len() > 1
                 {
                     // 多选:复制整行 TSV(可见列)
@@ -1527,18 +1590,40 @@ pub(crate) fn draw_table_view(
             }
             // 网格内 ci 是可视列下标:映射回全量列,否则隐藏列存在时写错列(数据损坏级)
             if let Some((ri, ci, val)) = commit {
-                let full_ci = vis_idx.get(ci).copied().unwrap_or(ci);
-                let col_name = columns[full_ci].clone();
-                // 与原值相同不记改动(此前双击后原样回车也会产生假"未保存 1 处")
-                let unchanged = rows[ri][full_ci].as_deref() == Some(val.as_str())
-                    || (rows[ri][full_ci].is_none() && val.is_empty());
-                if unchanged {
-                    changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
-                } else {
+                if sel_spanning && !pk_cols.is_empty() {
+                    // 批量填充:同一值落到整个选区(主键列跳过防键冲突;空值=置 NULL)
+                    let Some(((r1, c1), (r2, c2))) = sel_range.map(norm_range) else {
+                        unreachable!()
+                    };
                     let new_val = (!val.is_empty()).then_some(val);
-                    rows[ri][full_ci] = new_val.clone();
-                    changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
-                    changes.push((ri, col_name, new_val));
+                    for r in r1..=r2.min(rows.len().saturating_sub(1)) {
+                        for c in c1..=c2 {
+                            let Some(&full_c) = vis_idx.get(c) else {
+                                continue;
+                            };
+                            if pk_cols.contains(&columns[full_c]) {
+                                continue;
+                            }
+                            let cname = columns[full_c].clone();
+                            rows[r][full_c] = new_val.clone();
+                            changes.retain(|(rr, cn, _)| !(*rr == r && cn == &cname));
+                            changes.push((r, cname, new_val.clone()));
+                        }
+                    }
+                } else {
+                    let full_ci = vis_idx.get(ci).copied().unwrap_or(ci);
+                    let col_name = columns[full_ci].clone();
+                    // 与原值相同不记改动(此前双击后原样回车也会产生假"未保存 1 处")
+                    let unchanged = rows[ri][full_ci].as_deref() == Some(val.as_str())
+                        || (rows[ri][full_ci].is_none() && val.is_empty());
+                    if unchanged {
+                        changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
+                    } else {
+                        let new_val = (!val.is_empty()).then_some(val);
+                        rows[ri][full_ci] = new_val.clone();
+                        changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
+                        changes.push((ri, col_name, new_val));
+                    }
                 }
             }
             if let Some((ri, ci)) = set_null {
@@ -1760,6 +1845,22 @@ fn text_width(s: &str) -> f32 {
 
 /// 数据表(TableBuilder):表头粘顶 + 行发丝线,由水平 ScrollArea 包裹
 #[allow(clippy::too_many_arguments)]
+/// 选区浸染色(强调色低透明)
+fn range_tint(accent: Color32) -> Color32 {
+    Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 30)
+}
+
+/// 选区两端归一化为(左上,右下)
+fn norm_range(
+    r: ((usize, usize), (usize, usize)),
+) -> ((usize, usize), (usize, usize)) {
+    let ((r1, c1), (r2, c2)) = r;
+    (
+        (r1.min(r2), c1.min(c2)),
+        (r1.max(r2), c1.max(c2)),
+    )
+}
+
 /// 冻结列覆盖层需要的渲染几何(每帧由 draw_data_table 填充)
 #[derive(Default)]
 pub(crate) struct FrozenGeom {
@@ -1803,9 +1904,23 @@ fn draw_data_table(
     geom: &mut FrozenGeom,
     actual_widths: &std::cell::Cell<Vec<f32>>,
     frozen_out: &mut Option<i64>,
+    sel_range: &mut Option<((usize, usize), (usize, usize))>,
+    drag_sel: &mut Option<(usize, usize)>,
+    drag_row: &mut Option<usize>,
 ) {
     *geom = FrozenGeom::default();
     let p = theme::c();
+    // 指针状态在 TableBuilder 借用 ui 之前采样(body 闭包内拿不到外层 ui)
+    let (p_down, p_pressed, p_released) = ui.input(|i| {
+        (
+            i.pointer.primary_down(),
+            i.pointer.primary_pressed(),
+            i.pointer.primary_released(),
+        )
+    });
+    let pointer_pos_dv = ui.input(|i| i.pointer.latest_pos());
+    let (pointer_cmd_dv, pointer_shift_dv) =
+        ui.input(|i| (i.modifiers.command, i.modifiers.shift));
     // TableBuilder 的行/列间距取自 item_spacing:清零才能得到原型的连续表头与 32pt 行高
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
     let srt = &*sort;
@@ -1817,6 +1932,7 @@ fn draw_data_table(
         .sense(Sense::hover())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .vscroll(true)
+        .drag_to_scroll(false)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
     // 编辑行是否本帧被渲染(行虚拟化:滚出视口的行不渲染,
     // editing 悬死会让 Enter 失效、拖拽平移被永久禁用)
@@ -1936,6 +2052,20 @@ fn draw_data_table(
     .body(|body| {
         // 表格实际渲染列宽(TableState 可能保持/被拖宽,与启发式不同);冻结覆盖层用其对齐
         actual_widths.set(body.widths().to_vec());
+        let ws_snapshot: Vec<f32> = body.widths().to_vec();
+        let sel_norm = (*sel_range).map(norm_range);
+        let range_flags = |ri: usize, ci: usize| -> (bool, (bool, bool, bool, bool)) {
+            match sel_norm {
+                Some(((r1, c1), (r2, c2))) => {
+                    let hit = ri >= r1 && ri <= r2 && ci >= c1 && ci <= c2;
+                    (
+                        hit,
+                        (hit && ri == r1, hit && ri == r2, hit && ci == c1, hit && ci == c2),
+                    )
+                }
+                None => (false, (false, false, false, false)),
+            }
+        };
         // 行悬停:每格用自身矩形判定(同行的格共享同一 y 波段);
         // 此前跨行累积并集会把悬停行下方全部行点亮
         let hovers = |rect: egui::Rect| {
@@ -2049,6 +2179,7 @@ fn draw_data_table(
                 } else {
                     let v = &rowdata[vi];
                     let is_sel = matches!(*selected, Some((sr, sc)) if sr == ri && sc == ci);
+                    let (range_hit, range_edges) = range_flags(ri, ci);
                     row.col(|ui| {
                         hovered = hovers(ui.max_rect());
                         draw_data_cell(
@@ -2077,6 +2208,8 @@ fn draw_data_table(
                             col_where_out,
                             mysql_q,
                             multi_sel,
+                            range_hit,
+                            range_edges,
                         );
                     });
                 }
@@ -2097,6 +2230,122 @@ fn draw_data_table(
             });
             let _ = is_editing_row;
         });
+            // —— 矩形拖选状态机(直接操作):按住数据格拖 = 选区;按住行号拖 = 行多选。
+            // 命中用几何反推;钉住覆盖层滚动时做逆映射(按上一帧横向偏移)
+            {
+                let pointer_pos = pointer_pos_dv;
+                let ws = &ws_snapshot;
+                let rowno_w =
+                    if show_rowno { ws.first().copied().unwrap_or(48.0) } else { 0.0 };
+                let w_of = |i: usize| -> f32 {
+                    ws.get(if show_rowno { 1 + i } else { i }).copied().unwrap_or(120.0)
+                };
+                let body_top =
+                    geom.header_top.unwrap_or(f32::NEG_INFINITY) + theme::HEADER_H;
+                let off_x = LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
+                // 屏幕坐标 → (行, 可视列);行号列返回 None 由行号分支处理
+                let hit = |pt: egui::Pos2| -> Option<(usize, usize)> {
+                    if pt.y < body_top {
+                        return None;
+                    }
+                    let k = ((pt.y - body_top) / theme::ROW_H) as usize;
+                    let ri = *geom.vis_ri.get(k)?;
+                    if ri >= rows.len() {
+                        return None;
+                    }
+                    if frozen_vis > 0 && off_x > 0.5 {
+                        let viewport_left = table_left + off_x;
+                        let region_w = rowno_w + (0..frozen_vis).map(w_of).sum::<f32>();
+                        if pt.x >= viewport_left && pt.x < viewport_left + region_w {
+                            if pt.x < viewport_left + rowno_w {
+                                return None;
+                            }
+                            let fx = pt.x - viewport_left - rowno_w;
+                            let mut acc = 0.0;
+                            let mut ci = frozen_vis - 1;
+                            for i in 0..frozen_vis {
+                                let w2 = w_of(i);
+                                if fx < acc + w2 {
+                                    ci = i;
+                                    break;
+                                }
+                                acc += w2;
+                            }
+                            return Some((ri, ci));
+                        }
+                    }
+                    let cx = pt.x - table_left;
+                    if cx < rowno_w {
+                        return None;
+                    }
+                    let mut acc = rowno_w;
+                    for i in 0..vis_idx.len() {
+                        let w2 = w_of(i);
+                        if cx < acc + w2 {
+                            return Some((ri, i));
+                        }
+                        acc += w2;
+                    }
+                    None
+                };
+                let rowno_hit = |pt: egui::Pos2| -> Option<usize> {
+                    if rowno_w <= 0.0 || pt.y < body_top {
+                        return None;
+                    }
+                    let k = ((pt.y - body_top) / theme::ROW_H) as usize;
+                    let ri = *geom.vis_ri.get(k)?;
+                    if ri >= rows.len() {
+                        return None;
+                    }
+                    if frozen_vis > 0 && off_x > 0.5 {
+                        let viewport_left = table_left + off_x;
+                        ((pt.x >= viewport_left) && (pt.x < viewport_left + rowno_w))
+                            .then_some(ri)
+                    } else {
+                        ((pt.x >= table_left) && (pt.x < table_left + rowno_w)).then_some(ri)
+                    }
+                };
+                if p_pressed {
+                    if let Some(pt) = pointer_pos {
+                        let (cmd, shift) = (pointer_cmd_dv, pointer_shift_dv);
+                        if let Some(ri) = rowno_hit(pt) {
+                            *drag_row = Some(ri);
+                            *sel_range = None;
+                            if !cmd && !shift {
+                                multi_sel.clear();
+                            }
+                        } else if let Some((ri, ci)) = hit(pt) {
+                            let anchor = if shift {
+                                (*selected).unwrap_or((ri, ci))
+                            } else {
+                                (ri, ci)
+                            };
+                            *sel_range = Some(norm_range((anchor, (ri, ci))));
+                            *drag_sel = Some(anchor);
+                            *selected = Some((ri, ci));
+                            if !shift && multi_sel.len() > 1 {
+                                multi_sel.clear();
+                            }
+                        }
+                    }
+                } else if p_down {
+                    if let Some(pt) = pointer_pos {
+                        if let (Some(a), Some(ri)) = (*drag_row, rowno_hit(pt)) {
+                            let (lo, hi) = (a.min(ri), a.max(ri));
+                            *multi_sel = (lo..=hi).collect();
+                        } else if let (Some(anchor), Some((ri, ci))) = (*drag_sel, hit(pt)) {
+                            let next = norm_range((anchor, (ri, ci)));
+                            if *sel_range != Some(next) {
+                                *sel_range = Some(next);
+                            }
+                        }
+                    }
+                }
+                if p_released {
+                    *drag_sel = None;
+                    *drag_row = None;
+                }
+            }
     });
     // 编辑行滚出视口(本帧未渲染):取消编辑,避免悬死状态
     if editing.is_some() && !editing_row_rendered.get() {
@@ -2141,6 +2390,7 @@ fn draw_frozen_overlay(
     col_stat_col: &mut Option<String>,
     mysql_q: bool,
     frozen_out: &mut Option<i64>,
+    sel_range: &Option<((usize, usize), (usize, usize))>,
 ) {
     if frozen_vis == 0 || offset_x <= 0.5 {
         return;
@@ -2324,6 +2574,16 @@ fn draw_frozen_overlay(
             let w = frozen_ws[ci];
             let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, theme::ROW_H));
             let v = rowdata.get(vi).unwrap_or(&None);
+            let (range_hit, range_edges) = match sel_range.map(norm_range) {
+                Some(((r1, c1), (r2, c2))) => {
+                    let hit = ri >= r1 && ri <= r2 && ci >= c1 && ci <= c2;
+                    (
+                        hit,
+                        (hit && ri == r1, hit && ri == r2, hit && ci == c1, hit && ci == c2),
+                    )
+                }
+                None => (false, (false, false, false, false)),
+            };
             let changed = changes.iter().any(|(r2, cn, _)| *r2 == ri && cn == col_name);
             let cell_editing = matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
             let mut cell_ui = ui.new_child(
@@ -2390,6 +2650,8 @@ fn draw_frozen_overlay(
                     col_where_out,
                     mysql_q,
                     multi_sel,
+                    range_hit,
+                    range_edges,
                 );
             }
             x += w;
@@ -2562,6 +2824,8 @@ fn draw_data_cell(
     col_where_out: &mut Option<(String, String, String)>,
     _mysql_q: bool,
     multi_sel: &[usize],
+    range_hit: bool,
+    range_edges: (bool, bool, bool, bool),
 ) {
     let p = theme::c();
     let rect = ui.max_rect();
@@ -2575,6 +2839,24 @@ fn draw_data_cell(
     let _ = is_sel; // 原型为整行淡蓝底,不再单独加重单元格
     if changed {
         painter.rect_filled(rect.shrink2(egui::vec2(2.0, 3.0)), 3, p.change_bg);
+    }
+    if range_hit {
+        // 选区浸染 + 边缘描线(拖选/Shift 点选的矩形单元格选区)
+        painter.rect_filled(rect, 0, range_tint(p.accent));
+        let (t, b, l, r) = range_edges;
+        let st = egui::Stroke::new(1.5, p.accent);
+        if t {
+            painter.line_segment([rect.left_top(), rect.right_top()], st);
+        }
+        if b {
+            painter.line_segment([rect.left_bottom(), rect.right_bottom()], st);
+        }
+        if l {
+            painter.line_segment([rect.left_top(), rect.left_bottom()], st);
+        }
+        if r {
+            painter.line_segment([rect.right_top(), rect.right_bottom()], st);
+        }
     }
 
     if let Some((label, on)) = badge_value(col_name, v) {

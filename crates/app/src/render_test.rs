@@ -1103,61 +1103,58 @@ fn data_grid_hscroll_works() {
         "横向滚轮后画面应发生变化(能左右滚动)"
     );
 
-    // 拖拽平移:基线 = 指针落网格再移开(无按压,无悬停);按下向左拖 250px 后移开指针
-    // 两者最终都无悬停高亮,像素差只能来自内容平移
+    // 数据网格按住拖动 = 矩形选区(v0.11.4 起手势让位:平移走滚轮/触控板/滚动条)
+    // 断言拖动后横向偏移不变(不滚动),选区语义由 cell_range_drag_select_and_type_fill 覆盖
     {
+        // 空转数帧:等上一步滚轮的平滑滚动动画停稳,基线才是纯拖动前的状态
+        for _ in 0..12 {
+            harness.step();
+        }
+        let x_before_drag =
+            table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
         harness
             .input_mut()
             .events
             .push(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
         harness.step();
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(500.0, 350.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        harness.step();
+        for x in [460.0f32, 420.0, 380.0, 340.0, 300.0, 250.0] {
+            harness
+                .input_mut()
+                .events
+                .push(egui::Event::PointerMoved(egui::pos2(x, 350.0)));
+            harness.step();
+        }
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(250.0, 350.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
         harness
             .input_mut()
             .events
             .push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
         harness.step();
         harness.step();
-        let _ = &mut harness;
+        let x_after_drag =
+            table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            x_before_drag, x_after_drag,
+            "数据网格按住拖动应是选区,不应连带平移"
+        );
+        {
+            let app = harness.state().borrow();
+            let t = app.tabs[2].table_data().unwrap();
+            assert!(t.sel_range.is_some(), "按住拖动应产生矩形选区");
+        }
     }
-    let before2 = harness.render().expect("render baseline");
-
-    harness
-        .input_mut()
-        .events
-        .push(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
-    harness.step();
-    harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(500.0, 350.0),
-        button: egui::PointerButton::Primary,
-        pressed: true,
-        modifiers: Default::default(),
-    });
-    harness.step();
-    for x in [460.0f32, 420.0, 380.0, 340.0, 300.0, 250.0] {
-        harness
-            .input_mut()
-            .events
-            .push(egui::Event::PointerMoved(egui::pos2(x, 350.0)));
-        harness.step();
-    }
-    harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(250.0, 350.0),
-        button: egui::PointerButton::Primary,
-        pressed: false,
-        modifiers: Default::default(),
-    });
-    harness
-        .input_mut()
-        .events
-        .push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
-    harness.step();
-    harness.step();
-    let after2 = harness.render().expect("render after drag");
-    assert_ne!(
-        before2.into_raw(),
-        after2.into_raw(),
-        "按住拖动后画面应平移(能左右滑动)"
-    );
 
     // 组合 xy 滚轮(模拟触控板斜向滑动):横向分量必须仍然生效
     let x_before_combined = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
@@ -1597,4 +1594,128 @@ fn query_grid_frozen_columns_pin() {
     let img = harness.render().expect("render final");
     let _ = std::fs::create_dir_all("/tmp/shujing_ui");
     img.save("/tmp/shujing_ui/query_frozen.png").expect("保存 PNG 失败");
+}
+
+#[test]
+fn cell_range_drag_select_and_type_fill() {
+    // 直接操作链路:按住单元格拖动 = 矩形选区 → 直接打字 = 锚点格进入编辑 → 回车 = 批量填充
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        t.active_filter = None;
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+
+    // 拖选:role 列(≈380,220)拖到 role_name 列(≈500,290)
+    let drag = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>,
+                from: egui::Pos2,
+                to: egui::Pos2| {
+        h.input_mut().events.push(egui::Event::PointerMoved(from));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        for k in 1..=4 {
+            let x = from.x + (to.x - from.x) * k as f32 / 4.0;
+            let y = from.y + (to.y - from.y) * k as f32 / 4.0;
+            h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y)));
+            h.step();
+        }
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+    };
+    drag(
+        &mut harness,
+        egui::pos2(380.0, 220.0),
+        egui::pos2(500.0, 290.0),
+    );
+    let expected = {
+        let app = harness.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        let r = t.sel_range.expect("拖选后应有矩形选区");
+        assert!(
+            !t.changes.is_empty() == false,
+            "拖选本身不应产生改动"
+        );
+        r
+    };
+
+    // 直接打字:锚点格进入编辑
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::Text("9".to_string()));
+    harness.step();
+    {
+        let app = harness.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        assert_eq!(t.editing, Some(expected.0), "打字应从锚点格进入编辑");
+        assert_eq!(t.draft, "9");
+    }
+
+    // 回车:批量填充整个选区(主键列跳过)
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Enter,
+        pressed: true,
+        repeat: false,
+        modifiers: Default::default(),
+        physical_key: None,
+    });
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        assert!(t.editing.is_none(), "回车后应退出编辑");
+        let ((r1, c1), (r2, c2)) = expected;
+        let cells = (r2 - r1 + 1) * (c2 - c1 + 1);
+        assert_eq!(
+            t.changes.len(),
+            cells,
+            "选区 {}×{} 应产生 {} 处改动,实际 {:?}",
+            r2 - r1 + 1,
+            c2 - c1 + 1,
+            cells,
+            t.changes
+        );
+        assert!(
+            t.changes
+                .iter()
+                .all(|(_, cn, v)| cn != "id" && v.as_deref() == Some("9")),
+            "改动应填 9 且跳过主键列"
+        );
+    }
+
+    let img = harness.render().expect("render");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/range_fill.png").expect("保存 PNG 失败");
 }

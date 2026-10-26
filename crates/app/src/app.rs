@@ -313,6 +313,12 @@ pub struct TableTab {
     pub multi_sel: Vec<usize>,
     /// 冻结的前 N 个可见列(0=不冻结;横向滚动时钉在视口左侧)
     pub frozen_vis: usize,
+    /// 矩形单元格选区(可视坐标 ((r1,c1),(r2,c2));拖选/Shift 点选;批量填充·复制·置 NULL)
+    pub sel_range: Option<((usize, usize), (usize, usize))>,
+    /// 正在拖选的锚点格(松开清除;None=无拖选)
+    pub drag_sel: Option<(usize, usize)>,
+    /// 行号列拖选的锚点行(行多选范围)
+    pub drag_row: Option<usize>,
 }
 
 impl TableTab {
@@ -344,6 +350,9 @@ impl TableTab {
             detail: false,
             multi_sel: vec![],
             frozen_vis: 0,
+            sel_range: None,
+            drag_sel: None,
+            drag_row: None,
             filter_bar_open: false,
             filter_mode: 0,
             conds: vec![],
@@ -1874,6 +1883,9 @@ impl ShujingApp {
         tab.changes.clear();
         tab.editing = None;
         tab.multi_sel.clear();
+        tab.sel_range = None;
+        tab.drag_sel = None;
+        tab.drag_row = None;
         if !tab.pk_loaded {
             tab.pk_loaded = true;
             let (tx2, conn2, table2, db2, id2) = (
@@ -2886,6 +2898,9 @@ impl ShujingApp {
                         }
                         t.loading = false;
                         t.selected = None; // 数据翻页后旧选中会指错行
+                        t.sel_range = None;
+                        t.drag_sel = None;
+                        t.drag_row = None;
                         match result {
                             Ok(r) => {
                                 t.last_elapsed_ms = Some(r.elapsed_ms);
