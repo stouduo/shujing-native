@@ -308,10 +308,19 @@ impl ShujingApp {
             Some("importsql") => self.import_sql_file(conn_id),
             Some("edit") => self.conn_modal = Some(ConnModal::from_conn(c)),
             Some("delete") => {
+                // 断开连接有脏标签确认,删除更应明示:会一并丢弃未保存修改
+                let dirty_hint = if self.conn_has_dirty_tabs(&c.id) {
+                    "\n注意:该连接有未保存的修改,删除后将一并丢弃。"
+                } else {
+                    ""
+                };
                 self.open_confirm(
                     &c.id.clone(),
                     "删除连接",
-                    &format!("删除连接「{}」及其配置?\n输入连接名以确认:", c.name),
+                    &format!(
+                        "删除连接「{}」及其配置?{}\n输入连接名以确认:",
+                        c.name, dirty_hint
+                    ),
                     Some(c.name.clone()),
                     String::new(),
                 );
@@ -951,6 +960,7 @@ impl ShujingApp {
             self.draw_redis_db_row(ui, conn_id, idx, keys);
             return;
         }
+        let is_view = redis_kind == "view";
         let active = self
             .active_tab_info()
             .map(|(c, t, d)| c == conn_id && t == name && d == Some(db))
@@ -1059,7 +1069,7 @@ impl ShujingApp {
                     .memory_mut(|m| m.data.insert_temp(menu_id, "copytable".to_string()));
                 ui.close_menu();
             }
-            if ui.button("维护:更新统计 (ANALYZE)").clicked() {
+            if !is_view && ui.button("维护:更新统计 (ANALYZE)").clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "analyze".to_string()));
                 ui.close_menu();
@@ -1070,12 +1080,19 @@ impl ShujingApp {
                     .memory_mut(|m| m.data.insert_temp(menu_id, "rename".to_string()));
                 ui.close_menu();
             }
-            if ui.button("清空表数据…").clicked() {
+            if !is_view && ui.button("清空表数据…").clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "truncate".to_string()));
                 ui.close_menu();
             }
-            if ui.button("删除表…").clicked() {
+            if is_view {
+                // 视图没有数据可清空,DROP TABLE 对视图也报错:给专用的 DROP VIEW
+                if ui.button("删除视图…").clicked() {
+                    ui.ctx()
+                        .memory_mut(|m| m.data.insert_temp(menu_id, "dropview".to_string()));
+                    ui.close_menu();
+                }
+            } else if ui.button("删除表…").clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "drop".to_string()));
                 ui.close_menu();
@@ -1153,6 +1170,22 @@ impl ShujingApp {
                                 "(SQLite 用 DELETE 逐行清空)"
                             }
                         ),
+                        Some(name.to_string()),
+                        sql,
+                    );
+                }
+                "dropview" => {
+                    let mysql = crate::app::mysql_quote(&self.conns, conn_id);
+                    let ident = crate::app::quote_ident_by(name, mysql);
+                    let sql = if mysql {
+                        format!("DROP VIEW {ident};")
+                    } else {
+                        format!("DROP VIEW {ident};")
+                    };
+                    self.open_confirm(
+                        conn_id,
+                        "删除视图",
+                        &format!("即将删除视图 {name},不可恢复!\n输入名称以确认:"),
                         Some(name.to_string()),
                         sql,
                     );
@@ -1356,6 +1389,12 @@ impl ShujingApp {
         self.trees.remove(id);
         // 删除连接时同步关闭它的标签,避免留下永远报错的死标签
         self.close_tabs_for_connection(id);
+        // 底层连接池同步拆除(与断开路径一致,否则活连接挂到进程退出)
+        let service2 = self.service.clone();
+        let cid = id.to_string();
+        crate::net::spawn(async move {
+            let _ = service2.disconnect(&cid).await;
+        });
     }
 }
 

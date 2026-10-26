@@ -903,11 +903,15 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 action.as_deref().and_then(|a| a.strip_prefix("delete-rows:"))
             {
                 app.confirm = None;
-                let (tid, ris_csv) = rest.split_once(':').unwrap_or(("", ""));
+                // 格式 delete-rows:<tab_id>:<gen>:<ris csv>;gen 不符说明弹窗期间数据已刷新
+                let mut it = rest.splitn(3, ':');
+                let tid = it.next().unwrap_or("");
+                let gen = it.next().and_then(|g| g.parse::<u64>().ok()).unwrap_or(u64::MAX);
+                let ris_csv = it.next().unwrap_or("");
                 let ris: Vec<usize> =
                     ris_csv.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                if !ris.is_empty() {
-                    crate::table_view::run_delete_rows(app, &tid.to_string(), &ris);
+                if !tid.is_empty() && !ris.is_empty() {
+                    crate::table_view::run_delete_rows(app, tid, gen, &ris);
                 }
             } else if let Some(conn_id) =
                 action.as_deref().and_then(|a| a.strip_prefix("disconnect-conn:"))

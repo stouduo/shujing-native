@@ -151,7 +151,9 @@ impl Backend {
         Ok(conn)
     }
 
-    /// PostgreSQL:轮发取一个会话,按需恢复 search_path
+    /// PostgreSQL:轮发取一个会话,按需恢复 search_path。
+    /// 返回的是共享 Arc<Client>:事务类操作(apply_changes 的 BEGIN/COMMIT)之所以安全,
+    /// 依赖 Service 所有 DB 方法都持有同一把每连接互斥锁——新增长连接方法时必须沿用该纪律
     pub(crate) async fn pg_client(
         mp: &mut crate::model::PgPool,
     ) -> Result<std::sync::Arc<tokio_postgres::Client>, String> {

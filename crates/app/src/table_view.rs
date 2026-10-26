@@ -1496,6 +1496,29 @@ pub(crate) fn draw_table_view(
                 })
                 .unwrap_or(false);
             let field_focused = ui.ctx().memory(|m| m.focused().is_some());
+            // ⌘A:全选本页单元格(可视列 × 本页行);输入框持焦时让给编辑器的全选
+            let cmd_a = ui.input(|i| {
+                i.events.iter().any(|e| {
+                    matches!(
+                        e,
+                        egui::Event::Key {
+                            key: egui::Key::A,
+                            pressed: true,
+                            modifiers: m,
+                            ..
+                        } if m.command
+                    )
+                })
+            });
+            if cmd_a
+                && !field_focused
+                && editing.is_none()
+                && !rows.is_empty()
+                && !vis_idx.is_empty()
+            {
+                *sel_range = Some(((0, 0), (rows.len() - 1, vis_idx.len() - 1)));
+                multi_sel.clear();
+            }
             if !field_focused && editing.is_none() {
                 let typed = ui.input(|i| {
                     i.events.iter().find_map(|e| match e {
@@ -3165,11 +3188,16 @@ fn app_tabs_set_saving(app: &mut ShujingApp, tab_id: &str, saving: bool) {
     }
 }
 
-/// 确认后执行批量删行(DeleteRows/DeleteRow 确认弹窗的落地路径)
-pub(crate) fn run_delete_rows(app: &mut ShujingApp, tab_id: &str, ris: &[usize]) {
+/// 确认后执行批量删行(DeleteRows/DeleteRow 确认弹窗的落地路径)。
+/// gen = 打开确认弹窗时的数据代次:弹窗期间若有慢查询落地替换了行数据,行号已失效,拒绝执行
+pub(crate) fn run_delete_rows(app: &mut ShujingApp, tab_id: &str, gen: u64, ris: &[usize]) {
     let Some(t) = app.table_tab_mut(tab_id) else {
         return;
     };
+    if t.rows_gen != gen {
+        app.toast_error("数据已刷新,请重新选择要删除的行".to_string());
+        return;
+    }
     if t.pk_cols.is_empty() {
         app.toast_error("该表没有主键,无法删除行".to_string());
         return;
@@ -3183,10 +3211,14 @@ pub(crate) fn run_delete_rows(app: &mut ShujingApp, tab_id: &str, ris: &[usize])
     let mut skipped = 0usize;
     for ri in ris {
         let Some(row) = t.rows.get(*ri) else { continue };
-        let pk: Vec<(String, String)> = pk_idxs
-            .iter()
-            .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
-            .collect();
+        // 主键用原始值快照:该行有未保存的主键编辑时,内存行已是新值,按新值删会静默 0 行
+        let pk: Vec<(String, String)> = match t.orig_pks.get(ri) {
+            Some(orig) => orig.clone(),
+            None => pk_idxs
+                .iter()
+                .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
+                .collect(),
+        };
         if pk.iter().any(|(_, v)| v.is_empty()) {
             skipped += 1;
             continue;
@@ -3785,6 +3817,9 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
         TabAction::RedisLoadMore { tab_id, key } => app.redis_fetch_detail_more(&tab_id, &key),
         TabAction::DeleteRows { tab_id, ris } => {
             // 删除直接写库且不可撤销:先确认(菜单文案的"…"暗示有确认)
+            let Some(t) = app.table_tab_mut(&tab_id) else {
+                return;
+            };
             let n = ris.len();
             app.confirm = Some(crate::app::ConfirmState {
                 title: "删除选中行".into(),
@@ -3794,8 +3829,9 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 conn_id: String::new(),
                 sql: String::new(),
                 action: Some(format!(
-                    "delete-rows:{}:{}",
+                    "delete-rows:{}:{}:{}",
                     tab_id,
+                    t.rows_gen,
                     ris.iter()
                         .map(|r| r.to_string())
                         .collect::<Vec<_>>()
@@ -3804,6 +3840,9 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             });
         }
         TabAction::DeleteRow { tab_id, ri } => {
+            let Some(t) = app.table_tab_mut(&tab_id) else {
+                return;
+            };
             app.confirm = Some(crate::app::ConfirmState {
                 title: "删除行".into(),
                 message: format!("确认删除第 {} 行?将直接对数据库执行 DELETE,不可撤销。", ri + 1),
@@ -3811,7 +3850,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 input: String::new(),
                 conn_id: String::new(),
                 sql: String::new(),
-                action: Some(format!("delete-rows:{}:{}", tab_id, ri)),
+                action: Some(format!("delete-rows:{}:{}:{}", tab_id, t.rows_gen, ri)),
             });
         }
         TabAction::InsertRow { tab_id, values } => {

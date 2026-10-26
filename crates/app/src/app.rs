@@ -161,6 +161,8 @@ pub enum BgEvent {
     RedisDetailMoreDone {
         tab_id: String,
         key: String,
+        /// 发起时的详情代次;刷新/切 key 后迟到的旧页直接丢弃
+        gen: u64,
         result: Result<shujing_core::redis_ops::RedisDetail, String>,
     },
     /// 批量键类型(key, type)
@@ -325,6 +327,9 @@ pub struct TableTab {
     /// 被编辑行的原始主键值(行号 → (列名, 值))。
     /// 内存行在提交时已被覆写为新值,保存定位(WHERE)必须用编辑前的主键,否则静默 0 行或错行
     pub orig_pks: std::collections::HashMap<usize, Vec<(String, String)>>,
+    /// 数据代次:每次 RowsLoaded 替换行数据时递增。
+    /// 删行确认弹窗烘入打开时的代次,确认时不符即放弃(防确认期间慢查询落地后按旧行号删错行)
+    pub rows_gen: u64,
 }
 
 impl TableTab {
@@ -360,6 +365,7 @@ impl TableTab {
             drag_sel: None,
             drag_row: None,
             orig_pks: Default::default(),
+            rows_gen: 0,
             filter_bar_open: false,
             filter_mode: 0,
             conds: vec![],
@@ -625,6 +631,8 @@ pub struct RedisTab {
     pub detail_loading: bool,
     /// 「加载更多」在途标志(无防抖会重复追加同页,后续 LSET 按下标错位写数据)
     pub detail_more_loading: bool,
+    /// 详情代次:刷新/切 key 递增,作废在途的「加载更多」(迟到旧页不能 append 到新详情)
+    pub detail_gen: u64,
     pub scanning: bool,
     pub error: Option<String>,
     /// SCAN 后批量拉取的键类型/TTL 徽标
@@ -1543,6 +1551,7 @@ impl ShujingApp {
                 detail: None,
                 detail_loading: false,
             detail_more_loading: false,
+            detail_gen: 0,
                 scanning: false,
                 error: None,
                 key_types: HashMap::new(),
@@ -1610,15 +1619,19 @@ impl ShujingApp {
         let crate::app::TabKind::Redis(rt) = &tab.kind else {
             return;
         };
-        let conn_id = rt.conn_id.clone();
-        let db = rt.db;
-        let offset = rt.detail.as_ref().map(|d| d.pairs.len()).unwrap_or(0);
+        let (conn_id, db, offset, gen) = (
+            rt.conn_id.clone(),
+            rt.db,
+            rt.detail.as_ref().map(|d| d.pairs.len()).unwrap_or(0),
+            rt.detail_gen,
+        );
         if offset == 0 {
             return;
         }
         if rt.detail_more_loading {
             return; // 在途防抖:重复请求会带同一 offset,追加两份相同页
         }
+        drop(tab);
         if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             if let crate::app::TabKind::Redis(rt) = &mut t.kind {
                 rt.detail_more_loading = true;
@@ -1633,6 +1646,7 @@ impl ShujingApp {
             let _ = tx.send(BgEvent::RedisDetailMoreDone {
                 tab_id: tid,
                 key,
+                gen,
                 result,
             });
         });
@@ -1654,6 +1668,8 @@ impl ShujingApp {
         rt.selected_key = Some(key.clone());
         rt.detail = None;
         rt.detail_loading = true;
+        rt.detail_gen = rt.detail_gen.wrapping_add(1); // 作废在途「加载更多」
+        rt.detail_more_loading = false;
         // 切 key 清掉所有内联编辑残留(TTL/重命名/成员/list),否则草稿会作用到新 key 上
         rt.rename_draft = None;
         rt.member_add = None;
@@ -2607,6 +2623,7 @@ impl ShujingApp {
                             detail: None,
                             detail_loading: false,
             detail_more_loading: false,
+            detail_gen: 0,
                             scanning: false,
                             error: None,
                             key_types: HashMap::new(),
@@ -2931,6 +2948,7 @@ impl ShujingApp {
                                 t.last_elapsed_ms = Some(r.elapsed_ms);
                                 t.columns = r.columns;
                                 t.rows = r.rows;
+                                t.rows_gen = t.rows_gen.wrapping_add(1);
                             }
                             Err(e) => {
                                 t.last_elapsed_ms = None;
@@ -3223,6 +3241,7 @@ impl ShujingApp {
                     warnings,
                 } => {
                     // 先落地结果,再刷新树/结构(避免拿着 tabs 借用调 self)
+                    let mut save_err = false;
                     let (conn_id, db, reload_struct) = {
                         let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
                             continue;
@@ -3244,10 +3263,17 @@ impl ShujingApp {
                             }
                             Err(e) => {
                                 d.error = Some(e);
-                                continue;
+                                // 多语句保存可能已部分执行(如 ADD 成功 MODIFY 失败):
+                                // 本地 baseline 已不可信,重拉结构同步,否则重试必撞 duplicate column
+                                save_err = !d.is_create();
+                                (d.conn_id.clone(), d.database.clone(), false)
                             }
                         }
                     };
+                    if save_err {
+                        self.load_designer_structure(&tab_id);
+                        continue;
+                    }
                     // 保存成功:刷新在线树的表列表(新建表出现)
                     if let Some(tree) = self.trees.get_mut(&conn_id) {
                         tree.loading = true;
@@ -3288,6 +3314,9 @@ impl ShujingApp {
                             rt.cursor = cursor;
                             if reset {
                                 rt.keys = keys;
+                                // 换 pattern 重扫:旧 key 的徽标映射清掉(新 key 同名时类型可能不同)
+                                rt.key_types.clear();
+                                rt.key_ttls.clear();
                             } else {
                                 // HashSet 去重追加(此前 Vec::contains 逐个线性扫,O(n²))
                                 let known: std::collections::HashSet<String> =
@@ -3328,6 +3357,7 @@ impl ShujingApp {
                 BgEvent::RedisDetailMoreDone {
                     tab_id,
                     key,
+                    gen,
                     result,
                 } => {
                     let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
@@ -3336,9 +3366,13 @@ impl ShujingApp {
                     let TabKind::Redis(rt) = &mut tab.kind else {
                         continue;
                     };
-                    if rt.selected_key.as_deref() != Some(key.as_str()) {
+                    // 刷新/切 key 期间迟到的旧页:丢弃。
+                    // 复位放在校验之后——过期事件不复位,否则会让在途请求失去防抖保护;
+                    // 不会死锁:刷新/切 key 路径(redis_fetch_detail)已复位
+                    if rt.detail_gen != gen || rt.selected_key.as_deref() != Some(key.as_str()) {
                         continue;
                     }
+                    rt.detail_more_loading = false;
                     match result {
                         Ok(d) => {
                             if let Some(cur) = rt.detail.as_mut() {
@@ -3394,10 +3428,18 @@ impl ShujingApp {
                             self.toast_error(format!("已删除 {key}"));
                         }
                         RedisOp::Rename { from, to } => {
-                            for k in rt.keys.iter_mut() {
-                                if *k == from {
-                                    *k = to.clone();
-                                }
+                            // RENAME 会覆盖服务端已存在的 to:列表与徽标映射同步迁移
+                            let pos = rt.keys.iter().position(|k| k == &from);
+                            rt.keys.retain(|k| k != &from && k != &to);
+                            if let Some(p) = pos {
+                                let p = p.min(rt.keys.len());
+                                rt.keys.insert(p, to.clone());
+                            }
+                            if let Some(t) = rt.key_types.remove(&from) {
+                                rt.key_types.insert(to.clone(), t);
+                            }
+                            if let Some(t) = rt.key_ttls.remove(&from) {
+                                rt.key_ttls.insert(to.clone(), t);
                             }
                             if rt.selected_key.as_deref() == Some(from.as_str()) {
                                 rt.selected_key = Some(to.clone());

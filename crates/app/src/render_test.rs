@@ -1719,3 +1719,68 @@ fn cell_range_drag_select_and_type_fill() {
     let _ = std::fs::create_dir_all("/tmp/shujing_ui");
     img.save("/tmp/shujing_ui/range_fill.png").expect("保存 PNG 失败");
 }
+
+#[test]
+fn cmd_a_selects_page_range() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        t.active_filter = None;
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::A,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+        physical_key: None,
+    });
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        // role_tab:8 行 × 6 列全可见
+        assert_eq!(t.sel_range, Some(((0, 0), (7, 5))), "⌘A 应全选本页");
+        assert!(t.multi_sel.is_empty(), "⌘A 后行多选应让位");
+    }
+    // Delete:全选置 NULL 是批量操作,应产生暂存改动(不直接写库)
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Delete,
+        pressed: true,
+        repeat: false,
+        modifiers: Default::default(),
+        physical_key: None,
+    });
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        // 8 行 × 5 个非主键列(id 是主键,跳过)= 40 处暂存
+        assert_eq!(t.changes.len(), 40, "Delete 全选置 NULL 应暂存 40 处非主键改动");
+        assert!(t.changes.iter().all(|(_, cn, _)| cn != "id"));
+    }
+}

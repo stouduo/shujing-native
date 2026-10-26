@@ -42,6 +42,17 @@ pub fn split_type_len(data_type: &str) -> (String, String) {
             let close = open + close_rel;
             let base = raw[..open].trim().to_uppercase();
             let len = raw[open + 1..close].trim().to_string();
+            // 右括号之后的类型属性(如 MySQL 的 "unsigned"/"zerofill")必须保留,
+            // 否则设计器 MODIFY 会把 DECIMAL(10,2) UNSIGNED 静默降级
+            let suffix = raw[close + 1..].trim();
+            if suffix.is_empty() {
+                return (base, len);
+            }
+            let len = if len.is_empty() {
+                suffix.to_string()
+            } else {
+                format!("{len} {suffix}")
+            };
             return (base, len);
         }
     }
@@ -83,8 +94,43 @@ fn type_of(db_type: DbType, c: &ColumnSpec) -> String {
     if c.auto_inc && db_type == DbType::Postgres {
         return "SERIAL".to_string();
     }
-    if !c.length.trim().is_empty() {
-        t = format!("{}({})", t, c.length.trim());
+    let len = c.length.trim();
+    if !len.is_empty() {
+        // split_type_len 把右括号后的类型属性(如 UNSIGNED)并进了 length:
+        // MySQL 语法要求属性在括号外,DECIMAL(10,2) UNSIGNED 而非 (10,2 unsigned)。
+        // 从尾部迭代剥已知属性词——ENUM('a b','c') 值内含空格不会被误切
+        const ATTRS: [&str; 4] = [
+            "unsigned zerofill",
+            "zerofill unsigned",
+            "unsigned",
+            "zerofill",
+        ];
+        let mut n = len;
+        let mut attrs: Vec<&str> = Vec::new();
+        loop {
+            let lower = n.to_lowercase();
+            let cut = ATTRS.iter().find_map(|k| {
+                lower.ends_with(k).then(|| n.len() - k.len())
+            });
+            match cut {
+                Some(c) if c > 0 && n.as_bytes().get(c - 1) == Some(&b' ') => {
+                    attrs.push(n[c..].trim());
+                    n = n[..c].trim_end();
+                }
+                _ => break,
+            }
+        }
+        if attrs.is_empty() {
+            t = format!("{t}({len})");
+        } else {
+            attrs.reverse();
+            let suffix = attrs.join(" ");
+            if n.is_empty() {
+                t = format!("{t} {suffix}");
+            } else {
+                t = format!("{t}({n}) {suffix}");
+            }
+        }
     }
     t
 }
@@ -193,7 +239,20 @@ pub fn designer_sql(
             }
             DbType::Postgres => {
                 let qi = quote_ident(db_type, &c.name);
-                // SERIAL 是伪类型不能 ALTER TYPE:自增列跳过类型语句
+                // SERIAL 是伪类型不能 ALTER TYPE:自增列跳过类型语句,但要明示而不是静默丢弃
+                if c.auto_inc {
+                    let base_type_changed = base
+                        .map(|b| b.data_type != c.data_type || b.length != c.length)
+                        .unwrap_or(false);
+                    let base_null_changed =
+                        base.map(|b| b.nullable != c.nullable).unwrap_or(false);
+                    if base_type_changed || base_null_changed {
+                        warnings.push(format!(
+                            "「{}」是自增列(SERIAL 伪类型),类型/可空修改需重建列,已跳过",
+                            c.name
+                        ));
+                    }
+                }
                 if !c.auto_inc {
                     let base_type_changed = base
                         .map(|b| b.data_type != c.data_type || b.length != c.length)
@@ -432,6 +491,66 @@ mod tests {
         let (b2, l2) = split_type_len("enum('a','b')");
         assert_eq!(b2, "ENUM");
         assert_eq!(l2, "'a','b'");
+        // 右括号后的类型属性必须保留,否则设计器 MODIFY 会静默剥离 UNSIGNED
+        let (b3, l3) = split_type_len("decimal(10,2) unsigned");
+        assert_eq!(b3, "DECIMAL");
+        assert_eq!(l3, "10,2 unsigned");
+        // 无括号形态:属性留在 base,round-trip 同样无损
+        let (b4, l4) = split_type_len("int unsigned");
+        assert_eq!(b4, "INT UNSIGNED");
+        assert_eq!(l4, "");
+        // type_of 重组:属性必须在括号外(DECIMAL(10,2 unsigned) 是 MySQL 语法错误)
+        let c = ColumnSpec {
+            name: "price".into(),
+            data_type: "decimal".into(),
+            length: "10,2 unsigned".into(),
+            nullable: true,
+            existing: true,
+            ..Default::default()
+        };
+        assert_eq!(type_of(DbType::MySql, &c), "DECIMAL(10,2) unsigned");
+        // ENUM 值内含空格不能被当属性切
+        let e = ColumnSpec {
+            name: "tag".into(),
+            data_type: "enum".into(),
+            length: "'a b','c'".into(),
+            nullable: true,
+            existing: true,
+            ..Default::default()
+        };
+        assert_eq!(type_of(DbType::MySql, &e), "ENUM('a b','c')");
+        // 组合属性
+        let z = ColumnSpec {
+            name: "n".into(),
+            data_type: "int".into(),
+            length: "11 unsigned zerofill".into(),
+            nullable: false,
+            existing: true,
+            ..Default::default()
+        };
+        assert_eq!(type_of(DbType::MySql, &z), "INT(11) unsigned zerofill");
+    }
+
+    #[test]
+    fn pg_autoinc_type_change_warns() {
+        // SERIAL 伪类型不能 ALTER TYPE:类型变更要进 warnings 而不是静默丢弃
+        let base = ColumnSpec {
+            name: "id".into(),
+            data_type: "integer".into(),
+            nullable: false,
+            auto_inc: true,
+            existing: true,
+            ..Default::default()
+        };
+        let mut c = base.clone();
+        c.data_type = "bigint".into();
+        let out = designer_sql(DbType::Postgres, false, "t", &[c], &[base]);
+        assert!(out.alters.is_empty(), "自增列不应生成 TYPE 语句: {:?}", out.alters);
+        assert!(
+            out.warnings.iter().any(|w| w.contains("自增列")),
+            "应有自增列跳过警告: {:?}",
+            out.warnings
+        );
     }
 
     #[test]

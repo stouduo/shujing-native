@@ -474,8 +474,13 @@ fn draw_detail(
                     if !read_only {
                         if let Some(draft) = rt.ttl_draft.clone() {
                             let mut v = draft;
-                            ui.add_sized([56.0, 22.0], egui::TextEdit::singleline(&mut v).font(theme::mono(11.0)));
-                            let apply = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            // 回车只在输入框持有焦点时提交(全局 Enter 会和模式框等串扰,误写 TTL)
+                            let resp = ui.add_sized(
+                                [56.0, 22.0],
+                                egui::TextEdit::singleline(&mut v).font(theme::mono(11.0)),
+                            );
+                            let apply =
+                                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             rt.ttl_draft = Some(v.clone());
                             if apply {
                                 rt.ttl_draft = None;
@@ -488,6 +493,7 @@ fn draw_detail(
                                 }
                             }
                         } else if theme::mini_text_button(ui, "TTL", p.text2).0 {
+                            rt.rename_draft = None; // 与重命名草稿互斥,避免一次回车两条写操作
                             rt.ttl_draft = Some(d.ttl.max(60).to_string());
                         }
                         if d.ttl != -1 && theme::mini_text_button(ui, "∞", p.text2).0 {
@@ -499,8 +505,12 @@ fn draw_detail(
                         }
                         if let Some(draft) = rt.rename_draft.clone() {
                             let mut v = draft;
-                            ui.add_sized([150.0, 22.0], egui::TextEdit::singleline(&mut v).font(theme::mono(11.5)));
-                            let apply = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let resp = ui.add_sized(
+                                [150.0, 22.0],
+                                egui::TextEdit::singleline(&mut v).font(theme::mono(11.5)),
+                            );
+                            let apply =
+                                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             rt.rename_draft = Some(v.clone());
                             if apply {
                                 rt.rename_draft = None;
@@ -513,6 +523,7 @@ fn draw_detail(
                                 }
                             }
                         } else if theme::mini_text_button(ui, "重命名", p.text2).0 {
+                            rt.ttl_draft = None; // 与 TTL 草稿互斥
                             rt.rename_draft = Some(key.clone());
                         }
                     }
@@ -547,12 +558,13 @@ fn draw_detail(
                     ui.add_space(10.0);
                     ui.label(RichText::new(format!("#{idx}")).size(11.5).color(p.muted));
                     let mut v = draft;
-                    ui.add_sized(
+                    let resp = ui.add_sized(
                         [280.0, 24.0],
                         egui::TextEdit::singleline(&mut v)
                             .font(theme::mono(12.0)),
                     );
-                    let entered = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let entered =
+                        resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     rt.list_edit = Some((idx, v));
                     if theme::button(ui, "保存", theme::BtnKind::Primary).clicked() || entered {
                         if let Some((idx2, v2)) = rt.list_edit.clone() {
@@ -612,22 +624,26 @@ fn draw_detail(
                         "zset" => "成员",
                         _ => "值",
                     };
-                    ui.add_sized(
+                    let resp_m = ui.add_sized(
                         [160.0, 24.0],
                         egui::TextEdit::singleline(&mut mv)
                             .hint_text(RichText::new(ph).size(11.0).color(p.muted))
                             .font(theme::mono(12.0)),
                     );
+                    let mut resp_v: Option<egui::Response> = None;
                     if matches!(d.key_type.as_str(), "hash" | "zset") {
                         let ph2 = if d.key_type == "hash" { "值" } else { "分数" };
-                        ui.add_sized(
+                        resp_v = Some(ui.add_sized(
                             [140.0, 24.0],
                             egui::TextEdit::singleline(&mut ev)
                                 .hint_text(RichText::new(ph2).size(11.0).color(p.muted))
                                 .font(theme::mono(12.0)),
-                        );
+                        ));
                     }
-                    let entered = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    // 任一输入框失焦+回车才提交(全局 Enter 会和模式框等串扰)
+                    let entered = (resp_m.lost_focus()
+                        || resp_v.as_ref().is_some_and(|r| r.lost_focus()))
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let editing = rt.member_set_hash;
                     let btn_label = if editing { "保存" } else { "添加" };
                     if theme::button(ui, btn_label, theme::BtnKind::Primary).clicked() || entered {
@@ -829,7 +845,8 @@ fn draw_pair_row(
                 key_type: d.key_type.clone(),
                 op: "del".into(),
                 member: member.to_string(),
-                extra: String::new(),
+                // list 成员可重复:按下标删(core 先 LSET 哨兵再 LREM),hash/zset 按字段名
+                extra: if d.key_type == "list" { i.to_string() } else { String::new() },
             });
         }
     }
@@ -1165,17 +1182,18 @@ fn draw_analyze_modal(
 }
 
 fn seg_two(ui: &mut egui::Ui, a: &str, b: &str, first: bool, w: f32) -> bool {
-    // 返回:是否有点击(任一段);状态切换由调用方取反
-    let mut any_click = false;
+    // 返回:是否点击了【未选中】的段。两段都必须绘制(seg_one 有绘制副作用),
+    // 只把"未选中段的点击"计入翻转,点已选中段不动
+    let mut switch = false;
     ui.horizontal(|ui| {
-        if seg_one(ui, a, first, w / 2.0 - 2.0) {
-            any_click = true;
+        if seg_one(ui, a, first, w / 2.0 - 2.0) && !first {
+            switch = true;
         }
-        if seg_one(ui, b, !first, w / 2.0 - 2.0) {
-            any_click = true;
+        if seg_one(ui, b, !first, w / 2.0 - 2.0) && first {
+            switch = true;
         }
     });
-    any_click
+    switch
 }
 
 fn seg_one(ui: &mut egui::Ui, label: &str, selected: bool, w: f32) -> bool {
