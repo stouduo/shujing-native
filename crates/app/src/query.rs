@@ -200,6 +200,7 @@ pub fn draw_query_view(
                             ran: false,
                             plan: None,
                             error: None,
+                            frozen: 0,
                         });
                     }
                     let history = q.history.clone();
@@ -536,6 +537,7 @@ pub fn draw_optimize_modal(
     };
     let p = theme::c();
     let mut close = false;
+    let mut plan_frozen_out = state.frozen;
     let modal = egui::Modal::new(egui::Id::new("sql-optimize"))
         .frame(theme::modal_frame())
         .backdrop_color(p.overlay)
@@ -656,7 +658,8 @@ pub fn draw_optimize_modal(
                             .max_height(180.0)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                let mut plan_frozen = 0usize;
+                                // 冻结数经局部变量带出闭包后写回 OptimizeState
+                                let mut plan_frozen = plan_frozen_out;
                                 super::grid::result_rows(
                                     ui,
                                     "optimize-plan",
@@ -664,6 +667,7 @@ pub fn draw_optimize_modal(
                                     &plan.rows,
                                     &mut plan_frozen,
                                 );
+                                plan_frozen_out = plan_frozen;
                             });
                     }
                 }
@@ -691,6 +695,10 @@ pub fn draw_optimize_modal(
         });
     if modal.should_close() {
         close = true;
+    }
+    // 冻结列数写回 OptimizeState(闭包借用已结束)
+    if let Some(o) = q.optimize.as_mut() {
+        o.frozen = plan_frozen_out;
     }
     if close {
         q.optimize = None;

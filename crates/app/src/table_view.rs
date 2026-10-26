@@ -787,11 +787,25 @@ pub(crate) fn draw_table_view(
                                     } else {
                                         tab.hidden_cols.push(c.clone());
                                     }
+                                    // 可视列序变化:单元格级可视坐标状态全部失效,清掉防错位
+                                    tab.sel_range = None;
+                                    tab.drag_sel = None;
+                                    tab.drag_row = None;
+                                    tab.selected = None;
+                                    tab.editing = None;
                                 }
                             }
                             theme::checkbox(ui, &mut tab.show_rowno, "行号");
                             if ui.small_button("显示全部列").clicked() {
+                                let had_hidden = !tab.hidden_cols.is_empty();
                                 tab.hidden_cols.clear();
+                                if had_hidden {
+                                    tab.sel_range = None;
+                                    tab.drag_sel = None;
+                                    tab.drag_row = None;
+                                    tab.selected = None;
+                                    tab.editing = None;
+                                }
                             }
                             ui.separator();
                             if ui
@@ -1513,7 +1527,7 @@ pub(crate) fn draw_table_view(
                     }
                 }
             }
-            if copy_text.is_none() && editing.is_none() {
+            if copy_text.is_none() && editing.is_none() && !field_focused {
                 if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C))
                     && sel_spanning
                 {
@@ -1590,7 +1604,13 @@ pub(crate) fn draw_table_view(
             }
             // 网格内 ci 是可视列下标:映射回全量列,否则隐藏列存在时写错列(数据损坏级)
             if let Some((ri, ci, val)) = commit {
-                if sel_spanning && !pk_cols.is_empty() {
+                let in_range = sel_range
+                    .map(|r| {
+                        let ((r1, c1), (r2, c2)) = norm_range(r);
+                        ri >= r1 && ri <= r2 && ci >= c1 && ci <= c2
+                    })
+                    .unwrap_or(false);
+                if sel_spanning && in_range && !pk_cols.is_empty() {
                     // 批量填充:同一值落到整个选区(主键列跳过防键冲突;空值=置 NULL)
                     let Some(((r1, c1), (r2, c2))) = sel_range.map(norm_range) else {
                         unreachable!()
@@ -1619,6 +1639,27 @@ pub(crate) fn draw_table_view(
                     if unchanged {
                         changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
                     } else {
+                        // 编辑主键列:覆写前快照整行原始主键(保存 WHERE 用)
+                        if pk_cols.contains(&col_name) && !tab.orig_pks.contains_key(&ri) {
+                            tab.orig_pks.insert(
+                                ri,
+                                pk_cols
+                                    .iter()
+                                    .map(|pc| {
+                                        let pi =
+                                            columns.iter().position(|c| c == pc).unwrap_or(0);
+                                        (
+                                            pc.clone(),
+                                            rows[ri]
+                                                .get(pi)
+                                                .cloned()
+                                                .flatten()
+                                                .unwrap_or_default(),
+                                        )
+                                    })
+                                    .collect(),
+                            );
+                        }
                         let new_val = (!val.is_empty()).then_some(val);
                         rows[ri][full_ci] = new_val.clone();
                         changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
@@ -1866,8 +1907,9 @@ fn norm_range(
 pub(crate) struct FrozenGeom {
     /// 表头带顶部 y(屏幕坐标)
     pub header_top: Option<f32>,
-    /// 本帧实际渲染的行号(按渲染顺序;行虚拟化,只有可见行)
-    pub vis_ri: Vec<usize>,
+    /// 本帧实际渲染的 (行号, 行带顶部真实屏幕 y)。
+    /// 行虚拟化首行可能带裁剪(滚动偏移非行高整数倍),y 必须逐行记录不可推算
+    pub vis_rows: Vec<(usize, f32)>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1921,6 +1963,10 @@ fn draw_data_table(
     let pointer_pos_dv = ui.input(|i| i.pointer.latest_pos());
     let (pointer_cmd_dv, pointer_shift_dv) =
         ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+    // 按压点必须在本网格层(模态/菜单在其上层,几何命中需手动避让)
+    let pointer_on_grid_layer = pointer_pos_dv
+        .map(|pt| ui.ctx().memory(|m| m.layer_id_at(pt) == Some(ui.layer_id())))
+        .unwrap_or(false);
     // TableBuilder 的行/列间距取自 item_spacing:清零才能得到原型的连续表头与 32pt 行高
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
     let srt = &*sort;
@@ -2077,7 +2123,7 @@ fn draw_data_table(
         };
         body.rows(theme::ROW_H, rows.len(), |mut row| {
             let ri = row.index();
-            geom.vis_ri.push(ri);
+            let row_y = std::cell::Cell::new(f32::NAN);
             let rowdata = &rows[ri];
             let is_editing_row = matches!(*editing, Some((er, _)) if er == ri);
             if is_editing_row {
@@ -2090,6 +2136,7 @@ fn draw_data_table(
             if show_rowno {
                 row.col(|ui| {
                     let rect = ui.max_rect();
+                    row_y.set(rect.top());
                     hovered = hovers(rect);
                     if row_selected {
                         ui.painter().rect_filled(rect, 0, p.selected_row);
@@ -2187,6 +2234,7 @@ fn draw_data_table(
                             v,
                             changed,
                             !pk_cols.is_empty(),
+                            pk_cols.contains(col_name),
                             ri,
                             ci,
                             is_sel,
@@ -2218,6 +2266,9 @@ fn draw_data_table(
             row.col(|ui| {
                 hovered = hovers(ui.max_rect());
                 let rect = ui.max_rect();
+                if !show_rowno {
+                    row_y.set(rect.top());
+                }
                 if row_selected {
                     ui.painter().rect_filled(rect, 0, p.selected_row);
                 } else if hovered {
@@ -2228,6 +2279,7 @@ fn draw_data_table(
                     *new_selection = Some(Some((ri, 0)));
                 }
             });
+            geom.vis_rows.push((ri, row_y.get()));
             let _ = is_editing_row;
         });
             // —— 矩形拖选状态机(直接操作):按住数据格拖 = 选区;按住行号拖 = 行多选。
@@ -2243,13 +2295,20 @@ fn draw_data_table(
                 let body_top =
                     geom.header_top.unwrap_or(f32::NEG_INFINITY) + theme::HEADER_H;
                 let off_x = LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
+                // 屏幕 y → 行号(行虚拟化首行带裁剪,须按记录的真实行带查)
+                let row_at = |py: f32| -> Option<usize> {
+                    geom
+                        .vis_rows
+                        .iter()
+                        .find(|(_, y)| py >= *y && py < *y + theme::ROW_H)
+                        .map(|(ri, _)| *ri)
+                };
                 // 屏幕坐标 → (行, 可视列);行号列返回 None 由行号分支处理
                 let hit = |pt: egui::Pos2| -> Option<(usize, usize)> {
                     if pt.y < body_top {
                         return None;
                     }
-                    let k = ((pt.y - body_top) / theme::ROW_H) as usize;
-                    let ri = *geom.vis_ri.get(k)?;
+                    let ri = row_at(pt.y)?;
                     if ri >= rows.len() {
                         return None;
                     }
@@ -2292,8 +2351,7 @@ fn draw_data_table(
                     if rowno_w <= 0.0 || pt.y < body_top {
                         return None;
                     }
-                    let k = ((pt.y - body_top) / theme::ROW_H) as usize;
-                    let ri = *geom.vis_ri.get(k)?;
+                    let ri = row_at(pt.y)?;
                     if ri >= rows.len() {
                         return None;
                     }
@@ -2305,7 +2363,7 @@ fn draw_data_table(
                         ((pt.x >= table_left) && (pt.x < table_left + rowno_w)).then_some(ri)
                     }
                 };
-                if p_pressed {
+                if p_pressed && pointer_on_grid_layer {
                     if let Some(pt) = pointer_pos {
                         let (cmd, shift) = (pointer_cmd_dv, pointer_shift_dv);
                         if let Some(ri) = rowno_hit(pt) {
@@ -2323,9 +2381,12 @@ fn draw_data_table(
                             *sel_range = Some(norm_range((anchor, (ri, ci))));
                             *drag_sel = Some(anchor);
                             *selected = Some((ri, ci));
-                            if !shift && multi_sel.len() > 1 {
+                            if !shift {
                                 multi_sel.clear();
                             }
+                        } else {
+                            // 按在占位列/表尾空白:解除矩形选区(拖选高亮不残留)
+                            *sel_range = None;
                         }
                     }
                 } else if p_down {
@@ -2412,7 +2473,8 @@ fn draw_frozen_overlay(
     let p = theme::c();
     let left = ui.max_rect().left();
     let top = geom.header_top.unwrap_or_else(|| ui.max_rect().top());
-    let bottom = ui.max_rect().bottom();
+    // 底部让开常驻横向滚动条条带(bar_width 12 + 边距),否则最左段被底色涂没
+    let bottom = (ui.max_rect().bottom() - 16.0).max(top);
     let region_w = rowno_w + frozen_ws.iter().sum::<f32>();
     if region_w < 1.0 || !(bottom > top) {
         return;
@@ -2505,13 +2567,11 @@ fn draw_frozen_overlay(
         egui::Stroke::new(1.0, p.border),
     );
 
-    // ---- 钉住的数据行
-    let body_top = top + theme::HEADER_H;
-    for (k, &ri) in geom.vis_ri.iter().enumerate() {
-        if ri >= rows.len() {
+    // ---- 钉住的数据行(y 用渲染时记录的真实行带;滚动偏移非行高整数倍时不可推算)
+    for &(ri, y) in geom.vis_rows.iter() {
+        if ri >= rows.len() || y.is_nan() {
             continue;
         }
-        let y = body_top + k as f32 * theme::ROW_H;
         if y >= bottom {
             break;
         }
@@ -2629,6 +2689,7 @@ fn draw_frozen_overlay(
                     v,
                     changed,
                     !pk_cols.is_empty(),
+                    pk_cols.contains(col_name),
                     ri,
                     ci,
                     is_sel,
@@ -2803,6 +2864,7 @@ fn draw_data_cell(
     v: &Option<String>,
     changed: bool,
     has_pk: bool,
+    col_is_pk: bool,
     ri: usize,
     ci: usize,
     is_sel: bool,
@@ -2931,8 +2993,7 @@ fn draw_data_cell(
         ui.separator();
         if ui.button("查看完整内容…").clicked() {
             let text = v.as_deref().unwrap_or("").to_string();
-            let col = columns.get(ci).cloned().unwrap_or_default();
-            *view_cell = Some((col, text));
+            *view_cell = Some((col_name.to_string(), text));
             ui.close_menu();
         }
         if ui.button("查看整行详情…").clicked() {
@@ -2962,7 +3023,10 @@ fn draw_data_cell(
             ui.close_menu();
         }
         if ui
-            .add_enabled(has_pk && v.is_some(), egui::Button::new("设为 NULL"))
+            .add_enabled(
+                has_pk && !col_is_pk && v.is_some(),
+                egui::Button::new("设为 NULL"),
+            )
             .clicked()
         {
             *set_null = Some((ri, ci));
@@ -3101,6 +3165,59 @@ fn app_tabs_set_saving(app: &mut ShujingApp, tab_id: &str, saving: bool) {
     }
 }
 
+/// 确认后执行批量删行(DeleteRows/DeleteRow 确认弹窗的落地路径)
+pub(crate) fn run_delete_rows(app: &mut ShujingApp, tab_id: &str, ris: &[usize]) {
+    let Some(t) = app.table_tab_mut(tab_id) else {
+        return;
+    };
+    if t.pk_cols.is_empty() {
+        app.toast_error("该表没有主键,无法删除行".to_string());
+        return;
+    }
+    let pk_idxs: Vec<usize> = t
+        .pk_cols
+        .iter()
+        .filter_map(|p| t.columns.iter().position(|c| c == p))
+        .collect();
+    let mut deletes: Vec<Vec<(String, String)>> = Vec::new();
+    let mut skipped = 0usize;
+    for ri in ris {
+        let Some(row) = t.rows.get(*ri) else { continue };
+        let pk: Vec<(String, String)> = pk_idxs
+            .iter()
+            .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
+            .collect();
+        if pk.iter().any(|(_, v)| v.is_empty()) {
+            skipped += 1;
+            continue;
+        }
+        deletes.push(pk);
+    }
+    if deletes.is_empty() {
+        app.toast_error("选中行均无有效主键,无法删除".to_string());
+        return;
+    }
+    let conn_id = t.conn_id.clone();
+    let table = t.table.clone();
+    let database = t.database.clone();
+    t.loading = true;
+    let tx = app.event_tx.clone();
+    let service = app.service.clone();
+    let tid = tab_id.to_string();
+    net::spawn(async move {
+        let result = service
+            .apply_changes(&conn_id, &table, database.as_deref(), &[], &deletes, &[])
+            .await;
+        let _ = tx.send(BgEvent::ChangesSaved {
+            tab_id: tid,
+            result: result.map(|r| r.affected),
+        });
+    });
+    if skipped > 0 {
+        app.toast_error(format!("跳过 {skipped} 行(主键值为空)"));
+    }
+}
+
 fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabAction) {
     // 未保存修改防护:会重载数据的动作先拦截
     let tab_id_for_gate = match &action {
@@ -3199,22 +3316,29 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 app.toast_error("主键列不在结果集中,无法回写".to_string());
                 return;
             }
+            // 按行合批:同一行的多列改动合并成一条 UPDATE;
+            // 定位主键用 orig_pks 快照(编辑提交时内存行已被覆写,拿新值定位会静默 0 行或错行)
+            let mut by_row: std::collections::BTreeMap<usize, Vec<(String, Option<String>)>> =
+                Default::default();
+            for (ri, col, val) in &t.changes {
+                by_row.entry(*ri).or_default().push((col.clone(), val.clone()));
+            }
             let mut updates = Vec::new();
             let mut skipped_empty_pk = 0usize;
-            for (ri, col, val) in &t.changes {
-                let Some(row) = t.rows.get(*ri) else { continue };
-                let pk: Vec<(String, String)> = pk_idxs
-                    .iter()
-                    .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
-                    .collect();
+            for (ri, sets) in by_row {
+                let Some(row) = t.rows.get(ri) else { continue };
+                let pk: Vec<(String, String)> = match t.orig_pks.get(&ri) {
+                    Some(orig) => orig.clone(),
+                    None => pk_idxs
+                        .iter()
+                        .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
+                        .collect(),
+                };
                 if pk.iter().any(|(_, v)| v.is_empty()) {
                     skipped_empty_pk += 1;
                     continue;
                 }
-                updates.push(shujing_core::edits::CellUpdate {
-                    pk,
-                    sets: vec![(col.clone(), val.clone())],
-                });
+                updates.push(shujing_core::edits::CellUpdate { pk, sets });
             }
             let conn_id = t.conn_id.clone();
             let table = t.table.clone();
@@ -3556,9 +3680,16 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 app.toast_error("结果集未包含全部主键列,无法回写".to_string());
                 return;
             }
-            let mut updates = Vec::new();
+            // 按行合批:查询页 rows 不被覆写,pk 恒为旧值;
+            // 不合批时"先改主键再改同行他列"的第二条 UPDATE 会静默 0 行
+            let mut by_row: std::collections::BTreeMap<usize, Vec<(String, Option<String>)>> =
+                Default::default();
             for (ri, col, val) in &q.q_changes {
-                let Some(row) = r.rows.get(*ri) else { continue };
+                by_row.entry(*ri).or_default().push((col.clone(), val.clone()));
+            }
+            let mut updates = Vec::new();
+            for (ri, sets) in by_row {
+                let Some(row) = r.rows.get(ri) else { continue };
                 let pk: Vec<(String, String)> = pk_idxs
                     .iter()
                     .map(|&i| (r.columns[i].clone(), row[i].clone().unwrap_or_default()))
@@ -3566,10 +3697,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 if pk.iter().any(|(_, v)| v.is_empty()) {
                     continue;
                 }
-                updates.push(shujing_core::edits::CellUpdate {
-                    pk,
-                    sets: vec![(col.clone(), val.clone())],
-                });
+                updates.push(shujing_core::edits::CellUpdate { pk, sets });
             }
             if updates.is_empty() {
                 app.toast_error("没有可保存的修改".to_string());
@@ -3656,91 +3784,34 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
         }
         TabAction::RedisLoadMore { tab_id, key } => app.redis_fetch_detail_more(&tab_id, &key),
         TabAction::DeleteRows { tab_id, ris } => {
-            let Some(t) = app.table_tab_mut(&tab_id) else {
-                return;
-            };
-            if t.pk_cols.is_empty() {
-                app.toast_error("该表没有主键,无法删除行".to_string());
-                return;
-            }
-            let pk_idxs: Vec<usize> = t
-                .pk_cols
-                .iter()
-                .filter_map(|p| t.columns.iter().position(|c| c == p))
-                .collect();
-            let mut deletes: Vec<Vec<(String, String)>> = Vec::new();
-            let mut skipped = 0usize;
-            for ri in &ris {
-                let Some(row) = t.rows.get(*ri) else { continue };
-                let pk: Vec<(String, String)> = pk_idxs
-                    .iter()
-                    .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
-                    .collect();
-                if pk.iter().any(|(_, v)| v.is_empty()) {
-                    skipped += 1;
-                    continue;
-                }
-                deletes.push(pk);
-            }
-            if deletes.is_empty() {
-                app.toast_error("选中行均无有效主键,无法删除".to_string());
-                return;
-            }
-            let conn_id = t.conn_id.clone();
-            let table = t.table.clone();
-            let database = t.database.clone();
-            t.loading = true;
-            let tx = app.event_tx.clone();
-            let service = app.service.clone();
-            net::spawn(async move {
-                let result = service
-                    .apply_changes(&conn_id, &table, database.as_deref(), &[], &deletes, &[])
-                    .await;
-                let _ = tx.send(BgEvent::ChangesSaved {
-                    tab_id: tab_id.clone(),
-                    result: result.map(|r| r.affected),
-                });
+            // 删除直接写库且不可撤销:先确认(菜单文案的"…"暗示有确认)
+            let n = ris.len();
+            app.confirm = Some(crate::app::ConfirmState {
+                title: "删除选中行".into(),
+                message: format!("确认删除选中的 {n} 行?将直接对数据库执行 DELETE,不可撤销。"),
+                expect: None,
+                input: String::new(),
+                conn_id: String::new(),
+                sql: String::new(),
+                action: Some(format!(
+                    "delete-rows:{}:{}",
+                    tab_id,
+                    ris.iter()
+                        .map(|r| r.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )),
             });
-            if skipped > 0 {
-                app.toast_error(format!("跳过 {skipped} 行(主键值为空)"));
-            }
         }
         TabAction::DeleteRow { tab_id, ri } => {
-            let Some(t) = app.table_tab_mut(&tab_id) else {
-                return;
-            };
-            if t.pk_cols.is_empty() {
-                app.toast_error("该表没有主键,无法删除行".to_string());
-                return;
-            }
-            let pk_idxs: Vec<usize> = t
-                .pk_cols
-                .iter()
-                .filter_map(|p| t.columns.iter().position(|c| c == p))
-                .collect();
-            let Some(row) = t.rows.get(ri) else { return };
-            let pk: Vec<(String, String)> = pk_idxs
-                .iter()
-                .map(|&i| (t.columns[i].clone(), row[i].clone().unwrap_or_default()))
-                .collect();
-            if pk.iter().any(|(_, v)| v.is_empty()) {
-                app.toast_error("主键值为空,无法定位行".to_string());
-                return;
-            }
-            let conn_id = t.conn_id.clone();
-            let table = t.table.clone();
-            let database = t.database.clone();
-            t.loading = true;
-            let tx = app.event_tx.clone();
-            let service = app.service.clone();
-            net::spawn(async move {
-                let result = service
-                    .apply_changes(&conn_id, &table, database.as_deref(), &[], &[pk], &[])
-                    .await;
-                let _ = tx.send(BgEvent::ChangesSaved {
-                    tab_id: tab_id.clone(),
-                    result: result.map(|r| r.affected),
-                });
+            app.confirm = Some(crate::app::ConfirmState {
+                title: "删除行".into(),
+                message: format!("确认删除第 {} 行?将直接对数据库执行 DELETE,不可撤销。", ri + 1),
+                expect: None,
+                input: String::new(),
+                conn_id: String::new(),
+                sql: String::new(),
+                action: Some(format!("delete-rows:{}:{}", tab_id, ri)),
             });
         }
         TabAction::InsertRow { tab_id, values } => {
@@ -4154,12 +4225,18 @@ impl eframe::App for ShujingApp {
                 self.conn_modal = Some(ConnModal::new());
             }
         }
-        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.command)
+        // 文本框/单元格编辑器持焦时不触发(⌘W 会丢未提交草稿,⌘R 重载同理)
+        let field_focused = ctx.memory(|m| m.focused().is_some());
+        if !modal_open
+            && !field_focused
+            && ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.command)
             && !self.tabs.is_empty()
         {
             self.close_tab(self.active_tab);
         }
-        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.command)
+        if !modal_open
+            && !field_focused
+            && ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.command)
             && !self.tabs.is_empty()
         {
             let id = self.tabs[self.active_tab].id.clone();
@@ -4178,7 +4255,10 @@ impl eframe::App for ShujingApp {
                 );
             }
         }
-        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command) {
+        if !modal_open
+            && !ctx.memory(|m| m.focused().is_some())
+            && ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command)
+        {
             ctx.memory_mut(|m| m.request_focus(egui::Id::new("table-filter")));
         }
         if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::L) && i.modifiers.command && i.modifiers.shift) {

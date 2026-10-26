@@ -899,6 +899,16 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 app.confirm = None;
                 app.delete_connection(conn_id);
                 app.toast_error(format!("已删除连接 {}", input_ok));
+            } else if let Some(rest) =
+                action.as_deref().and_then(|a| a.strip_prefix("delete-rows:"))
+            {
+                app.confirm = None;
+                let (tid, ris_csv) = rest.split_once(':').unwrap_or(("", ""));
+                let ris: Vec<usize> =
+                    ris_csv.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if !ris.is_empty() {
+                    crate::table_view::run_delete_rows(app, &tid.to_string(), &ris);
+                }
             } else if let Some(conn_id) =
                 action.as_deref().and_then(|a| a.strip_prefix("disconnect-conn:"))
             {

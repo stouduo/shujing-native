@@ -66,8 +66,10 @@ pub async fn apply_changes(
     let started = Instant::now();
     let mysql = info.db_type == crate::model::DbType::MySql;
     let table = qualified_table(table, database, mysql);
-    let mut affected: u64 = 0;
 
+    // 先收集全部语句,再按后端包在单事务里执行:
+    // 中途失败整体回滚,不会留下"前 k 条已落库"的半保存状态
+    let mut stmts: Vec<String> = Vec::new();
     for u in updates {
         if u.sets.is_empty() {
             continue;
@@ -81,28 +83,80 @@ pub async fn apply_changes(
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let sql = format!("UPDATE {} SET {} WHERE {}", table, sets, where_of(&u.pk, mysql)?);
-        affected += backend.run_one(&sql, 1).await?.affected.max(0);
+        stmts.push(format!(
+            "UPDATE {} SET {} WHERE {}",
+            table,
+            sets,
+            where_of(&u.pk, mysql)?
+        ));
     }
-
     for pk in deletes {
-        let sql = format!("DELETE FROM {} WHERE {}", table, where_of(pk, mysql)?);
-        affected += backend.run_one(&sql, 1).await?.affected.max(0);
+        stmts.push(format!("DELETE FROM {} WHERE {}", table, where_of(pk, mysql)?));
     }
-
     for ins in inserts {
         if ins.is_empty() {
             continue;
         }
         let cols = ins.iter().map(|(c, _)| quote(c, mysql)).collect::<Vec<_>>().join(", ");
         let vals = ins.iter().map(|(_, v)| literal(v, mysql)).collect::<Vec<_>>().join(", ");
-        let sql = format!("INSERT INTO {} ({}) VALUES ({})", table, cols, vals);
-        affected += backend.run_one(&sql, 1).await?.affected.max(0);
+        stmts.push(format!("INSERT INTO {} ({}) VALUES ({})", table, cols, vals));
     }
 
-    if updates.is_empty() && deletes.is_empty() && inserts.is_empty() {
+    if stmts.is_empty() {
         return Err("没有待保存的更改".into());
     }
+
+    let affected: u64 = match backend {
+        Backend::Sqlite(conn) => {
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            let mut affected = 0u64;
+            for sql in &stmts {
+                let n = tx.execute(sql, []).map_err(|e| e.to_string())?;
+                affected += n as u64;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            affected
+        }
+        Backend::MySql(mp) => {
+            use mysql_async::prelude::*;
+            let mut conn = Backend::mysql_conn(mp).await.map_err(|e| e.to_string())?;
+            conn.query_drop("START TRANSACTION").await.map_err(|e| e.to_string())?;
+            let mut affected = 0u64;
+            for sql in &stmts {
+                if let Err(e) = conn.query_drop(sql.as_str()).await {
+                    // 回滚必须落在同一会话上,否则池里留下悬挂事务
+                    let _ = conn.query_drop("ROLLBACK").await;
+                    return Err(e.to_string());
+                }
+                affected += conn.affected_rows();
+            }
+            conn.query_drop("COMMIT").await.map_err(|e| e.to_string())?;
+            affected
+        }
+        Backend::Pg(mp) => {
+            let client = Backend::pg_client(mp).await.map_err(|e| e.to_string())?;
+            client.batch_execute("BEGIN").await.map_err(|e| e.to_string())?;
+            let mut affected = 0u64;
+            for sql in &stmts {
+                match client.simple_query(sql).await {
+                    Ok(msgs) => {
+                        for m in msgs {
+                            if let tokio_postgres::SimpleQueryMessage::CommandComplete(tag) = m {
+                                affected += tag;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = client.batch_execute("ROLLBACK").await;
+                        return Err(e.to_string());
+                    }
+                }
+            }
+            client.batch_execute("COMMIT").await.map_err(|e| e.to_string())?;
+            affected
+        }
+        Backend::Redis(_) => return Err("Redis 请使用专门的命令通道".into()),
+    };
 
     Ok(ExecResult {
         columns: vec![],
@@ -126,5 +180,75 @@ mod tests {
         assert_eq!(qualified_table("users", Some(""), true), "`users`");
         // 非 MySQL 双引号
         assert_eq!(qualified_table("users", Some("pub"), false), "\"pub\".\"users\"");
+    }
+}
+
+#[cfg(test)]
+mod tx_tests {
+    use super::*;
+    use crate::model::ConnInfo;
+
+    async fn test_backend(path: &str) -> (Backend, ConnInfo) {
+        let info = ConnInfo {
+            id: "t".into(),
+            name: "t".into(),
+            db_type: crate::model::DbType::Sqlite,
+            host: None,
+            port: None,
+            user: None,
+            password: None,
+            database: None,
+            file_path: Some(path.into()),
+            color: None,
+            read_only: false,
+        };
+        let b = crate::backend::connect(&info, None).await.unwrap();
+        (b, info)
+    }
+
+    /// 按行合批:同一行多列改动合并为一条 UPDATE;事务:中途失败整体回滚
+    #[tokio::test]
+    async fn apply_changes_groups_rows_and_rolls_back() {
+        let dir = std::env::temp_dir().join(format!("shujing_tx_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("tx.db");
+        let _ = std::fs::remove_file(&path);
+        let (mut b, info) = test_backend(path.to_str().unwrap()).await;
+
+        b.run_sql(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, age INT, UNIQUE(name))",
+            100,
+            None,
+        )
+        .await
+        .unwrap();
+        b.run_one("INSERT INTO t (id, name, age) VALUES (1, 'a', 1), (2, 'b', 2)", 100)
+            .await
+            .unwrap();
+
+        // 同一行两列改动:合批后一条 UPDATE,两列都生效
+        let updates = vec![CellUpdate {
+            pk: vec![("id".into(), "1".into())],
+            sets: vec![("name".into(), Some("a2".into())), ("age".into(), Some("11".into()))],
+        }];
+        let r = apply_changes(&mut b, &info, "t", None, &updates, &[], &[]).await.unwrap();
+        assert_eq!(r.affected, 1, "合批后同行只产生一条 UPDATE");
+        let row = b.run_one("SELECT name, age FROM t WHERE id = 1", 10).await.unwrap();
+        assert_eq!(row.rows[0][0].as_deref(), Some("a2"));
+        assert_eq!(row.rows[0][1].as_deref(), Some("11"));
+
+        // 事务回滚:第一条成功、第二条撞唯一约束 → 全部不生效
+        let updates = vec![
+            CellUpdate { pk: vec![("id".into(), "1".into())], sets: vec![("age".into(), Some("99".into()))] },
+            CellUpdate { pk: vec![("id".into(), "2".into())], sets: vec![("name".into(), Some("a2".into()))] },
+        ];
+        let err = apply_changes(&mut b, &info, "t", None, &updates, &[], &[]).await;
+        assert!(err.is_err(), "撞唯一约束应报错");
+        let row = b.run_one("SELECT age, name FROM t WHERE id = 1", 10).await.unwrap();
+        assert_eq!(row.rows[0][0].as_deref(), Some("11"), "第一条 UPDATE 应回滚");
+        let row = b.run_one("SELECT name FROM t WHERE id = 2", 10).await.unwrap();
+        assert_eq!(row.rows[0][0].as_deref(), Some("b"), "第二条 UPDATE 应回滚");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

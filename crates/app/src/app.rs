@@ -91,7 +91,7 @@ pub enum BgEvent {
     },
     PkLoaded {
         tab_id: String,
-        cols: Vec<String>,
+        result: Result<Vec<String>, String>,
     },
     ChangesSaved {
         tab_id: String,
@@ -122,8 +122,11 @@ pub enum BgEvent {
     ImportDone {
         result: Result<usize, String>,
     },
-    /// CSV 导入:目标表列回填
+    /// CSV 导入:目标表列回填(带身份,快速换表打开导入窗时迟到结果不串表)
     ImportColsDone {
+        conn_id: String,
+        database: String,
+        table: String,
         cols: Vec<String>,
     },
     DdlDone {
@@ -319,6 +322,9 @@ pub struct TableTab {
     pub drag_sel: Option<(usize, usize)>,
     /// 行号列拖选的锚点行(行多选范围)
     pub drag_row: Option<usize>,
+    /// 被编辑行的原始主键值(行号 → (列名, 值))。
+    /// 内存行在提交时已被覆写为新值,保存定位(WHERE)必须用编辑前的主键,否则静默 0 行或错行
+    pub orig_pks: std::collections::HashMap<usize, Vec<(String, String)>>,
 }
 
 impl TableTab {
@@ -353,6 +359,7 @@ impl TableTab {
             sel_range: None,
             drag_sel: None,
             drag_row: None,
+            orig_pks: Default::default(),
             filter_bar_open: false,
             filter_mode: 0,
             conds: vec![],
@@ -473,6 +480,8 @@ pub struct OptimizeState {
     pub ran: bool,
     pub plan: Option<shujing_core::ExecResult>,
     pub error: Option<String>,
+    /// 执行计划网格的冻结列数(存状态里,局部变量会每帧重置)
+    pub frozen: usize,
 }
 
 /// 对象 DDL 查看标签(触发器/存储过程/函数/视图)
@@ -614,6 +623,8 @@ pub struct RedisTab {
     pub selected_key: Option<String>,
     pub detail: Option<shujing_core::redis_ops::RedisDetail>,
     pub detail_loading: bool,
+    /// 「加载更多」在途标志(无防抖会重复追加同页,后续 LSET 按下标错位写数据)
+    pub detail_more_loading: bool,
     pub scanning: bool,
     pub error: Option<String>,
     /// SCAN 后批量拉取的键类型/TTL 徽标
@@ -1531,6 +1542,7 @@ impl ShujingApp {
                 selected_key: None,
                 detail: None,
                 detail_loading: false,
+            detail_more_loading: false,
                 scanning: false,
                 error: None,
                 key_types: HashMap::new(),
@@ -1603,6 +1615,14 @@ impl ShujingApp {
         let offset = rt.detail.as_ref().map(|d| d.pairs.len()).unwrap_or(0);
         if offset == 0 {
             return;
+        }
+        if rt.detail_more_loading {
+            return; // 在途防抖:重复请求会带同一 offset,追加两份相同页
+        }
+        if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            if let crate::app::TabKind::Redis(rt) = &mut t.kind {
+                rt.detail_more_loading = true;
+            }
         }
         let tid = tab_id.clone();
         let k = key.to_string();
@@ -1881,6 +1901,7 @@ impl ShujingApp {
         let seq = tab.load_seq;
         tab.loading = true;
         tab.changes.clear();
+        tab.orig_pks.clear();
         tab.editing = None;
         tab.multi_sel.clear();
         tab.sel_range = None;
@@ -1897,17 +1918,17 @@ impl ShujingApp {
             );
             let service2 = service.clone();
             net::spawn(async move {
-                let st = service2.get_table_structure(&conn2, &table2, db2).await;
-                let cols = st
+                let result = service2
+                    .get_table_structure(&conn2, &table2, db2)
+                    .await
                     .map(|s| {
                         s.columns
                             .iter()
                             .filter(|c| c.key == "PRI")
                             .map(|c| c.name.clone())
                             .collect()
-                    })
-                    .unwrap_or_default();
-                let _ = tx2.send(BgEvent::PkLoaded { tab_id: id2, cols });
+                    });
+                let _ = tx2.send(BgEvent::PkLoaded { tab_id: id2, result });
             });
         }
         net::spawn(async move {
@@ -2585,6 +2606,7 @@ impl ShujingApp {
                             selected_key: None,
                             detail: None,
                             detail_loading: false,
+            detail_more_loading: false,
                             scanning: false,
                             error: None,
                             key_types: HashMap::new(),
@@ -2736,6 +2758,7 @@ impl ShujingApp {
                     ran: false,
                     plan: None,
                     error: None,
+                    frozen: 0,
                 });
                 o.running = true;
                 o.error = None;
@@ -2901,6 +2924,8 @@ impl ShujingApp {
                         t.sel_range = None;
                         t.drag_sel = None;
                         t.drag_row = None;
+                        t.multi_sel.clear(); // 在途时用户可能 ⌘ 点选了旧页行,保留会指向新页错行
+                        t.orig_pks.clear();
                         match result {
                             Ok(r) => {
                                 t.last_elapsed_ms = Some(r.elapsed_ms);
@@ -2933,9 +2958,15 @@ impl ShujingApp {
                         self.load_rows(&tab_id);
                     }
                 }
-                BgEvent::PkLoaded { tab_id, cols } => {
+                BgEvent::PkLoaded { tab_id, result } => {
                     if let Some(t) = self.table_tab_mut(&tab_id) {
-                        t.pk_cols = cols;
+                        match result {
+                            Ok(cols) => t.pk_cols = cols,
+                            Err(_) => {
+                                // 拉取失败不等于"没有主键":复位标记,下次刷新重试(否则标签永久只读)
+                                t.pk_loaded = false;
+                            }
+                        }
                     }
                 }
                 BgEvent::ChangesSaved { tab_id, result } => match result {
@@ -2960,7 +2991,13 @@ impl ShujingApp {
                             self.toast_error(format!("已保存 {n} 处修改"));
                         }
                     }
-                    Err(e) => self.toast_error(format!("保存失败: {e}")),
+                    Err(e) => {
+                        // 保存失败要复位 loading(删行/保存路径会置 true,不复位则刷新按钮永久失效)
+                        if let Some(t) = self.table_tab_mut(&tab_id) {
+                            t.loading = false;
+                        }
+                        self.toast_error(format!("保存失败: {e}"));
+                    }
                 },
                 BgEvent::StructureLoaded { tab_id, result } => {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
@@ -3082,9 +3119,17 @@ impl ShujingApp {
                         }
                     }
                 }
-                BgEvent::ImportColsDone { cols } => {
+                BgEvent::ImportColsDone {
+                    conn_id,
+                    database,
+                    table,
+                    cols,
+                } => {
                     if let Some(im) = self.import.as_mut() {
-                        if im.target_cols.is_empty() && !cols.is_empty() {
+                        let same_target = im.conn_id == conn_id
+                            && im.database.as_deref() == Some(database.as_str())
+                            && im.table == table;
+                        if same_target && im.target_cols.is_empty() && !cols.is_empty() {
                             im.target_cols = cols;
                         }
                     }
@@ -3270,6 +3315,7 @@ impl ShujingApp {
                         continue;
                     };
                     rt.detail_loading = false;
+                    rt.detail_more_loading = false;
                     // 期间切换了选中 key:丢弃过期结果
                     if rt.selected_key.as_deref() != Some(key.as_str()) {
                         continue;
@@ -3481,7 +3527,10 @@ pub fn mysql_quote(conns: &[ConnInfo], conn_id: &str) -> bool {
 
 /// 全列 LIKE 筛选:列名按方言引注,值转义单引号
 pub fn build_like_filter(columns: &[String], query: &str, mysql: bool) -> String {
-    let escaped = query.replace('\'', "''");
+    let mut escaped = query.replace('\'', "''");
+    if mysql {
+        escaped = escaped.replace('\\', "\\\\");
+    }
     let pattern = format!("'%{escaped}%'");
     // 整体加括号:与筛选栏条件 AND 拼接时,无括号的 OR 串会被 SQL 优先级改写语义
     format!(
@@ -3524,7 +3573,11 @@ pub fn build_cond_where(
             } else {
                 v.to_string()
             };
-            format!("'{}'", wrapped.replace('\'', "''"))
+            let mut quoted = wrapped.replace('\'', "''");
+            if mysql {
+                quoted = quoted.replace('\\', "\\\\");
+            }
+            format!("'{quoted}'")
         };
         parts.push(format!("{ident} {op} {literal}"));
     }
@@ -3764,7 +3817,12 @@ impl ShujingApp {
                     .await
                     .map(|st| st.columns.into_iter().map(|c| c.name).collect::<Vec<_>>())
                     .unwrap_or_default();
-                let _ = tx.send(BgEvent::ImportColsDone { cols });
+                let _ = tx.send(BgEvent::ImportColsDone {
+                    conn_id: cid,
+                    database: db,
+                    table: tbl,
+                    cols,
+                });
             });
         }
     }

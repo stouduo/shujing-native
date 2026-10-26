@@ -6,14 +6,25 @@ use crate::{icons, theme};
 use egui::{Color32, Sense};
 use egui_extras::{Column, TableBuilder};
 
-/// 结果网格横向偏移(上一帧值,供冻结覆盖层的编辑框归属判定)
-static GRID_HSCROLL_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+/// 读上一帧横向偏移(按网格 id 存 egui 临时态;静态会被同帧渲染的优化计划网格互相覆盖)
+fn load_prev_hscroll(ctx: &egui::Context, id_salt: &str) -> f32 {
+    ctx.data_mut(|d| {
+        d.get_temp::<f32>(egui::Id::new(("grid-hscroll", id_salt)))
+            .unwrap_or(0.0)
+    })
+}
+
+fn store_hscroll(ctx: &egui::Context, id_salt: &str, x: f32) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("grid-hscroll", id_salt)), x));
+}
 
 /// 冻结覆盖层需要的渲染几何(每帧由网格填充)
 #[derive(Default)]
 struct GridGeom {
     header_top: Option<f32>,
-    vis_ri: Vec<usize>,
+    /// 本帧实际渲染的 (行号, 行带顶部真实屏幕 y)。
+    /// 行虚拟化首行可能带裁剪(滚动偏移非行高整数倍),y 必须逐行记录不可推算
+    vis_rows: Vec<(usize, f32)>,
 }
 
 /// 可编辑网格的编辑态(冻结覆盖层与底层共用;只读网格传 None)
@@ -43,7 +54,7 @@ pub fn result_rows(
     let outer = ui.available_rect_before_wrap();
     let mut geom = GridGeom::default();
     let actual_widths = std::cell::Cell::new(Vec::<f32>::new());
-    let prev_hscroll = GRID_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
+    let prev_hscroll = load_prev_hscroll(ui.ctx(), id_salt);
     // 结果网格和表数据页共用同一套横向滚动条策略:常驻、实体、高可见度
     ui.spacing_mut().scroll.floating = false;
     ui.spacing_mut().scroll.dormant_handle_opacity = 0.9;
@@ -146,11 +157,12 @@ pub fn result_rows(
                 // 行悬停:每格用自身矩形判定(跨行累积并工会点亮悬停行下方全部行)
                 body.rows(theme::ROW_H, rows.len(), |mut row| {
                     let ri = row.index();
-                    geom.vis_ri.push(ri);
+                    let row_y = std::cell::Cell::new(f32::NAN);
                     let rowdata = &rows[ri];
                     let mut hovered = false;
                     row.col(|ui| {
                         let rect = ui.max_rect();
+                        row_y.set(rect.top());
                         hovered = ui
                             .input(|i| i.pointer.latest_pos())
                             .map(|pt| {
@@ -226,13 +238,11 @@ pub fn result_rows(
                         }
                         row_line(ui, p.row_line);
                     });
+                    geom.vis_rows.push((ri, row_y.get()));
                 });
             });
         });
-    GRID_HSCROLL_X.store(
-        hout.state.offset.x as i32,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    store_hscroll(ui.ctx(), id_salt, hout.state.offset.x);
     draw_frozen_grid_overlay(
         ui,
         id_salt,
@@ -297,7 +307,7 @@ pub fn result_rows_editable(
     let frozen_n = (*frozen).min(columns.len());
     let mut geom = GridGeom::default();
     let actual_widths = std::cell::Cell::new(Vec::<f32>::new());
-    let prev_hscroll = GRID_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
+    let prev_hscroll = load_prev_hscroll(ui.ctx(), id_salt);
     // 结果网格和表数据页共用同一套横向滚动条策略:常驻、实体、高可见度
     ui.spacing_mut().scroll.floating = false;
     ui.spacing_mut().scroll.dormant_handle_opacity = 0.9;
@@ -398,11 +408,12 @@ pub fn result_rows_editable(
                 // 行悬停:每格用自身矩形判定(跨行累积并工会点亮悬停行下方全部行)
                 body.rows(theme::ROW_H, rows.len(), |mut row| {
                     let ri = row.index();
-                    geom.vis_ri.push(ri);
+                    let row_y = std::cell::Cell::new(f32::NAN);
                     let rowdata = &rows[ri];
                     let mut hovered = false;
                     row.col(|ui| {
                         let rect = ui.max_rect();
+                        row_y.set(rect.top());
                         hovered = ui
                             .input(|i| i.pointer.latest_pos())
                             .map(|pt| {
@@ -427,10 +438,8 @@ pub fn result_rows_editable(
                     for (ci, col) in columns.iter().enumerate() {
                         let v = &rowdata[ci];
                         // 冻结列已横向滚出视口:编辑框改由覆盖层持有,底层画普通格防双 TextEdit
-                        let frozen_scrolled = frozen_n > 0
-                            && ci < frozen_n
-                            && GRID_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32
-                                > 0.5;
+                        // 用函数开头采样的 prev 值:与覆盖层编辑框归属判定严格同源
+                        let frozen_scrolled = frozen_n > 0 && ci < frozen_n && prev_hscroll > 0.5;
                         let is_editing =
                             *editing == Some((ri, ci)) && !frozen_scrolled;
                         row.col(|ui| {
@@ -464,7 +473,7 @@ pub fn result_rows_editable(
                                     egui::TextEdit::singleline(draft)
                                         .font(theme::mono(theme::FS_DATA))
                                         .frame(false)
-                                        .desired_width(inner.width().max(80.0)),
+                                        .desired_width(inner.width()),
                                 );
                                 // 双击出现编辑框后立即抢焦点,否则打字仍进原焦点控件
                                 resp.request_focus();
@@ -478,7 +487,14 @@ pub fn result_rows_editable(
                             } else {
                                 let resp = ui.allocate_rect(rect, Sense::click());
                                 if resp.double_clicked() {
-                                    start_edit = Some((ri, ci, v.clone().unwrap_or_default()));
+                                    // 草稿取现值(优先待保存改动):取原始值会让 Enter 静默撤销改动
+                                    let shown = changes
+                                        .iter()
+                                        .find(|(r, c, _)| *r == ri && c == col)
+                                        .and_then(|(_, _, nv)| nv.clone())
+                                        .or_else(|| v.clone())
+                                        .unwrap_or_default();
+                                    start_edit = Some((ri, ci, shown));
                                 }
                                 if let Some((label, on)) = badge_value(col, v) {
                                     paint_badge(
@@ -523,13 +539,11 @@ pub fn result_rows_editable(
                         }
                         row_line(ui, p.row_line);
                     });
+                    geom.vis_rows.push((ri, row_y.get()));
                 });
             });
         });
-    GRID_HSCROLL_X.store(
-        hout.state.offset.x as i32,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    store_hscroll(ui.ctx(), id_salt, hout.state.offset.x);
     draw_frozen_grid_overlay(
         ui,
         id_salt,
@@ -654,13 +668,11 @@ fn draw_frozen_grid_overlay(
         egui::Stroke::new(1.0, p.border),
     );
 
-    // 钉住的数据行
-    let body_top = top + theme::HEADER_H;
-    for (k, &ri) in geom.vis_ri.iter().enumerate() {
-        if ri >= rows.len() {
+    // 钉住的数据行(y 用渲染时记录的真实行带;滚动偏移非行高整数倍时不可推算)
+    for &(ri, y) in geom.vis_rows.iter() {
+        if ri >= rows.len() || y.is_nan() {
             continue;
         }
-        let y = body_top + k as f32 * theme::ROW_H;
         if y >= bottom {
             break;
         }
@@ -719,7 +731,7 @@ fn draw_frozen_grid_overlay(
                     egui::TextEdit::singleline(e.draft)
                         .font(theme::mono(theme::FS_DATA))
                         .frame(false)
-                        .desired_width(inner.width().max(80.0)),
+                        .desired_width(inner.width()),
                 );
                 resp.request_focus();
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -736,7 +748,14 @@ fn draw_frozen_grid_overlay(
                     let resp = ui.interact(rect, egui::Id::new(("qfz-c", id_salt, ri, ci)), Sense::click());
                     if resp.double_clicked() {
                         if let Some(e) = edits.as_mut() {
-                            *e.start_edit = Some((ri, ci, v.clone().unwrap_or_default()));
+                            let shown = e
+                                .changes
+                                .iter()
+                                .find(|(r, c, _)| *r == ri && c == col)
+                                .and_then(|(_, _, nv)| nv.clone())
+                                .or_else(|| v.clone())
+                                .unwrap_or_default();
+                            *e.start_edit = Some((ri, ci, shown));
                         }
                     }
                 }

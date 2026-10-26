@@ -79,7 +79,8 @@ fn literal_by(v: &str, mysql: bool) -> String {
     format!("'{out}'")
 }
 
-/// 导入:按 col_map 拼 INSERT,单事务批量执行。返回写入行数。
+/// 导入:按 col_map 拼 INSERT,每 200 行一个事务批量提交(批间失败则此前批次已入库,
+/// 错误信息带已完成行数)。返回写入行数。
 pub async fn import_csv(
     service: &Arc<crate::Service>,
     info: ConnInfo,
