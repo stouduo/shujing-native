@@ -1852,3 +1852,336 @@ fn double_click_edit_opens_editor() {
         assert!(t.editing.is_some(), "双击应进入编辑态");
     }
 }
+
+#[test]
+fn tab_close_and_context_menu_work() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let app = full_app("role");
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let tab_x = |i: usize| 222.0 + i as f32 * 190.0 + 60.0;
+
+    // 右键第一个标签 → 应弹出菜单(菜单区域出现新 shape)
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(tab_x(0), 14.0)));
+    harness.step();
+    let before = harness.render().expect("r").into_raw();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(tab_x(0), 14.0),
+        button: egui::PointerButton::Secondary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(tab_x(0), 14.0),
+        button: egui::PointerButton::Secondary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    let after_menu = harness.render().expect("r").into_raw();
+    assert_ne!(before, after_menu, "右键标签应弹出菜单");
+
+    // 点击「关闭其他」→ 只剩激活标签
+    // 菜单条目从标签下方开始,第一项 ≈ (tab_x(0)+40, 40)
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(tab_x(0) + 40.0, 40.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(tab_x(0) + 40.0, 40.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(tab_x(0) + 40.0, 40.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state().borrow();
+        eprintln!("[tabmenu] tabs={}", app.tabs.len());
+        assert_eq!(app.tabs.len(), 1, "「关闭其他」应只留激活标签");
+    }
+}
+
+#[test]
+fn tab_close_button_works() {
+    // 用真实 eframe::App::update 路径(draw_app 不含 update 的弹窗/快捷键块)
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    // 第一个(非激活)标签的 ×:标签右缘 -16;标签宽度随标题 galley 变化,按候选右缘试探
+    let mut closed_to = None;
+    for right in [176.0f32, 190.0, 204.0, 218.0, 232.0, 246.0, 260.0] {
+        let x = 222.0 + right - 16.0;
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(x, 14.0)));
+        harness.step();
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(x, 14.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        harness.step();
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(x, 14.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        harness.step();
+        harness.step();
+        let n = harness.state().tabs.len();
+        eprintln!("[tabx] right={right} tabs={n}");
+        if n == 2 {
+            closed_to = Some(n);
+            break;
+        }
+    }
+    assert_eq!(closed_to, Some(2), "点 × 应关闭标签");
+}
+
+#[test]
+fn tab_close_dirty_shows_confirm_and_closes() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            // 激活标签带未保存修改(模拟用户测试编辑后残留)
+            if let TabKind::Table(t) = &mut app.tabs[2].kind {
+                t.changes.push((0, "role".into(), Some("x".into())));
+            }
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    // 单元路径:直接 close_tab 触发 pending(几何无关),验证确认弹窗可见且按钮可用
+    // 走真实用户路径:⌘W 关闭脏标签 → 弹未保存确认
+    harness.input_mut().modifiers = egui::Modifiers {
+        command: true,
+        ..Default::default()
+    };
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::W,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+        physical_key: None,
+    });
+    harness.step();
+    harness.step();
+    {
+        let app = harness.state();
+        eprintln!(
+            "[dirtyx] tabs={} pending={}",
+            app.tabs.len(),
+            app.pending.is_some()
+        );
+        assert!(app.pending.is_some(), "脏标签关闭应弹未保存确认");
+        assert_eq!(app.tabs.len(), 3, "确认前不应关闭");
+    }
+    let img = harness.render().expect("r");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/dirty_confirm.png").unwrap();
+    let img = harness.render().expect("r");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/dirty_confirm.png").unwrap();
+    // Escape 关闭弹窗(取消)→ 标签保留
+    // 点「丢弃并继续」→ 标签应关闭(弹窗居中,主按钮在右下 ≈ (644, 405))
+    let click = |h: &mut egui_kittest::Harness<ShujingApp>, pos: egui::Pos2| {
+        h.input_mut().events.push(egui::Event::PointerMoved(pos));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+    };
+    click(&mut harness, egui::pos2(644.0, 405.0));
+    {
+        let app = harness.state();
+        eprintln!("[dirtyx after] tabs={}", app.tabs.len());
+        assert!(app.pending.is_none(), "点击丢弃并继续后确认应结束");
+        assert_eq!(app.tabs.len(), 2, "丢弃并继续后应关闭标签");
+    }
+}
+
+#[test]
+fn tab_rename_sticky_focus_and_exit() {
+    // 双击标签标题进入重命名:此前点击别处不会退出重命名(TextEdit 每帧抢焦点),
+    // 导致 ⌘W 被焦点门永久拦截、右键点到重命名输入框上没有标签菜单
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+
+    // 基线:⌘W 直接关闭激活标签
+    harness.input_mut().modifiers = egui::Modifiers {
+        command: true,
+        ..Default::default()
+    };
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::W,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+        physical_key: None,
+    });
+    harness.step();
+    harness.step();
+    let base = harness.state().tabs.len();
+    eprintln!("[rename baseline] tabs after cmd-w = {base}");
+    let dbl_click = |h: &mut egui_kittest::Harness<ShujingApp>, pos: egui::Pos2| {
+        for _ in 0..2 {
+            h.input_mut().events.push(egui::Event::PointerMoved(pos));
+            h.step();
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            });
+            h.step();
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            });
+            h.step();
+        }
+        h.step();
+    };
+    // 双击第 0 个标签标题 → 进入重命名
+    dbl_click(&mut harness, egui::pos2(260.0, 14.0));
+    harness.step();
+    eprintln!(
+        "[rename dbg] focused after dbl = {:?}",
+        harness
+            .ctx
+            .memory(|m| m.focused().map(|f| f.short_debug_format()))
+    );
+
+    // 单击空白处:重命名应失焦退出(此前点击别处不退出,焦点被每帧抢回,⌘W 永久被拦)
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(5.0, 5.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(5.0, 5.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+
+    // ⌘W:应能关闭激活标签(若重命名仍粘着焦点,这里关不掉)。
+    // 真实 winit 会持续上报修饰键状态;egui 0.31 的 InputState.modifiers 来自
+    // RawInput.modifiers 字段(kittest 合成键事件自身携带的 modifiers 不会回填),
+    // 测试里必须先设置它,否则 i.modifiers.command 恒为 false(与 ⌘A 测试同源问题)
+    harness.input_mut().modifiers = egui::Modifiers {
+        command: true,
+        ..Default::default()
+    };
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::W,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+        physical_key: None,
+    });
+    harness.step();
+    harness.step();
+    eprintln!(
+        "[rename dbg] focused after click-away = {:?}",
+        harness.ctx.memory(|m| m.focused().map(|f| f.short_debug_format()))
+    );
+    let n = harness.state().tabs.len();
+    eprintln!("[rename] after cmd-w tabs={n} (baseline {base})");
+    assert_eq!(n, base - 1, "点击别处应退出重命名,⌘W 应能关标签");
+}

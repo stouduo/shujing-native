@@ -531,9 +531,22 @@ fn draw_one_tab(
                 .frame(false)
                 .desired_width(iren.width()),
         );
-        r.request_focus();
+        // 失焦即退出重命名(回车提交/点击别处取消/Escape 取消)。
+        // egui 0.31 的 TextEdit 只在回车时交焦点,点击外部必须主动 surrender——
+        // 否则点击别处后每帧 request_focus 把焦点抢回,重命名永久粘住:
+        // ⌘W 被焦点门拦死、右键落在输入框上没有标签菜单
+        let clicked_elsewhere =
+            ui.input(|i| i.pointer.any_click()) && !r.hovered();
+        if clicked_elsewhere && r.has_focus() {
+            ui.memory_mut(|mem| mem.surrender_focus(r.id));
+        }
+        if !clicked_elsewhere {
+            r.request_focus();
+        }
         rename_commit = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        rename_cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        rename_cancel =
+            (clicked_elsewhere || ui.input(|i| i.key_pressed(egui::Key::Escape)))
+                && !rename_commit;
     } else {
         let text_painter = ui.painter().with_clip_rect(egui::Rect::from_min_max(
             egui::pos2(rect.left() + 32.0, rect.top()),
