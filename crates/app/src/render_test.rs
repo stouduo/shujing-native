@@ -1784,3 +1784,71 @@ fn cmd_a_selects_page_range() {
         assert!(t.changes.iter().all(|(_, cn, _)| cn != "id"));
     }
 }
+
+#[test]
+fn double_click_edit_opens_editor() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let app = full_app("role");
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        // 默认 step_dt=1/4s:两步就超过 egui 的 0.3s 双击窗,双击永远不触发
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    // 双击 role 列第一个数据格:两次完整按下/释放
+    for _ in 0..2 {
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(380.0, 182.0)));
+        harness.step();
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(380.0, 182.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        harness.step();
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(380.0, 182.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        harness.step();
+    }
+    // 逐帧观察:第二次按下当帧 editing 是否短暂出现
+    for step in 0..4 {
+        harness.step();
+        let app = harness.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        eprintln!(
+            "[dblclick step{step}] editing={:?} detail={} sel={:?} range={:?}",
+            t.editing, t.detail, t.selected, t.sel_range
+        );
+    }
+    {
+        let app = harness.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        let pk = !t.pk_cols.is_empty();
+        eprintln!("[dblclick final] pk_cols={:?} editing={:?}", t.pk_cols, t.editing);
+        assert!(pk, "测试表应有主键");
+        assert!(t.editing.is_some(), "双击应进入编辑态");
+    }
+}

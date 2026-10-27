@@ -2005,6 +2005,9 @@ fn draw_data_table(
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
     // 编辑行是否本帧被渲染(行虚拟化:滚出视口的行不渲染,
     // editing 悬死会让 Enter 失效、拖拽平移被永久禁用)
+    // 编辑态是否在进入本帧前就已存在:双击/右键菜单会在行循环中途才置 editing,
+    // 此时"行未渲染"的帧末取消检查必须跳过,否则同帧就把新编辑杀掉(双击编辑失效)
+    let editing_at_frame_start = editing.is_some();
     let editing_row_rendered = std::cell::Cell::new(false);
     let mut tb = if show_rowno {
         builder.column(Column::exact(48.0))
@@ -2432,7 +2435,7 @@ fn draw_data_table(
             }
     });
     // 编辑行滚出视口(本帧未渲染):取消编辑,避免悬死状态
-    if editing.is_some() && !editing_row_rendered.get() {
+    if editing_at_frame_start && editing.is_some() && !editing_row_rendered.get() {
         *editing = None;
     }
 }

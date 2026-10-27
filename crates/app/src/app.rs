@@ -2856,6 +2856,23 @@ impl ShujingApp {
                         tree.online = true;
                         tree.version = version;
                         self.apply_saved_db_filter(&conn_id);
+                        // 启动竞态自愈:会话恢复的表标签可能在连接完成前就发起加载,
+                        // 失败后错误一直挂着("连接未建立或已断开")。连接建立即自动重载
+                        let stale: Vec<String> = self
+                            .tabs
+                            .iter()
+                            .filter(|t| match &t.kind {
+                                TabKind::Table(tb) => {
+                                    tb.conn_id == conn_id
+                                        && (tb.error.is_some() || tb.columns.is_empty())
+                                }
+                                _ => false,
+                            })
+                            .map(|t| t.id.clone())
+                            .collect();
+                        for tid in stale {
+                            self.load_rows(&tid);
+                        }
                         let tx = self.event_tx.clone();
                         let service = self.service.clone();
                         let cid = conn_id.clone();
@@ -2949,6 +2966,7 @@ impl ShujingApp {
                                 t.columns = r.columns;
                                 t.rows = r.rows;
                                 t.rows_gen = t.rows_gen.wrapping_add(1);
+                                t.error = None; // 成功加载清掉陈旧错误(如启动竞态期的"连接未建立")
                             }
                             Err(e) => {
                                 t.last_elapsed_ms = None;
