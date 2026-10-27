@@ -1,6 +1,6 @@
 [package]
 name = "shujing-app"
-version = "0.11.8"
+version = "0.11.9"
 edition = "2021"
 description = "数镜原生版界面(egui/eframe)"
 

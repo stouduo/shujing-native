@@ -2185,3 +2185,203 @@ fn tab_rename_sticky_focus_and_exit() {
     eprintln!("[rename] after cmd-w tabs={n} (baseline {base})");
     assert_eq!(n, base - 1, "点击别处应退出重命名,⌘W 应能关标签");
 }
+
+#[test]
+fn tab_close_button_real_path() {
+    // 真实 update 路径点 ×:干净标签 / 脏标签两种
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+
+    // 激活标签(第 3 个,role)标题最长 → 宽 248;× 在标签右缘-16
+    // 侧栏 222 + 标签0(126)+标签1(126) 起点不确定,按几个右缘试探第 1 个标签的 ×
+    let click = |h: &mut egui_kittest::Harness<ShujingApp>, pos: egui::Pos2| {
+        h.input_mut().events.push(egui::Event::PointerMoved(pos));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+    };
+
+    // 干净的非激活标签:× 中心 ≈ 标签右缘-16(插桩实测标签0 右缘 394.7)
+    let mut ok = false;
+    for right in [394.0f32, 392.0, 396.0, 384.0] {
+        click(&mut harness, egui::pos2(right - 16.0, 14.0));
+        let n = harness.state().tabs.len();
+        eprintln!("[x-real] right={right} tabs={n}");
+        if n == 2 {
+            ok = true;
+            break;
+        }
+        // 没关掉可能误点了激活标签的标签体:恢复(若弹了确认就 Escape)
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+            physical_key: None,
+        });
+        harness.step();
+        harness.step();
+    }
+    assert!(ok, "真实路径点 × 应能关闭非激活干净标签");
+}
+
+#[test]
+fn tab_rename_exit_by_drag_and_enter_commit() {
+    // 拖动退出(点击网格后轻微拖动 = drag 而非 click,any_click 判定覆盖不到)+ 回车提交
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    let dbl_click = |h: &mut egui_kittest::Harness<ShujingApp>, pos: egui::Pos2| {
+        for _ in 0..2 {
+            h.input_mut().events.push(egui::Event::PointerMoved(pos));
+            h.step();
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            });
+            h.step();
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            });
+            h.step();
+        }
+        h.step();
+    };
+
+    // 场景1:双击进入重命名 → 在网格上按下并拖动(drag,不是 click)→ 重命名应退出
+    dbl_click(&mut harness, egui::pos2(260.0, 14.0));
+    assert!(
+        harness.ctx.memory(|m| m.focused().is_some()),
+        "双击后重命名框应持有焦点"
+    );
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(500.0, 350.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    for x in [480.0f32, 460.0, 440.0] {
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(x, 350.0)));
+        harness.step();
+    }
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(440.0, 350.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    assert!(
+        harness.ctx.memory(|m| m.focused().is_none()),
+        "拖动后重命名应退出(焦点释放)"
+    );
+
+}
+
+#[test]
+fn tab_rename_enter_commits() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    let dbl_click = |h: &mut egui_kittest::Harness<ShujingApp>, pos: egui::Pos2| {
+        for _ in 0..2 {
+            h.input_mut().events.push(egui::Event::PointerMoved(pos));
+            h.step();
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            });
+            h.step();
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            });
+            h.step();
+        }
+        h.step();
+    };
+    // 双击进入重命名 → 打字 + 回车 → 标题应更新
+    dbl_click(&mut harness, egui::pos2(260.0, 14.0));
+    assert!(
+        harness.ctx.memory(|m| m.focused().is_some()),
+        "双击后重命名框应持有焦点"
+    );
+    harness.input_mut().events.push(egui::Event::Text("X".into()));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Enter,
+        pressed: true,
+        repeat: false,
+        modifiers: Default::default(),
+        physical_key: None,
+    });
+    harness.step();
+    harness.step();
+    let title = harness.state().tabs[0].title.clone();
+    eprintln!("[rename-enter] title after enter = {title}");
+    // draft 预填原标题,输入 X 追加在光标处(末尾)
+    assert_eq!(title, "ads_report_youniX", "回车应提交重命名");
+}
