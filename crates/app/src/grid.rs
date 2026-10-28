@@ -255,6 +255,7 @@ pub fn result_rows(
         &actual_widths,
         outer,
         None,
+        &std::cell::Cell::new(false),
     );
     ui.spacing_mut().item_spacing = old_spacing;
 }
@@ -301,6 +302,10 @@ pub fn result_rows_editable(
     let desired_w = 48.0 + col_widths.iter().sum::<f32>();
     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.command);
     let editing_active = editing.is_some();
+    // 编辑行滚出视口的帧末取消(与表数据页同款):行虚拟化下编辑格不渲染,
+    // Esc/Enter 处理执行不到,q_editing 悬死 → 焦点门全局失效且 Esc 救不回
+    let editing_at_start = editing.is_some();
+    let editing_rendered = std::cell::Cell::new(false);
     let table_left = ui.max_rect().left();
     let table_right = ui.max_rect().right();
     let outer = ui.available_rect_before_wrap();
@@ -463,6 +468,7 @@ pub fn result_rows_editable(
                                 );
                             }
                             if is_editing {
+                                editing_rendered.set(true);
                                 let inner = rect.shrink2(egui::vec2(4.0, 2.0));
                                 let mut eui = ui.new_child(
                                     egui::UiBuilder::new()
@@ -562,7 +568,11 @@ pub fn result_rows_editable(
             start_edit: &mut start_edit,
             commit: &mut commit,
         }),
+        &editing_rendered,
     );
+    if editing_at_start && editing.is_some() && !editing_rendered.get() {
+        *editing = None;
+    }
     ui.spacing_mut().item_spacing = old_spacing;
     (start_edit, commit)
 }
@@ -605,6 +615,7 @@ fn draw_frozen_grid_overlay(
     actual_widths: &std::cell::Cell<Vec<f32>>,
     outer: egui::Rect,
     mut edits: Option<EditFields<'_>>,
+    editing_rendered: &std::cell::Cell<bool>,
 ) {
     let frozen_n = (*frozen).min(columns.len());
     if frozen_n == 0 || offset_x <= 0.5 {
@@ -720,6 +731,7 @@ fn draw_frozen_grid_overlay(
                 editing_now = *e.editing == Some((ri, ci)) && prev_hscroll > 0.5;
             }
             if editing_now {
+                editing_rendered.set(true);
                 let e = edits.as_mut().unwrap();
                 let inner = rect.shrink2(egui::vec2(4.0, 2.0));
                 let mut eui = ui.new_child(

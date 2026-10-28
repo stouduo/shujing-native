@@ -531,14 +531,13 @@ fn draw_one_tab(
                 .frame(false)
                 .desired_width(iren.width()),
         );
-        // 按下发生在重命名框之外即退出(pressed 帧就行动,不等 release)。
-        // egui 0.31 的 TextEdit 只在回车时交焦点,点击外部必须主动 surrender;
-        // 且不能用 any_click()(点击网格后轻微拖动会被判为 drag 而非 click,
-        // 点击判定永不触发,request_focus 又把焦点抢回 → 重命名永久粘住:
-        // ⌘W 被焦点门拦死、右键落在输入框上没有标签菜单)。
-        // primary_down 覆盖 click 与 drag 两种手势;创建帧无按下,不受影响
+        // 按下「起点」在重命名框之外即退出(只看 primary_pressed 当帧)。
+        // 用 primary_pressed 而非 primary_down:框内按下拖选文本、指针越出框缘
+        // 属于正常拖选,不能当退出;框外按下(click 或 drag 起点)则立即退出——
+        // egui 0.31 的 TextEdit 只在回车时交焦点,不主动 surrender 的话
+        // request_focus 每帧把焦点抢回,重命名粘死(⌘W 拦死、右键无菜单)
         let press_outside =
-            ui.input(|i| i.pointer.primary_down()) && !r.hovered();
+            ui.input(|i| i.pointer.primary_pressed()) && !r.hovered();
         if press_outside && r.has_focus() {
             ui.memory_mut(|mem| mem.surrender_focus(r.id));
         }
@@ -3716,6 +3715,10 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 return;
             };
             let database = q.result_db.clone();
+            if q.q_changes_set != q.active_set {
+                app.toast_error("未保存修改属于其他结果集,请切回后再保存".to_string());
+                return;
+            }
             let Some(r) = q.results.get(q.active_set) else {
                 return;
             };
@@ -4278,23 +4281,56 @@ impl eframe::App for ShujingApp {
             || self.conn_modal.is_some()
             || self.global_search.is_some()
             || self.settings_open
-            || self.db_filter.is_some();
+            || self.db_filter.is_some()
+            || self
+                .tabs
+                .iter()
+                .any(|t| matches!(&t.kind, TabKind::Table(tb) if tb.insert_form.is_some()))
+            || self
+                .tabs
+                .iter()
+                .any(|t| matches!(&t.kind, TabKind::Redis(r) if r.edit_value.is_some()))
+            // 列统计/表统计弹窗(读活动标签态,切走标签后残留会"复活")
+            || self.stats.is_some()
+            || self
+                .tabs
+                .get(self.active_tab)
+                .is_some_and(|t| {
+                    matches!(&t.kind, TabKind::Table(tb) if tb.col_stats.is_some())
+                });
         if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command) {
             if self.conn_modal.is_none() {
                 self.conn_modal = Some(ConnModal::new());
             }
         }
-        // 文本框/单元格编辑器持焦时不触发(⌘W 会丢未提交草稿,⌘R 重载同理)
-        let field_focused = ctx.memory(|m| m.focused().is_some());
+        // 只拦「瞬态草稿」编辑器:单元格编辑(draft 未提交)与标签重命名——
+        // ⌘W/⌘R 会静默丢它们的草稿。SQL 编辑器/筛选框的文本随标签持久化,不拦
+        // (此前拦一切焦点框,导致查询页打字时 ⌘R 跑不了查询)
+        let transient_editing = self.tabs.iter().any(|t| match &t.kind {
+            TabKind::Table(tb) => tb.editing.is_some() || tb.insert_form.is_some(),
+            TabKind::Query(q) => q.q_editing.is_some(),
+            TabKind::Redis(r) => {
+                r.edit_value.is_some()
+                    || r.list_edit.is_some()
+                    || r.ttl_draft.is_some()
+                    || r.rename_draft.is_some()
+                    || r.member_add.is_some()
+            }
+            _ => false,
+        }) || ctx.memory(|m| {
+            m.data
+                .get_temp::<(usize, String)>(egui::Id::new("tab-rename"))
+                .is_some()
+        });
         if !modal_open
-            && !field_focused
+            && !transient_editing
             && ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.command)
             && !self.tabs.is_empty()
         {
             self.close_tab(self.active_tab);
         }
         if !modal_open
-            && !field_focused
+            && !transient_editing
             && ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.command)
             && !self.tabs.is_empty()
         {
@@ -4315,7 +4351,7 @@ impl eframe::App for ShujingApp {
             }
         }
         if !modal_open
-            && !ctx.memory(|m| m.focused().is_some())
+            && !transient_editing
             && ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command)
         {
             ctx.memory_mut(|m| m.request_focus(egui::Id::new("table-filter")));
@@ -4458,6 +4494,16 @@ impl eframe::App for ShujingApp {
                         &ac_tables,
                         &ac_columns,
                         ac_db.as_deref(),
+                        // 弹窗打开时页内 ⌘Enter/⌘/ 不穿透(与全局快捷键同一道门)
+                        self.confirm.is_some()
+                            || self.pending.is_some()
+                            || self.quick_open.is_some()
+                            || self.import.is_some()
+                            || self.new_table.is_some()
+                            || self.conn_modal.is_some()
+                            || self.global_search.is_some()
+                            || self.settings_open
+                            || self.db_filter.is_some(),
                     )
                 }
                 TabKind::Designer(d) => {

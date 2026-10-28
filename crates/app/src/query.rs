@@ -17,6 +17,7 @@ pub fn draw_query_view(
     ac_tables: &[String],
     ac_columns: &std::collections::HashMap<String, Vec<String>>,
     ac_db: Option<&str>,
+    modal_open: bool,
 ) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let p = theme::c();
@@ -268,9 +269,13 @@ pub fn draw_query_view(
                                 job.wrap.max_width = wrap_width;
                                 ui.fonts(|f| f.layout_job(job))
                             };
-                            // 补全弹层打开时先消费 ↑↓/Tab/Enter/Esc,TextEdit 不再响应
+                            // 补全弹层打开时先消费 ↑↓/Tab/Enter/Esc,TextEdit 不再响应。
+                            // 仅当编辑器持有焦点才吞:焦点在别处(如结果网格的单元格编辑器)
+                            // 时这些键属于那个控件,吞掉会劫持其 Enter 提交/Esc 取消
                             let te_id = egui::Id::new(format!("sql-editor-{tab_id}"));
-                            let ac_was_open = q.ac.is_some() && !is_redis;
+                            let ac_was_open = q.ac.is_some()
+                                && !is_redis
+                                && ui.ctx().memory(|m| m.has_focus(te_id));
                             let mut ac_key: Option<egui::Key> = None;
                             if ac_was_open {
                                 for key in [
@@ -323,8 +328,9 @@ pub fn draw_query_view(
                         });
                 });
 
-            // ⌘/:选中行注释切换
+            // ⌘/:选中行注释切换(弹窗打开时不响应,防穿透后台执行)
             if !is_redis
+                && !modal_open
                 && ui.input(|i| i.key_pressed(egui::Key::Slash) && i.modifiers.command)
             {
                 if let Some(state) =
@@ -337,9 +343,13 @@ pub fn draw_query_view(
                     }
                 }
             }
-            if ui.input(|i| {
-                i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
-            }) {
+            // ⌘Enter 执行:弹窗打开时(⌘P 快速打开等)不响应——内容区先于弹窗绘制,
+            // 不加门会在弹窗下静默重跑 SQL(尤其 UPDATE/DELETE)
+            if !modal_open
+                && ui.input(|i| {
+                    i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
+                })
+            {
                 if is_redis {
                     actions.push(TabAction::RunRedisCmd {
                         tab_id: tab_id.to_string(),
@@ -405,6 +415,13 @@ pub fn draw_query_view(
                         }
                     }
                     if let Some(i) = go {
+                        // 切集:行号不可跨集复用。有未保存改动 → 归属锁定在产生它的
+                        // 旧集(切回才能保存);无改动 → 归属跟随新集(本集可直接编辑)
+                        if !q.q_changes.is_empty() {
+                            q.q_changes_set = q.active_set;
+                        } else {
+                            q.q_changes_set = i;
+                        }
                         q.active_set = i;
                     }
                     ui.add_space(6.0);
@@ -440,7 +457,9 @@ pub fn draw_query_view(
                     && q.result_table.is_some()
                     && q.pk_checked
                     && !q.result_pk.is_empty()
-                    && q.result_pk.iter().all(|p| r.columns.contains(p));
+                    && q.result_pk.iter().all(|p| r.columns.contains(p))
+                    // 改动属于别的结果集时本集只读(行号跨集无意义,防错行 UPDATE)
+                    && (q.q_changes.is_empty() || q.q_changes_set == q.active_set);
                 if editable {
                     if !q.q_changes.is_empty() {
                         ui.horizontal(|ui| {
@@ -489,14 +508,8 @@ pub fn draw_query_view(
                             q.q_changes.push((ri, col, new_v));
                         }
                     }
-                    // ⌘S 保存(查询标签激活时)
-                    if !q.q_changes.is_empty()
-                        && ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command)
-                    {
-                        actions.push(TabAction::SaveQueryChanges {
-                            tab_id: tab_id.to_string(),
-                        });
-                    }
+                    // ⌘S 保存:全局层(update 循环)已覆盖查询标签,这里不再挂
+                    // 处理器(同帧双重 push 会并发执行两批 UPDATE)
                 } else {
                     grid::result_rows(
                         ui,

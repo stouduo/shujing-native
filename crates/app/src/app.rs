@@ -193,6 +193,10 @@ pub enum BgEvent {
     },
     /// 全局数据搜索
     SearchDone {
+        /// 发起时的 (连接, 库, 关键词):换连接/改词后迟到的旧结果直接丢弃
+        conn_id: String,
+        db: Option<String>,
+        keyword: String,
         result: Result<Vec<shujing_core::SearchHit>, String>,
     },
     /// 查询结果回写:主键列
@@ -472,6 +476,9 @@ pub struct QueryTab {
     pub pk_checked: bool,
     /// 结果集未保存修改:(行号, 列名, 新值)
     pub q_changes: Vec<(usize, String, Option<String>)>,
+    /// q_changes 所属的结果集下标:多语句多结果集时行号不可跨集复用,
+    /// 保存/编辑只对所属集生效(切到别的集时改动暂存不可保存,防错行 UPDATE)
+    pub q_changes_set: usize,
     pub q_editing: Option<(usize, usize)>,
     pub q_draft: String,
     /// SQL 自动补全(None=关闭)
@@ -1808,6 +1815,7 @@ impl ShujingApp {
                 result_pk: vec![],
                 pk_checked: false,
                 q_changes: vec![],
+                q_changes_set: 0,
                 q_editing: None,
                 q_draft: String::new(),
                 ac: None,
@@ -2559,6 +2567,7 @@ impl ShujingApp {
                             result_pk: vec![],
                             pk_checked: false,
                             q_changes: vec![],
+                q_changes_set: 0,
                             q_editing: None,
                             q_draft: String::new(),
                             ac: None,
@@ -2864,6 +2873,7 @@ impl ShujingApp {
                             .filter(|t| match &t.kind {
                                 TabKind::Table(tb) => {
                                     tb.conn_id == conn_id
+                                        && tb.changes.is_empty()
                                         && (tb.error.is_some() || tb.columns.is_empty())
                                 }
                                 _ => false,
@@ -3016,6 +3026,7 @@ impl ShujingApp {
                             if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                                 if let TabKind::Query(q) = &mut tab.kind {
                                     q.q_changes.clear();
+                                    q.q_changes_set = 0;
                                     q.q_editing = None;
                                 }
                             }
@@ -3058,6 +3069,7 @@ impl ShujingApp {
                                     q.results = rs;
                                     q.active_set = 0;
                                     q.q_changes.clear();
+                                    q.q_changes_set = 0;
                                     q.q_editing = None;
                                     let det = detect_single_table(&q.sql);
                                     q.result_table = det.as_ref().map(|(_, t)| t.clone());
@@ -3530,7 +3542,12 @@ impl ShujingApp {
                     }
                 }
                 BgEvent::AcColumnsDone { key, cols } => {
-                    self.ac_columns.insert(key, cols);
+                    // 空=拉取失败:移除占位让下次输入重试(否则永远显示"加载中")
+                    if cols.is_empty() {
+                        self.ac_columns.remove(&key);
+                    } else {
+                        self.ac_columns.insert(key, cols);
+                    }
                 }
                 BgEvent::QueryPkDone { tab_id, cols } => {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
@@ -3540,10 +3557,22 @@ impl ShujingApp {
                         }
                     }
                 }
-                BgEvent::SearchDone { result } => {
+                BgEvent::SearchDone {
+                    conn_id,
+                    db,
+                    keyword,
+                    result,
+                } => {
                     let Some(gs) = self.global_search.as_mut() else {
                         continue;
                     };
+                    // 迟到的旧请求(发起后换了连接/库/词):丢弃,不串台显示
+                    let stale = gs.conn_id != conn_id
+                        || gs.db != db
+                        || gs.keyword.trim() != keyword;
+                    if stale {
+                        continue;
+                    }
                     gs.searching = false;
                     gs.searched = true;
                     match result {
@@ -3830,6 +3859,11 @@ impl ShujingApp {
     }
 
     pub fn open_import(&mut self, conn_id: &str, database: &str, table: &str) {
+        // 在途导入不允许重开:弹窗状态会被重建,running 门随之失效 → 并发 INSERT 重复入库
+        if self.import.as_ref().is_some_and(|im| im.running) {
+            self.toast_error("导入正在进行中".to_string());
+            return;
+        }
         // 打开系统文件选择框,读表结构填目标列
         let Some(path) = rfd::FileDialog::new()
             .add_filter("表格", &["csv", "txt", "xlsx"])

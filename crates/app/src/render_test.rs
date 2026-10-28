@@ -383,7 +383,7 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         }
         TabKind::Query(q) => {
             let conns = app.conns.clone();
-            let _ = query::draw_query_view(&conns, ctx, &tab_id, q, &[], &[], false, &[], &Default::default(), None);
+            let _ = query::draw_query_view(&conns, ctx, &tab_id, q, &[], &[], false, &[], &Default::default(), None, false);
         }
         TabKind::Designer(d) => {
             crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
@@ -561,6 +561,7 @@ fn render_query_view() {
         result_pk: vec![],
         pk_checked: false,
         q_changes: vec![],
+        q_changes_set: 0,
         q_editing: None,
         q_draft: String::new(),
         ac: None,
@@ -612,7 +613,7 @@ fn render_query_view() {
     render("query", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
-        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true, &[], &Default::default(), None);
+        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true, &[], &Default::default(), None, false);
     });
 }
 
@@ -634,6 +635,7 @@ fn render_query_view_narrow_with_db() {
         result_pk: vec![],
         pk_checked: false,
         q_changes: vec![],
+        q_changes_set: 0,
         q_editing: None,
         q_draft: String::new(),
         ac: None,
@@ -657,7 +659,7 @@ fn render_query_view_narrow_with_db() {
     render("query_narrow_db", 1024.0, 700.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
-        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true, &[], &Default::default(), None);
+        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true, &[], &Default::default(), None, false);
     });
 }
 
@@ -953,6 +955,7 @@ fn session_save_restore_roundtrip() {
         result_pk: vec![],
         pk_checked: false,
         q_changes: vec![],
+        q_changes_set: 0,
         q_editing: None,
         q_draft: String::new(),
         ac: None,
@@ -1265,6 +1268,7 @@ fn render_query_autocomplete() {
         result_pk: vec![],
         pk_checked: false,
         q_changes: vec![],
+        q_changes_set: 0,
         q_editing: None,
         q_draft: String::new(),
         ac: Some(crate::app::AcState {
@@ -1312,6 +1316,7 @@ fn render_query_autocomplete() {
             &tables,
             &cols,
             Some("dramato"),
+            false,
         );
     });
 }
@@ -1497,6 +1502,7 @@ fn query_grid_frozen_columns_pin() {
         result_pk: vec![],
         pk_checked: false,
         q_changes: vec![],
+        q_changes_set: 0,
         q_editing: None,
         q_draft: String::new(),
         ac: None,
@@ -1544,7 +1550,7 @@ fn query_grid_frozen_columns_pin() {
                 }
                 let mut b = cell.borrow_mut();
                 let q = b.as_mut().unwrap();
-                let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &[], false, &[], &Default::default(), None);
+                let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &[], false, &[], &Default::default(), None, false);
             },
             cell,
         );
@@ -2384,4 +2390,82 @@ fn tab_rename_enter_commits() {
     eprintln!("[rename-enter] title after enter = {title}");
     // draft 预填原标题,输入 X 追加在光标处(末尾)
     assert_eq!(title, "ads_report_youniX", "回车应提交重命名");
+}
+
+#[test]
+fn cmd_r_works_while_field_focused_but_not_during_cell_edit() {
+    // v0.11.5 的焦点门拦一切文本框,导致 SQL 编辑器打字时 ⌘R 跑不了查询;
+    // 收窄后:普通输入框(如筛选框)持焦不影响 ⌘R,单元格编辑中仍拦截
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+
+    // 场景1:筛选框持焦 → ⌘R 应触发重载(loading 置位)
+    harness
+        .ctx
+        .memory_mut(|m| m.request_focus(egui::Id::new("table-filter")));
+    harness.step();
+    assert!(
+        harness.ctx.memory(|m| m.focused().is_some()),
+        "筛选框应持有焦点"
+    );
+    harness.input_mut().modifiers = egui::Modifiers {
+        command: true,
+        ..Default::default()
+    };
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::R,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+        physical_key: None,
+    });
+    let seq_before = harness.state().tabs[2].table_data().unwrap().load_seq;
+    harness.step();
+    harness.step();
+    // kittest 里后台任务瞬间失败返回会把 loading 复位,用 load_seq(单调递增)断言
+    let seq_after = harness.state().tabs[2].table_data().unwrap().load_seq;
+    eprintln!("[cmd-r filter-focused] load_seq {seq_before} -> {seq_after}");
+    assert!(seq_after > seq_before, "筛选框持焦时 ⌘R 应触发重载");
+
+    // 场景2:单元格编辑中 → ⌘R 不应触发(保护未提交草稿)
+    if let TabKind::Table(t) = &mut harness.state_mut().tabs[2].kind {
+        t.editing = Some((0, 0));
+    }
+    harness.input_mut().modifiers = egui::Modifiers {
+        command: true,
+        ..Default::default()
+    };
+    let seq0 = harness.state().tabs[2].table_data().unwrap().load_seq;
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::R,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+        physical_key: None,
+    });
+    harness.step();
+    harness.step();
+    let t = harness.state().tabs[2].table_data().unwrap();
+    eprintln!(
+        "[cmd-r cell-editing] load_seq {} -> {} editing={:?}",
+        seq0, t.load_seq, t.editing
+    );
+    assert_eq!(t.load_seq, seq0, "单元格编辑中 ⌘R 应被拦截");
 }

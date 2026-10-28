@@ -52,6 +52,8 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
         }
     }
     candidates.sort_by(|a, b| a.1.cmp(&b.1));
+    // `表名 条件` 的精确匹配要在截断前做(否则同名表落到 14 名外时条件被丢弃)
+    let full_candidates = candidates.clone();
     candidates.truncate(14);
     if !candidates.is_empty() {
         q.sel = q.sel.min(candidates.len() - 1);
@@ -88,7 +90,7 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
         None
     };
     if let Some((tname, cond)) = &table_cond {
-        if let Some(hit) = candidates.iter().find(|(_, n, _, _)| n == tname) {
+        if let Some(hit) = full_candidates.iter().find(|(_, n, _, _)| n == tname) {
             picked = Some((hit.0.clone(), hit.1.clone(), hit.2.clone()));
             picked_cond = Some(cond.clone());
         }
@@ -239,18 +241,22 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
                 .unwrap_or(false)
         };
         let picked_cond = if cond_ok { picked_cond } else { None };
-        let had = app.tabs.iter().any(|t| {
-            matches!(&t.kind, crate::app::TabKind::Table(tt)
-                if tt.conn_id == conn && tt.table == table)
-        });
-        app.open_table(&conn, &table, db);
+        // 库也要比对:多库连接下同名表会套错库的标签
+        let had = app
+            .tabs
+            .iter()
+            .any(|t| {
+                matches!(&t.kind, crate::app::TabKind::Table(tt)
+                    if tt.conn_id == conn && tt.table == table && tt.database == db)
+            });
+        app.open_table(&conn, &table, db.clone());
         // `表名 条件` 模式:套用条件到筛选栏
         if let Some(cond) = picked_cond {
             let mysql = crate::app::mysql_quote(&app.conns, &conn);
             let target = if had {
                 app.tabs.iter().position(|t| {
                     matches!(&t.kind, crate::app::TabKind::Table(tt)
-                        if tt.conn_id == conn && tt.table == table)
+                        if tt.conn_id == conn && tt.table == table && tt.database == db)
                 })
             } else {
                 Some(app.active_tab)
@@ -805,17 +811,28 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     .and_then(|t| t.expanded_db.clone());
             }
             let db = gs.db.clone();
-            gs.searching = true;
-            gs.error = None;
-            let tx = app.event_tx.clone();
-            let service = app.service.clone();
-            let cid = gs.conn_id.clone();
-            net::spawn(async move {
-                let result = service
-                    .search_all_tables(&cid, db.as_deref(), &kw, 50)
-                    .await;
-                let _ = tx.send(BgEvent::SearchDone { result });
-            });
+            // 在途防抖:重复回车不再并发发起(旧结果由身份校验丢弃)
+            if gs.searching {
+                do_search = false;
+            } else {
+                gs.searching = true;
+                gs.error = None;
+                let tx = app.event_tx.clone();
+                let service = app.service.clone();
+                let cid = gs.conn_id.clone();
+                let kw2 = kw.clone();
+                net::spawn(async move {
+                    let result = service
+                        .search_all_tables(&cid, db.as_deref(), &kw2, 50)
+                        .await;
+                    let _ = tx.send(BgEvent::SearchDone {
+                        conn_id: cid,
+                        db,
+                        keyword: kw2,
+                        result,
+                    });
+                });
+            }
         }
     }
     if let Some((db, table, kw)) = goto {
@@ -827,7 +844,10 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
         if let Some(t) = app.tabs.get_mut(app.active_tab) {
             if let crate::app::TabKind::Table(tt) = &mut t.kind {
                 tt.filter = kw.clone();
-                tt.active_filter = Some(crate::app::build_like_filter(&tt.columns, &kw, mysql));
+                // active_filter 约定存原始关键词:load_rows 会再包一层 build_like_filter,
+                // 此前存已构建片段 → 双重构建匹配不到行;未打开的表 columns 空还会拼出 WHERE ()
+                tt.active_filter = Some(kw.clone());
+    tt.filter = kw.clone();
             }
         }
         let id = app.tabs[app.active_tab].id.clone();
@@ -855,7 +875,9 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             theme::modal_title(ui, &c.title);
             ui.spacing_mut().item_spacing.y = 10.0;
             ui.label(RichText::new(&c.message).size(12.5).color(p.text));
-            let need_input = c.expect.is_some();
+            // 输入框渲染条件:expect 匹配确认(删表)或 {v} 占位需替换(重命名/复制表)。
+            // 此前只看 expect,重命名/复制表的输入框根本不渲染 → 确认按钮永久禁用死锁
+            let need_input = c.expect.is_some() || c.sql.contains("{v}");
             let c = app.confirm.as_mut().unwrap();
             if need_input {
                 ui.add_space(2.0);
