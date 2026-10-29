@@ -367,13 +367,17 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         });
                 }
 
+                if im.parsing {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("解析中…(大文件可能需要数秒)").size(11.5).color(p.muted));
+                }
                 if let Some(err) = &im.batch_errors {
                     ui.add_space(8.0);
                     ui.label(RichText::new(icons::clip(err, 80)).size(11.5).color(p.red));
                 }
 
                 theme::modal_footer(ui, |ui| {
-                    let can_import = !im.headers.is_empty() && !im.running;
+                    let can_import = !im.headers.is_empty() && !im.running && !im.parsing;
                     let kind = if can_import {
                         theme::BtnKind::Primary
                     } else {
@@ -394,27 +398,21 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 
     if parse_now {
+        // 预览解析放后台:大文件(数百 MB)同步解析会冻结 UI 数十秒
         if let Some(im) = app.import.as_mut() {
-            let path = im.path.clone();
-            let parsed = if path.to_lowercase().ends_with(".xlsx") {
-                shujing_core::excel::parse_xlsx(&path)
-            } else {
-                shujing_core::composite::parse_csv(&path)
-            };
-            match parsed {
-                Ok((headers, _rows)) => {
-                    im.col_map = headers
-                        .iter()
-                        .map(|h| {
-                            im.target_cols
-                                .iter()
-                                .position(|c| c.eq_ignore_ascii_case(h))
-                        })
-                        .collect();
-                    im.headers = headers;
-                    im.batch_errors = None;
-                }
-                Err(e) => im.batch_errors = Some(e),
+            if !im.parsing {
+                im.parsing = true;
+                im.batch_errors = None;
+                let path = im.path.clone();
+                let tx = app.event_tx.clone();
+                crate::net::spawn_blocking(move || {
+                    let result = if path.to_lowercase().ends_with(".xlsx") {
+                        shujing_core::excel::parse_xlsx(&path).map(|(h, _)| h)
+                    } else {
+                        shujing_core::composite::parse_csv(&path).map(|(h, _)| h)
+                    };
+                    let _ = tx.send(crate::app::BgEvent::ImportParsed { result });
+                });
             }
         }
     }
@@ -889,6 +887,15 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 );
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     proceed = true;
+                }
+            }
+            // expect 匹配确认(删表等):输入与期望不符给红字提示,不静默吞
+            if let Some(exp) = &c.expect {
+                if !c.input.trim().is_empty() && c.input.trim() != exp {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("输入与名称「{exp}」不一致")).size(11.0).color(p.red),
+                    );
                 }
             }
             theme::modal_footer(ui, |ui| {

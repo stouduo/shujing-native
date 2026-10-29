@@ -228,6 +228,10 @@ pub fn strong(text: impl Into<String>, size: f32) -> RichText {
 }
 
 pub fn apply(ctx: &egui::Context) {
+    // 点击位移容忍:egui 默认 6 逻辑px,点按带轻微滑动(触控板/魔术鼠标很常见)
+    // 就被判 drag、release 不算 click → 全应用"点了没反应"。
+    // 20px 覆盖手抖;不影响拖拽排序(阈值 48px)与拖选(用 primary_pressed/down)
+    ctx.options_mut(|o| o.input_options.max_click_dist = 20.0);
     let p = c();
     let mut style = (*ctx.style()).clone();
     let v = &mut style.visuals;

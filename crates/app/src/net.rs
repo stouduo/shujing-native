@@ -22,3 +22,11 @@ where
 {
     runtime().spawn(future);
 }
+
+/// 阻塞型任务(大文件解析等):丢进 blocking 池,不占用仅有的 2 个 async worker
+pub fn spawn_blocking<F>(f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    runtime().spawn_blocking(f);
+}

@@ -2469,3 +2469,53 @@ fn cmd_r_works_while_field_focused_but_not_during_cell_edit() {
     );
     assert_eq!(t.load_seq, seq0, "单元格编辑中 ⌘R 应被拦截");
 }
+
+#[test]
+fn tab_click_with_hand_slopp_activates() {
+    // 手抖点击(按下→滑动 8px 超过 egui 默认 6px 阈值→释放)应仍激活标签。
+    // 修复前:被判 drag 不算 click,"点了没反应"(用户实测间歇复现)
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    // 初始激活第 2 个标签(role);手抖点第 0 个标签:按下→移 8px→释放
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(250.0, 14.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(250.0, 14.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    for x in [252.0f32, 254.0, 256.0, 258.0] {
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(x, 14.0)));
+        harness.step();
+    }
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(258.0, 14.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    let active = harness.state().active_tab;
+    eprintln!("[sloppy-click] active_tab={active}");
+    assert_eq!(active, 0, "带 8px 位移的点击应激活标签(手抖容忍)");
+}

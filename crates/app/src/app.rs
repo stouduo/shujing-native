@@ -122,6 +122,10 @@ pub enum BgEvent {
     ImportDone {
         result: Result<usize, String>,
     },
+    /// 导入预览:文件头解析完成(后台,防大文件卡 UI)
+    ImportParsed {
+        result: Result<Vec<String>, String>,
+    },
     /// CSV 导入:目标表列回填(带身份,快速换表打开导入窗时迟到结果不串表)
     ImportColsDone {
         conn_id: String,
@@ -258,6 +262,8 @@ pub struct ImportState {
     pub batch_errors: Option<String>,
     /// 目标表列名(打开导入时从表结构抓取)
     pub target_cols: Vec<String>,
+    /// 预览解析在途(大文件后台解析,不卡 UI;完成前禁用读预览/开始导入)
+    pub parsing: bool,
 }
 
 /// 新建表弹窗状态(名称/SQL 需要跨帧保存)
@@ -3182,6 +3188,22 @@ impl ShujingApp {
                         }
                     }
                 }
+                BgEvent::ImportParsed { result } => {
+                    if let Some(im) = self.import.as_mut() {
+                        im.parsing = false;
+                        match result {
+                            Ok(headers) => {
+                                im.col_map = headers
+                                    .iter()
+                                    .map(|h| im.target_cols.iter().position(|c| c.eq_ignore_ascii_case(h)))
+                                    .collect();
+                                im.headers = headers;
+                                im.batch_errors = None;
+                            }
+                            Err(e) => im.batch_errors = Some(e),
+                        }
+                    }
+                }
                 BgEvent::ImportDone { result } => {
                     if let Some(im) = self.import.as_mut() {
                         im.running = false;
@@ -3895,6 +3917,7 @@ impl ShujingApp {
             col_map: Vec::new(),
             batch_errors: None,
             target_cols: target_cols.clone(),
+            parsing: false,
         });
         if target_cols.is_empty() {
             // 目标表标签未打开:异步拉结构回填列映射候选
