@@ -2519,3 +2519,63 @@ fn tab_click_with_hand_slopp_activates() {
     eprintln!("[sloppy-click] active_tab={active}");
     assert_eq!(active, 0, "带 8px 位移的点击应激活标签(手抖容忍)");
 }
+
+#[test]
+fn korean_and_emoji_glyphs_covered() {
+    // 韩文(谚文)与 emoji 不再是豆腐:字体栈必须覆盖这些字形
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(600.0, 300.0))
+        .with_pixels_per_point(2.0)
+        .build(move |ctx| {
+            if !setup_done.get() {
+                setup_done.set(true);
+                ShujingApp::apply_fonts(ctx);
+                crate::theme::set_dark(true);
+                crate::theme::apply(ctx);
+            }
+        });
+    harness.run_steps(3);
+    let ctx = harness.ctx.clone();
+    let prop = egui::FontId::proportional(12.0);
+    let mono = egui::FontId::monospace(12.0);
+    for (label, s) in [
+        ("韩文谚文", "한국어 텍스트 안녕하세요"),
+        ("emoji", "😀🚀✅❤️"),
+        ("中文(回归)", "数镜连接查询"),
+        ("日文假名(回归)", "あいうエオ"),
+    ] {
+        let ok_p = ctx.fonts(|f| f.has_glyphs(&prop, s));
+        let ok_m = ctx.fonts(|f| f.has_glyphs(&mono, s));
+        eprintln!("[glyphs] {label}: prop={ok_p} mono={ok_m}");
+        assert!(ok_p, "{label} 比例字体应覆盖");
+        assert!(ok_m, "{label} 等宽字体应覆盖");
+    }
+    // 快照目检(基线对齐/字号观感)
+    let cell = std::cell::RefCell::new(());
+    let _ = cell;
+    let done = std::cell::Cell::new(false);
+    let mut h2 = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(700.0, 240.0))
+        .with_pixels_per_point(2.0)
+        .build(move |ctx| {
+            if !done.get() {
+                done.set(true);
+                ShujingApp::apply_fonts(ctx);
+                crate::theme::set_dark(true);
+                crate::theme::apply(ctx);
+                return;
+            }
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.heading("한국어 데이터 안녕하세요");
+                ui.label("emoji: 😀 🚀 ✅ ❤️ 已完成");
+                ui.monospace("한글 mono 😀 완료");
+                ui.label("混合: 状态OK 상태 😀 完成");
+            });
+        });
+    h2.run_steps(4);
+    let img = h2.render().expect("render");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/korean_emoji.png").unwrap();
+}

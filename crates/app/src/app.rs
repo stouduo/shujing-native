@@ -1043,6 +1043,26 @@ impl ShujingApp {
                 ..Default::default()
             },
         );
+        // 韩文(谚文):中文/日文字体都不含谚文,不挂则显示豆腐方框
+        let hangul_ok = add(
+            "hangul",
+            "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+            0,
+            cjk_tweak,
+        );
+        // emoji:系统 Apple Color Emoji 是彩色位图(SBIX),egui 光栅器不支持;
+        // 内嵌 Noto Emoji 矢量(黑白,OFL 许可见 assets/fonts/NotoEmoji-OFL.txt)
+        let emoji_bytes: &'static [u8] =
+            include_bytes!("../../../assets/fonts/NotoEmoji.ttf");
+        fonts.font_data.insert(
+            "emoji".to_owned(),
+            std::sync::Arc::new(egui::FontData {
+                font: std::borrow::Cow::Borrowed(emoji_bytes),
+                index: 0,
+                tweak: Default::default(),
+            }),
+        );
+        let emoji_ok = true;
 
         // 比例字体:拉丁 SF Pro 优先,中文冬青黑体,最后符号回落
         {
@@ -1056,8 +1076,14 @@ impl ShujingApp {
             if cjk_ok {
                 fam.push("cjk".to_owned());
             }
+            if hangul_ok {
+                fam.push("hangul".to_owned());
+            }
             if symbols_ok {
                 fam.push("symbols".to_owned());
+            }
+            if emoji_ok {
+                fam.push("emoji".to_owned());
             }
         }
         // 等宽字体:Menlo(数据格),中文仅作回落(等宽拉丁保持)
@@ -1072,8 +1098,14 @@ impl ShujingApp {
             if cjk_ok {
                 fam.push("cjk".to_owned());
             }
+            if hangul_ok {
+                fam.push("hangul".to_owned());
+            }
             if symbols_ok {
                 fam.push("symbols".to_owned());
+            }
+            if emoji_ok {
+                fam.push("emoji".to_owned());
             }
         }
         // 粗体家族:Helvetica Neue Bold + 冬青 W6(中文),缺失时回落常规字族
