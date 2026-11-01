@@ -27,6 +27,7 @@ pub fn parse_csv_str(raw: &str) -> Result<(Vec<String>, Vec<Vec<String>>), Strin
     let mut cur: Vec<String> = Vec::new();
     let mut field = String::new();
     let mut in_quotes = false;
+    let mut saw_quotes = false;
     let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
         if in_quotes {
@@ -42,16 +43,22 @@ pub fn parse_csv_str(raw: &str) -> Result<(Vec<String>, Vec<Vec<String>>), Strin
             }
         } else {
             match c {
-                '"' if field.is_empty() => in_quotes = true,
+                '"' if field.is_empty() => {
+                    in_quotes = true;
+                    saw_quotes = true;
+                }
                 ',' => {
                     cur.push(std::mem::take(&mut field));
                 }
                 '\r' => {}
                 '\n' => {
-                    // 完全空的行(含文件末尾多余空行)跳过,不产出 [""] 行
-                    if cur.is_empty() && field.is_empty() {
+                    // 完全空的行跳过(文件末尾多余空行);但见过引号的是数据行
+                    // (单列 CSV 的空字符串值写作 ""),不能丢
+                    if cur.is_empty() && field.is_empty() && !saw_quotes {
+                        saw_quotes = false;
                         continue;
                     }
+                    saw_quotes = false;
                     cur.push(std::mem::take(&mut field));
                     rows.push(std::mem::take(&mut cur));
                 }
@@ -142,9 +149,12 @@ pub async fn import_rows(
                 .collect::<Vec<_>>()
                 .join("\n")
         );
-        crate::Service::run_sql_standalone(service, &info, &sql)
-            .await
-            .map_err(|e| format!("第 {}~{} 行失败: {e}", done + 1, done + chunk.len()))?;
+        if let Err(e) = crate::Service::run_sql_standalone(service, &info, &sql).await {
+            // 中途失败的批次 BEGIN 已在(常驻 SQLite)连接上,必须补 ROLLBACK:
+            // 否则部分行成幻影行,且下一次导入的 BEGIN 报 "transaction within transaction"
+            let _ = crate::Service::run_sql_standalone(service, &info, "ROLLBACK;").await;
+            return Err(format!("第 {}~{} 行失败: {e}", done + 1, done + chunk.len()));
+        }
         done += chunk.len();
     }
     Ok(done)

@@ -178,6 +178,11 @@ impl Service {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
+        // 无显式库时兜底连接默认库(MySQL 未展开库时裸表名会报 No database selected)
+        let database = database
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or(info.database.as_deref());
         search::search_tables(&mut guard.backend, &info, database, keyword, max_hits).await
     }
 

@@ -78,6 +78,7 @@ async fn fk_pg(client: &tokio_postgres::Client) -> Result<Vec<FkMeta>, String> {
              FROM information_schema.table_constraints tc \
              JOIN information_schema.key_column_usage kcu \
                ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema \
+               AND tc.table_name = kcu.table_name \
              JOIN information_schema.constraint_column_usage ccu \
                ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema \
              WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public'",
@@ -417,14 +418,19 @@ async fn struct_pg(client: &tokio_postgres::Client, table: &str) -> Result<Table
     let mut out = TableStructure::default();
     let qualified = format!("public.{}", ident(table, false));
 
-    // 字段 + 注释(varchar 等带长度:不带长度回填会丢 n,设计器保存时会把
-    // varchar(n) 改写成无界 varchar)
+    // 字段 + 注释(varchar/numeric 带精度,长度不回填的话设计器保存会把
+    // varchar(n) 改写成无界)。pg_class 必须再按 namespace 限定,否则跨 schema
+    // 同名表列翻倍;注释用 attnum——ordinal_position 在 DROP COLUMN 后与物理
+    // 编号错位,注释会串列
     let sql = format!(
         "SELECT c.column_name, c.data_type, c.character_maximum_length::text, \
+                c.numeric_precision::text, c.numeric_scale::text, \
                 c.is_nullable, c.column_default, \
-                col_description(pgc.oid, c.ordinal_position) \
+                col_description(pgc.oid, a.attnum) \
          FROM information_schema.columns c \
          JOIN pg_catalog.pg_class pgc ON pgc.relname = c.table_name \
+         JOIN pg_catalog.pg_namespace ns ON ns.oid = pgc.relnamespace AND ns.nspname = 'public' \
+         JOIN pg_catalog.pg_attribute a ON a.attrelid = pgc.oid AND a.attname = c.column_name \
          WHERE c.table_schema = 'public' AND c.table_name = {q} \
          ORDER BY c.ordinal_position",
         q = format!("'{}'", table.replace('\'', "''"))
@@ -432,19 +438,27 @@ async fn struct_pg(client: &tokio_postgres::Client, table: &str) -> Result<Table
     for msg in client.simple_query(&sql).await.map_err(es)? {
         if let SimpleQueryMessage::Row(row) = msg {
             let mut data_type = row.get(1).unwrap_or_default().to_string();
-            // 长度列空串=NULL(数值/时间类型无长度)
+            // 精度回填:varchar 用字符长度;numeric 用(精度,标度)
             let maxlen = row.get(2).unwrap_or_default();
+            let np = row.get(3).unwrap_or_default();
+            let nscale = row.get(4).unwrap_or_default();
             if !maxlen.is_empty() {
                 data_type = format!("{data_type}({maxlen})");
+            } else if !np.is_empty() && data_type.to_lowercase().contains("numeric") {
+                if nscale.is_empty() {
+                    data_type = format!("{data_type}({np})");
+                } else {
+                    data_type = format!("{data_type}({np},{nscale})");
+                }
             }
             out.columns.push(ColumnDef {
                 name: row.get(0).unwrap_or_default().to_string(),
                 data_type,
-                nullable: row.get(3) == Some("YES"),
+                nullable: row.get(5) == Some("YES"),
                 key: String::new(),
-                default: row.get(4).map(str::to_string),
+                default: row.get(6).map(str::to_string),
                 extra: String::new(),
-                comment: row.get(5).map(str::to_string).unwrap_or_default(),
+                comment: row.get(7).map(str::to_string).unwrap_or_default(),
             });
         }
     }
@@ -453,6 +467,7 @@ async fn struct_pg(client: &tokio_postgres::Client, table: &str) -> Result<Table
     let sql = format!(
         "SELECT a.attname FROM pg_index i \
          JOIN pg_class t ON t.oid = i.indrelid \
+         JOIN pg_namespace n ON n.oid = t.relnamespace AND n.nspname = 'public' \
          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey) \
          WHERE i.indisprimary AND t.relname = {q}",
         q = format!("'{}'", table.replace('\'', "''"))

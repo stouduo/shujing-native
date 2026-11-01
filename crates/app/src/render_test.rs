@@ -968,6 +968,10 @@ fn session_save_restore_roundtrip() {
         kind: TabKind::Query(q),
     });
     app.tabs.push(stub_tab("role", "backend_role_privilege"));
+    // 冻结列随会话持久化
+    if let TabKind::Table(t) = &mut app.tabs.last_mut().unwrap().kind {
+        t.frozen_vis = 2;
+    }
     app.active_tab = 1;
     app.trees.entry("c1".to_string()).or_default().online = true;
     app.save_session();
@@ -987,6 +991,7 @@ fn session_save_restore_roundtrip() {
     assert_eq!(d.online, vec!["c1".to_string()]);
     assert_eq!(d.tabs[0]["kind"], "query");
     assert_eq!(d.tabs[1]["kind"], "table");
+    assert_eq!(d.tabs[1]["frozen"], 2, "冻结列数应随会话持久化");
     assert_eq!(d.tabs[0]["sql"], "SELECT id FROM backend_role_privilege");
     let _ = std::fs::remove_dir_all(&dir);
 }

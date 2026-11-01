@@ -84,12 +84,42 @@ pub fn format_sql(sql: &str) -> String {
         }
         first_token = false;
     }
-    // 压缩多余空行 + 行尾清理
-    let lines: Vec<String> = out
-        .lines()
-        .map(|l| l.trim_end().to_string())
-        .filter(|l| !l.trim().is_empty())
-        .collect();
+    // 压缩多余空行 + 行尾清理——字符串字面量内部原样保留
+    // (多行字符串里的空行/行尾空白属于数据,清了再执行=改数据)
+    let mut in_str: Option<char> = None; // 当前字符串引号类型
+    let mut lines: Vec<String> = Vec::new();
+    for l in out.lines() {
+        if in_str.is_some() {
+            lines.push(l.to_string()); // 字符串内部:原样
+        } else {
+            let t = l.trim_end().to_string();
+            if !t.trim().is_empty() {
+                lines.push(t);
+            }
+        }
+        // 逐字符更新引号状态(跳过 SQL 注释行)
+        let is_comment = l.trim_start().starts_with("--") || l.trim_start().starts_with("#");
+        if !is_comment {
+            let bytes: Vec<char> = l.chars().collect();
+            let mut j = 0;
+            while j < bytes.len() {
+                let c = bytes[j];
+                if let Some(q) = in_str {
+                    // 双写引号是转义,跳过
+                    if c == q {
+                        if bytes.get(j + 1) == Some(&q) {
+                            j += 2;
+                            continue;
+                        }
+                        in_str = None;
+                    }
+                } else if c == '\'' || c == '"' || c == '`' {
+                    in_str = Some(c);
+                }
+                j += 1;
+            }
+        }
+    }
     let mut joined = lines.join("\n");
     // 保持无分号输入不补分号
     joined.push('\n');
@@ -230,5 +260,27 @@ mod char_tests {
         let out = format_sql("select 姓名 from 订单表 where 金额 > 100");
         assert!(out.to_uppercase().contains("SELECT"), "{out}");
         assert!(out.contains("姓名"), "{out}");
+    }
+}
+
+#[cfg(test)]
+mod literal_tests {
+    use super::format_sql;
+
+    /// 多行字符串字面量内的空行/行尾空白不能被行级后处理改写(改了再执行=改数据)
+    #[test]
+    fn multiline_string_preserved_verbatim() {
+        let sql = "INSERT INTO t (a) VALUES ('line1\n\nline3  ');";
+        let out = format_sql(sql);
+        assert!(
+            out.contains("'line1\n\nline3  '"),
+            "字符串字面量必须原样保留,实际: {out:?}"
+        );
+    }
+
+    #[test]
+    fn code_blank_lines_still_compressed() {
+        let out = format_sql("SELECT 1;\n\n\n   \nSELECT 2;");
+        assert!(!out.contains("\n\n\n"), "代码区多余空行仍应压缩: {out:?}");
     }
 }

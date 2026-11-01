@@ -27,6 +27,9 @@ enum SessionTab {
         conn: String,
         table: String,
         database: Option<String>,
+        /// 冻结的前 N 个可见列(旧档缺省 0)
+        #[serde(default)]
+        frozen: usize,
     },
     Structure {
         conn: String,
@@ -340,6 +343,9 @@ pub struct TableTab {
     /// 数据代次:每次 RowsLoaded 替换行数据时递增。
     /// 删行确认弹窗烘入打开时的代次,确认时不符即放弃(防确认期间慢查询落地后按旧行号删错行)
     pub rows_gen: u64,
+    /// 初始列宽缓存(列数变化才重算):启发式采样每帧重算是纯浪费,
+    /// 且该值只作 Column::initial 的首帧值,行数据变化不影响
+    pub base_widths: Vec<f32>,
 }
 
 impl TableTab {
@@ -376,6 +382,7 @@ impl TableTab {
             drag_row: None,
             orig_pks: Default::default(),
             rows_gen: 0,
+            base_widths: vec![],
             filter_bar_open: false,
             filter_mode: 0,
             conds: vec![],
@@ -2461,6 +2468,7 @@ impl ShujingApp {
                     conn: x.conn_id.clone(),
                     table: x.table.clone(),
                     database: x.database.clone(),
+                    frozen: x.frozen_vis,
                 }),
                 TabKind::Structure(x) => tabs.push(SessionTab::Structure {
                     conn: x.conn_id.clone(),
@@ -2549,8 +2557,10 @@ impl ShujingApp {
                     conn,
                     table,
                     database,
+                    frozen,
                 } => {
-                    let tab = TableTab::new(conn.clone(), table.clone(), database.clone());
+                    let mut tab = TableTab::new(conn.clone(), table.clone(), database.clone());
+                    tab.frozen_vis = *frozen;
                     let id = format!("t{}", rand_suffix());
                     self.tabs.push(Tab {
                         id: id.clone(),

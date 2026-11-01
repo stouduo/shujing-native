@@ -61,13 +61,22 @@ pub async fn search_tables(
                 return true;
             }
             let t = c.data_type.to_lowercase();
-            t.contains("char") || t.contains("text") || t.contains("uuid") || t.contains("name")
+            // uuid 无 ~~* 操作符,进白名单会让整条 SELECT 失败 → 整表被静默跳过
+            t.contains("char") || t.contains("text") || t.contains("name")
         };
         let conds = st
             .columns
             .iter()
             .filter(|c| text_like(c))
-            .map(|c| format!("{} {} {}", quote(&c.name, mysql), like_op, lit))
+            .map(|c| {
+                format!(
+                    "{} {} {} ESCAPE '{}'",
+                    quote(&c.name, mysql),
+                    like_op,
+                    lit,
+                    if mysql { "\\\\" } else { "\\" }
+                )
+            })
             .collect::<Vec<_>>()
             .join(" OR ");
         if conds.is_empty() {
@@ -78,8 +87,10 @@ pub async fn search_tables(
             Some(db) => format!("{}.{}", quote(db, mysql), quote(&t.name, mysql)),
             None => quote(&t.name, mysql),
         };
-        let sql = format!("SELECT * FROM {full} WHERE {conds} ");
-        let r = match backend.run_one(&sql, 5).await {
+        // LIMIT 必须在 SQL 里:客户端截断挡不住 PG 全量物化/MySQL 全量传输
+        let per_table = 5.min(max_hits.saturating_sub(hits.len()));
+        let sql = format!("SELECT * FROM {full} WHERE {conds} LIMIT {per_table} ");
+        let r = match backend.run_one(&sql, per_table).await {
             Ok(r) => r,
             Err(_) => continue,
         };

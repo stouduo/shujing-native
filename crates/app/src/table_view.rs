@@ -1310,6 +1310,14 @@ pub(crate) fn draw_table_view(
                 ..
             } = tab;
 
+            // 可视列 → 全量列映射:ScrollArea 闭包与外层(commit 映射/⌘C)共用一份,
+            // 每帧构建两次是重复劳动
+            let vis_idx: Vec<usize> = columns
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| !tab.hidden_cols.contains(c))
+                .map(|(i, _)| i)
+                .collect();
             let mut sort_click: Option<String> = None;
             let mut commit: Option<(usize, usize, String)> = None;
             let mut new_selection: Option<Option<(usize, usize)>> = None;
@@ -1329,22 +1337,18 @@ pub(crate) fn draw_table_view(
                 let sc = &mut sort_click;
                 let cr = &mut commit;
                 let pointer = ui.input(|i| i.pointer.latest_pos());
-                // 列选择器:隐藏列从显示中剔除(数据与编辑索引按全列)
-                let vis_idx: Vec<usize> = columns
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| !tab.hidden_cols.contains(c))
-                    .map(|(i, _)| i)
-                    .collect();
                 // 冻结列数按当前可见列收敛(隐藏列后冻结数可能越界)
                 let frozen_vis = tab.frozen_vis.min(vis_idx.len());
-                // 免投影:直接在全量行上采样可见列宽,不再每帧深拷贝整页数据
-                let col_widths = fitted_from_base(
-                    suggested_widths_vis(rows, columns, &vis_idx),
-                    ui.available_width(),
-                );
+                // 免投影:初始列宽按列数缓存(启发式采样 80 行×全部列每帧重算是浪费;
+                // 该值只作 Column::initial 首帧值,行数据变化无需重算)
+                if tab.base_widths.len() != columns.len() {
+                    tab.base_widths = suggested_widths_vis(rows, columns, &vis_idx);
+                }
+                let col_widths =
+                    fitted_from_base(tab.base_widths.clone(), ui.available_width());
                 let desired_w =
                     if tab.show_rowno { 48.0 } else { 0.0 } + col_widths.iter().sum::<f32>();
+
                 // 注意:必须在外层 ui 上设置,ScrollArea 自己的滚动条不会读取闭包内 ui 的 spacing。
                 // 主题默认是 floating + dormant 全透明,不显式改就会“看不见横向滚动条”。
                 ui.spacing_mut().scroll.floating = false;
@@ -1470,13 +1474,6 @@ pub(crate) fn draw_table_view(
                     tab_id: tab_id_s.clone(),
                 });
             }
-            // 可视列 → 全量列映射(网格事件里的列下标都是可视下标)
-            let vis_idx: Vec<usize> = columns
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| !tab.hidden_cols.contains(c))
-                .map(|(i, _)| i)
-                .collect();
             if col_clear_sort {
                 *sort = None;
                 actions.push(TabAction::Reload {

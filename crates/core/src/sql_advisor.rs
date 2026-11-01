@@ -198,9 +198,11 @@ fn check_mysql(r: &ExecResult, out: &mut Vec<Finding>) {
     let ir = col_idx(r, &["rows"]);
     let ie = col_idx(r, &["extra"]);
     let iid = col_idx(r, &["id"]);
+    // 表名按列名取:真实 EXPLAIN 列序 id,select_type,table,...,"id 列-1"恒为空串
+    let tbl = col_idx(r, &["table"]);
     for row in &r.rows {
-        let scope = if iid >= 0 {
-            format!("(表 {})", cell(row, iid - 1))
+        let scope = if tbl >= 0 {
+            format!("(表 {})", cell(row, tbl))
         } else {
             String::new()
         };
@@ -388,7 +390,8 @@ pub fn explain_sql(db_type: DbType, sql: &str) -> String {
     let s = s.strip_suffix(';').unwrap_or(s).trim_end();
     match db_type {
         DbType::Sqlite => format!("EXPLAIN QUERY PLAN {s}"),
-        DbType::Postgres => format!("EXPLAIN (ANALYZE, BUFFERS) {s}"),
+        // 不用 ANALYZE:它真实执行语句,WITH d AS (DELETE ...) SELECT 会把 DELETE 跑掉
+    DbType::Postgres => format!("EXPLAIN {s}"),
         _ => format!("EXPLAIN {s}"),
     }
 }
@@ -505,9 +508,7 @@ mod tests {
     fn explain_dialects() {
         assert_eq!(explain_sql(DbType::MySql, "SELECT 1;"), "EXPLAIN SELECT 1");
         assert_eq!(explain_sql(DbType::Sqlite, "SELECT 1"), "EXPLAIN QUERY PLAN SELECT 1");
-        assert_eq!(
-            explain_sql(DbType::Postgres, "SELECT 1"),
-            "EXPLAIN (ANALYZE, BUFFERS) SELECT 1"
-        );
+        // PG 不用 ANALYZE:会真实执行语句(写 CTE 危险),只读 EXPLAIN
+        assert_eq!(explain_sql(DbType::Postgres, "SELECT 1"), "EXPLAIN SELECT 1");
     }
 }
