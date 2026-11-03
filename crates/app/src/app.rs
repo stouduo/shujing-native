@@ -563,6 +563,9 @@ pub struct ConfirmState {
     pub input: String,
     pub conn_id: String,
     pub sql: String,
+    /// 危险 SQL 必须带库执行:run_sql 走粘滞会话库,多库连接下
+    /// 不带库的 DROP/TRUNCATE 可能落到上次操作残留的库(删错库)
+    pub database: Option<String>,
     /// 非 SQL 动作(如 delete-conn:<id>):确认后交给 app 处理而不执行 sql
     pub action: Option<String>,
 }
@@ -1732,13 +1735,18 @@ impl ShujingApp {
         rt.detail_loading = true;
         rt.detail_gen = rt.detail_gen.wrapping_add(1); // 作废在途「加载更多」
         rt.detail_more_loading = false;
-        // 切 key 清掉所有内联编辑残留(TTL/重命名/成员/list),否则草稿会作用到新 key 上
-        rt.rename_draft = None;
+        // 切 key 清掉内联编辑残留,否则草稿会作用到新 key 上。
+        // 同 key 的刷新(写操作完成后的自动 Refresh)不清键级草稿(TTL/重命名/值编辑),
+        // 否则正在输入的内容会被迟到刷新无声吞掉;行级草稿绑定行下标,刷新必清
+        let key_changed = rt.selected_key.as_deref() != Some(key.as_str());
+        if key_changed {
+            rt.rename_draft = None;
+            rt.ttl_draft = None;
+            rt.edit_value = None;
+        }
         rt.member_add = None;
         rt.member_set_hash = false;
-        rt.ttl_draft = None;
         rt.list_edit = None;
-        rt.edit_value = None;
         let tid = tab_id.clone();
         let k = key.clone();
         net::spawn(async move {
@@ -2338,6 +2346,7 @@ impl ShujingApp {
     pub fn open_confirm(
         &mut self,
         conn_id: &str,
+        db: Option<&str>,
         title: &str,
         message: &str,
         expect: Option<String>,
@@ -2350,6 +2359,7 @@ impl ShujingApp {
             input: String::new(),
             conn_id: conn_id.to_string(),
             sql,
+            database: db.map(str::to_string),
             action: None,
         });
     }
@@ -3457,8 +3467,27 @@ impl ShujingApp {
                         continue;
                     }
                     match result {
-                        Ok(d) => rt.detail = Some(d),
-                        Err(e) => rt.error = Some(e),
+                        Ok(d) => {
+                            // 回写徽标:改 TTL/类型后列表徽标不再停留旧值,直到重扫
+                            rt.key_ttls.insert(key.clone(), d.ttl);
+                            rt.key_types.insert(key.clone(), d.key_type.clone());
+                            rt.detail = Some(d);
+                        }
+                        Err(e) => {
+                            // key 已不存在(过期/他端删除):从列表摘掉而不是永远"加载失败"
+                            if e.contains("不存在或已过期") {
+                                rt.keys.retain(|k| k != &key);
+                                rt.key_types.remove(&key);
+                                rt.key_ttls.remove(&key);
+                                if rt.selected_key.as_deref() == Some(key.as_str()) {
+                                    rt.selected_key = None;
+                                    rt.detail = None;
+                                }
+                                self.toast_error(format!("{key} 已不存在(已过期或被删除),已从列表移除"));
+                            } else {
+                                rt.error = Some(e);
+                            }
+                        }
                     }
                 }
                 BgEvent::RedisDetailMoreDone {

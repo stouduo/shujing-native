@@ -227,6 +227,8 @@ pub async fn key_detail_page(
                 })
                 .collect();
         }
+        // TYPE=none:key 不存在(已过期/他端删除)。明确报错而不是笼统"加载失败"
+        "none" => return Err(format!("key {key} 不存在或已过期")),
         other => {
             return Err(format!("暂不支持展示类型: {other}"));
         }
@@ -387,6 +389,13 @@ pub async fn analyze(
 pub async fn set_ttl(backend: &mut Backend, db: u8, key: &str, seconds: i64) -> Result<(), String> {
     let mut con = get_con(backend).await?;
     redis::cmd("SELECT").arg(db).query_async::<()>(&mut con).await.map_err(es)?;
+    // EXPIRE 0 = 立即删除 key,几乎不可能是有意的;其余负数除 -1(PERSIST)外无意义
+    if seconds == 0 {
+        return Err("TTL 不能为 0(EXPIRE 0 会立即删除 key)".into());
+    }
+    if seconds < -1 {
+        return Err("TTL 秒数无效:仅接受正秒数,-1 表示设为永久".into());
+    }
     if seconds < 0 {
         redis::cmd("PERSIST").arg(key).query_async::<()>(&mut con).await.map_err(es)?;
     } else {

@@ -483,13 +483,19 @@ fn draw_detail(
                                 resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             rt.ttl_draft = Some(v.clone());
                             if apply {
-                                rt.ttl_draft = None;
                                 if let Ok(sec) = v.trim().parse::<i64>() {
-                                    actions.push(TabAction::RedisSetTtl {
-                                        tab_id: tab_id.to_string(),
-                                        key: key.clone(),
-                                        seconds: sec,
-                                    });
+                                    // 0 会立即删除 key、其他负数无意义(-1 永久走 ∞ 专属按钮):
+                                    // 拒绝提交并保留草稿,让用户看到值没被接受
+                                    if sec > 0 {
+                                        rt.ttl_draft = None;
+                                        actions.push(TabAction::RedisSetTtl {
+                                            tab_id: tab_id.to_string(),
+                                            key: key.clone(),
+                                            seconds: sec,
+                                        });
+                                    }
+                                } else {
+                                    rt.ttl_draft = None;
                                 }
                             }
                         } else if theme::mini_text_button(ui, "TTL", p.text2).0 {
@@ -566,7 +572,10 @@ fn draw_detail(
                     let entered =
                         resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     rt.list_edit = Some((idx, v));
-                    if theme::button(ui, "保存", theme::BtnKind::Primary).clicked() || entered {
+                    let busy = rt.op_running || rt.detail_loading;
+                    if (theme::button(ui, "保存", theme::BtnKind::Primary).clicked() || entered)
+                        && !busy
+                    {
                         if let Some((idx2, v2)) = rt.list_edit.clone() {
                             {
                                 actions.push(TabAction::RedisMemberOp {
@@ -646,7 +655,11 @@ fn draw_detail(
                         && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let editing = rt.member_set_hash;
                     let btn_label = if editing { "保存" } else { "添加" };
-                    if theme::button(ui, btn_label, theme::BtnKind::Primary).clicked() || entered {
+                    // 写操作在途时提交会按下标/字段写错数据(list 左移)
+                    let busy = rt.op_running || rt.detail_loading;
+                    if (theme::button(ui, btn_label, theme::BtnKind::Primary).clicked() || entered)
+                        && !busy
+                    {
                         if !mv.trim().is_empty() {
                             let op = if editing { "set" } else { "add" };
                             actions.push(TabAction::RedisMemberOp {
@@ -802,8 +815,10 @@ fn draw_pair_row(
         return;
     }
     // 行操作按钮(hash/list 可编辑成员;zset 删的是成员名,不是分数)
+    // 写操作在途时禁用:list 下标会被前一个操作挪位,照发必写错行
+    let busy = rt.op_running || rt.detail_loading;
     let member = if d.key_type == "hash" || d.key_type == "zset" { field } else { value };
-    let editable = matches!(d.key_type.as_str(), "hash" | "list");
+    let editable = matches!(d.key_type.as_str(), "hash" | "list") && !busy;
     let btn_y = rect.center().y;
     if editable {
         let er = egui::Rect::from_center_size(
@@ -830,7 +845,7 @@ fn draw_pair_row(
             }
         }
     }
-    if matches!(d.key_type.as_str(), "hash" | "list" | "set" | "zset") {
+    if matches!(d.key_type.as_str(), "hash" | "list" | "set" | "zset") && !busy {
         let dr = egui::Rect::from_center_size(
             egui::pos2(rect.right() - 26.0, btn_y),
             egui::vec2(26.0, 20.0),
@@ -1019,15 +1034,17 @@ fn draw_analyze_modal(
             ui.spacing_mut().item_spacing.y = 10.0;
             let a = rt.analyze.as_mut().unwrap();
             ui.horizontal(|ui| {
-                // 模式
-                if seg_two(ui, "大 key(内存/元素)", "热 key(LFU)", a.mode == 0, 320.0) {
+                // 模式(running 时锁定:迟到结果按新模式渲染会把口径标错)
+                if seg_two(ui, "大 key(内存/元素)", "热 key(LFU)", a.mode == 0, 320.0)
+                    && !a.running
+                {
                     a.mode = 1 - a.mode;
                     a.ran = false;
                 }
                 ui.add_space(8.0);
-                // 采样
+                // 采样(同上锁定)
                 for (v, label) in [(500usize, "采样 500"), (1000, "1000"), (5000, "5000")] {
-                    if seg_one(ui, label, a.sample == v, 92.0) {
+                    if seg_one(ui, label, a.sample == v, 92.0) && !a.running {
                         a.sample = v;
                         a.ran = false;
                     }

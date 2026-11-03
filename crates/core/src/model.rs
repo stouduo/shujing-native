@@ -340,6 +340,8 @@ pub struct TableMeta {
     pub name: String,
     /// table | view
     pub kind: String,
+    /// 触发器所属表(PG 的 DROP TRIGGER 必须带 ON <表>;其余为 None)
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

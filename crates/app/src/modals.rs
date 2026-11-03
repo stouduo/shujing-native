@@ -959,14 +959,19 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 let mysql = crate::app::mysql_quote(&app.conns, &conn_id);
                 let sql = c.resolved_sql(mysql);
                 let ddl_msg = c.title.clone();
+                // 危险 SQL 必须带库:run_sql 走粘滞会话库,多库连接下可能落到残留库
+                let db = c.database.clone();
                 app.confirm = None;
                 let tx = app.event_tx.clone();
                 let service = app.service.clone();
                 net::spawn(async move {
-                    let result = service
-                        .run_sql(&conn_id, sql, Some(1))
-                        .await
-                        .map(|_| ());
+                    let result = match db.as_deref() {
+                        Some(d) => service
+                            .run_sql_db(&conn_id, sql, Some(1), Some(d))
+                            .await
+                            .map(|_| ()),
+                        None => service.run_sql(&conn_id, sql, Some(1)).await.map(|_| ()),
+                    };
                     let _ = tx.send(BgEvent::DdlDone {
                         result,
                         msg: ddl_msg,

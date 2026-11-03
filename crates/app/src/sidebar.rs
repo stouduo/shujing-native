@@ -316,6 +316,7 @@ impl ShujingApp {
                 };
                 self.open_confirm(
                     &c.id.clone(),
+                    None,
                     "删除连接",
                     &format!(
                         "删除连接「{}」及其配置?{}\n输入连接名以确认:",
@@ -443,7 +444,14 @@ impl ShujingApp {
             }
             if shown == 0 {
                 ui.add_space(8.0);
-                ui.label(RichText::new("无匹配表").size(12.0).color(theme::c().muted));
+                // 未展开的库表清单未加载,搜索够不到:明示而不是谎报"无匹配"
+                let unloaded = databases.iter().any(|d| !tables_by_db.contains_key(d));
+                let hint = if unloaded {
+                    "无匹配表(仅搜索已加载的库;在树中展开其余库可扩大范围)"
+                } else {
+                    "无匹配表"
+                };
+                ui.label(RichText::new(hint).size(12.0).color(theme::c().muted));
             }
             return;
         }
@@ -495,7 +503,7 @@ impl ShujingApp {
                     if open {
                         for m in items {
                             if gkey == "prog" {
-                                self.draw_prog_row(ui, conn_id, &db, &m.name, &m.kind);
+                                self.draw_prog_row(ui, conn_id, &db, &m.name, &m.kind, m.owner.as_deref());
                             } else {
                                 // 视图:与表同款行,点击打开数据页
                                 self.draw_table_row(ui, conn_id, &db, &m.name);
@@ -603,6 +611,7 @@ impl ShujingApp {
         db: &str,
         name: &str,
         kind: &str,
+        owner: Option<&str>,
     ) {
         let p = theme::c();
         let active = self
@@ -676,6 +685,29 @@ impl ShujingApp {
             if act == "ddl" {
                 self.open_ddl(conn_id, Some(db.to_string()), kind, name);
             } else if act == "drop" {
+                let is_pg = self
+                    .conns
+                    .iter()
+                    .any(|c| c.id == conn_id && c.db_type == shujing_core::DbType::Postgres);
+                // PG 的 DROP TRIGGER 强制要求 ON <所属表>
+                if kind == "trigger" && is_pg {
+                    let Some(owner) = owner else {
+                        self.toast_error(format!("无法确定触发器 {name} 的所属表,不能生成 DROP"));
+                        return;
+                    };
+                    let mysql = crate::app::mysql_quote(&self.conns, conn_id);
+                    let ident = crate::app::quote_ident_by(name, mysql);
+                    let tbl = crate::app::quote_ident_by(owner, mysql);
+                    self.open_confirm(
+                        conn_id,
+                        Some(db),
+                        "删除对象",
+                        &format!("删除触发器 {name}(所属表 {owner})?此操作不可恢复!\n输入对象名以确认:"),
+                        Some(name.to_string()),
+                        format!("DROP TRIGGER IF EXISTS {ident} ON {tbl};"),
+                    );
+                    return;
+                }
                 let stmt = match kind {
                     "trigger" => format!("DROP TRIGGER IF EXISTS {{v}};"),
                     "procedure" => format!("DROP PROCEDURE IF EXISTS {{v}};"),
@@ -690,6 +722,7 @@ impl ShujingApp {
                 );
                 self.open_confirm(
                     conn_id,
+                    Some(db),
                     "删除对象",
                     &format!("删除 {name}?此操作不可恢复!\n输入对象名以确认:"),
                     Some(name.to_string()),
@@ -1118,6 +1151,7 @@ impl ShujingApp {
                     let ident = crate::app::quote_ident_by(name, mysql);
                     self.open_confirm(
                         conn_id,
+                        Some(db),
                         "复制表",
                         &format!("把表 {name} 复制为新表(结构+数据)。输入新表名:"),
                         None,
@@ -1127,12 +1161,19 @@ impl ShujingApp {
                 "analyze" => {
                     let mysql = crate::app::mysql_quote(&self.conns, conn_id);
                     let ident = crate::app::quote_ident_by(name, mysql);
+                    // MySQL 语法要求 ANALYZE TABLE;PG/SQLite 接受裸 ANALYZE
+                    let sql = if mysql {
+                        format!("ANALYZE TABLE {ident};")
+                    } else {
+                        format!("ANALYZE {ident};")
+                    };
                     self.open_confirm(
                         conn_id,
+                        Some(db),
                         "更新统计信息",
                         &format!("对表 {name} 执行 ANALYZE 更新优化器统计?"),
                         None,
-                        format!("ANALYZE {ident};"),
+                        sql,
                     );
                 }
                 "rename" => {
@@ -1145,6 +1186,7 @@ impl ShujingApp {
                     };
                     self.open_confirm(
                         conn_id,
+                        Some(db),
                         "重命名表",
                         &format!("把表 {name} 重命名为(输入新表名):"),
                         None,
@@ -1161,6 +1203,7 @@ impl ShujingApp {
                     };
                     self.open_confirm(
                         conn_id,
+                        Some(db),
                         "清空表数据",
                         &format!(
                             "确认清空表 {name} 的全部数据?不可恢复!\n输入表名以确认:{}",
@@ -1184,6 +1227,7 @@ impl ShujingApp {
                     };
                     self.open_confirm(
                         conn_id,
+                        Some(db),
                         "删除视图",
                         &format!("即将删除视图 {name},不可恢复!\n输入名称以确认:"),
                         Some(name.to_string()),
@@ -1195,6 +1239,7 @@ impl ShujingApp {
                     let ident = crate::app::quote_ident_by(name, mysql);
                     self.open_confirm(
                         conn_id,
+                        Some(db),
                         "删除表",
                         &format!("即将删除表 {name} 及其全部数据,不可恢复!\n输入表名以确认:"),
                         Some(name.to_string()),
@@ -1302,6 +1347,7 @@ impl ShujingApp {
                     .count();
                 self.open_confirm(
                     &c.id.clone(),
+                    None,
                     "断开连接",
                     &format!("连接「{}」下有 {n} 个标签存在未保存修改,断开将一并关闭并丢弃。\n继续?",
                         c.name,

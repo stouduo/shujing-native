@@ -131,8 +131,16 @@ pub fn draw_designer_view(
                     draw_grid_header(ui, is_edit);
                     ui.add_space(2.0);
                     let sqlite = is_sqlite(ctx);
+                    // 删除请求循环后统一应用:循环内直接 remove 会让下一行顶进
+                    // 同一矩形并复用同一 widget id,同帧点击被再次消费会连锁删光全部列
+                    let mut del_at: Option<usize> = None;
                     for i in 0..d.columns.len() {
-                        draw_column_row(ui, d, i, is_edit, sqlite);
+                        if draw_column_row(ui, d, i, is_edit, sqlite) && del_at.is_none() {
+                            del_at = Some(i);
+                        }
+                    }
+                    if let Some(i) = del_at {
+                        d.columns.remove(i);
                     }
                     // 添加字段
                     ui.add_space(4.0);
@@ -243,7 +251,14 @@ fn draw_grid_header(ui: &mut egui::Ui, _is_edit: bool) {
     ui.add_space(3.0);
 }
 
-fn draw_column_row(ui: &mut egui::Ui, d: &mut DesignerTab, i: usize, is_edit: bool, sqlite: bool) {
+/// 绘制一行列规格;返回 true 表示该行的删除按钮被点击(调用方循环结束后统一 remove)
+fn draw_column_row(
+    ui: &mut egui::Ui,
+    d: &mut DesignerTab,
+    i: usize,
+    is_edit: bool,
+    sqlite: bool,
+) -> bool {
     let p = theme::c();
     let widths = col_widths(ui);
     let row_h = 30.0;
@@ -399,9 +414,7 @@ fn draw_column_row(ui: &mut egui::Ui, d: &mut DesignerTab, i: usize, is_edit: bo
             }
         }
     }
-    if remove {
-        d.columns.remove(i);
-    }
+    remove
 }
 
 /// 小号单行输入(设计器网格用)
@@ -422,14 +435,30 @@ fn tiny_field(ui: &mut egui::Ui, val: &mut String, ph: &str, enabled: bool, colo
 }
 
 fn col_widths(ui: &egui::Ui) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
-    // 名称/类型/长度/NOT NULL/PK/自增/默认/注释;把间距与删除按钮的真实宽度预留出来,
-    // 否则窄窗口下最后一列的删除按钮会被挤出可视区。
-    let total = ui.available_width().max(800.0);
-    let fixed = 170.0 + 130.0 + 56.0 + 58.0 + 40.0 + 46.0 + 110.0;
+    // 名称/类型/长度/NOT NULL/PK/自增/默认/注释。宽窗注释列吃满余量;
+    // 窄窗(<840)按比例压缩前七列(下限 35%)——固定 800 会把删除按钮挤出可视区且无横向滚动
+    let base = (170.0f32, 130.0, 56.0, 58.0, 40.0, 46.0, 110.0);
+    let fixed_sum = 170.0 + 130.0 + 56.0 + 58.0 + 40.0 + 46.0 + 110.0;
     let gaps = 6.0 + 12.0 + 18.0 + 6.0 + 12.0 + 18.0 + 6.0 + 12.0;
     let delete_w = 20.0;
-    let comment = (total - fixed - gaps - delete_w).max(80.0);
-    (170.0, 130.0, 56.0, 58.0, 40.0, 46.0, 110.0, comment)
+    let avail = ui.available_width();
+    let need = fixed_sum + 120.0 + gaps + delete_w;
+    let (k, comment) = if avail >= need {
+        (1.0, (avail - fixed_sum - gaps - delete_w).max(80.0))
+    } else {
+        let k = ((avail - gaps - delete_w - 60.0) / fixed_sum).clamp(0.35, 1.0);
+        (k, (avail - fixed_sum * k - gaps - delete_w).max(60.0))
+    };
+    (
+        base.0 * k,
+        base.1 * k,
+        base.2 * k,
+        base.3 * k,
+        base.4 * k,
+        base.5 * k,
+        base.6 * k,
+        comment,
+    )
 }
 
 /// 与 draw_column_row 完全一致的列 x 偏移(表头必须共用,否则列头错位)

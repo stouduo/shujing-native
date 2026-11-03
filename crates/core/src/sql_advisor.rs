@@ -43,7 +43,12 @@ pub fn static_check(sql_raw: &str) -> Vec<Finding> {
             "查询所有列会传输多余数据、无法利用覆盖索引;建议按需列出列名",
         ));
     }
-    if lower.starts_with("select") && lower.contains("join") && !contains_word(&lower, "on") {
+    if lower.starts_with("select")
+        && lower.contains("join")
+        && !contains_word(&lower, "on")
+        && !contains_word(&lower, "using")
+        && !contains_word(&lower, "cross join")
+    {
         out.push(finding(
             Level::Danger,
             "JOIN 缺少 ON 条件",
@@ -71,7 +76,7 @@ pub fn static_check(sql_raw: &str) -> Vec<Finding> {
             "'%xxx' 形式无法使用 B-tree 索引,将全表扫描;若必须前缀模糊,考虑全文索引或倒排表",
         ));
     }
-    let where_part = after_word(&lower, "where");
+    let where_part = where_clause(&lower);
     if ["upper(", "lower(", "substring(", "substr(", "date(", "cast(", "convert(", "trim("]
         .iter()
         .any(|f| where_part.contains(f))
@@ -80,16 +85,6 @@ pub fn static_check(sql_raw: &str) -> Vec<Finding> {
             Level::Warn,
             "WHERE 中对列使用函数",
             "列上的函数运算会让索引失效(除非有对应表达式索引);建议把计算移到常量侧或改写条件",
-        ));
-    }
-    if lower.starts_with("select")
-        && contains_word(&lower, "order by")
-        && !contains_word(&lower, "limit")
-    {
-        out.push(finding(
-            Level::Info,
-            "大结果集排序",
-            "ORDER BY 无 LIMIT 时若结果集大,排序开销高;建议分页或让排序列命中索引",
         ));
     }
     if contains_word(&lower, "union") && !contains_word(&lower, "union all") {
@@ -147,12 +142,57 @@ fn contains_word(haystack: &str, word: &str) -> bool {
     false
 }
 
-/// 取关键词之后的片段
-fn after_word<'a>(haystack: &'a str, word: &str) -> &'a str {
-    haystack
-        .find(word)
-        .map(|i| &haystack[i + word.len()..])
-        .unwrap_or("")
+/// WHERE 子句片段:词边界定位(排除 wherever/nowhere),剥字符串字面量,
+/// 截断到下一个子句关键字(GROUP BY/ORDER BY/…里的函数不该算到 WHERE 头上)
+fn where_clause(lower: &str) -> String {
+    let b = lower.as_bytes();
+    let mut wpos = None;
+    let mut from = 0usize;
+    while let Some(pos) = lower[from..].find("where") {
+        let abs = from + pos;
+        let end = abs + "where".len();
+        let before_ok = abs == 0 || !(b[abs - 1] == b'_' || b[abs - 1].is_ascii_alphanumeric());
+        let after_ok = end >= b.len() || !(b[end] == b'_' || b[end].is_ascii_alphanumeric());
+        if before_ok && after_ok {
+            wpos = Some(abs);
+            break;
+        }
+        from = end;
+    }
+    let Some(wpos) = wpos else {
+        return String::new();
+    };
+    let stripped = strip_literals(&lower[wpos + 5..]);
+    let mut cut = stripped.len();
+    for kw in [
+        "group by", "order by", "limit", "having", "union", "window", "into", "for update",
+    ] {
+        if let Some(p) = stripped.find(kw) {
+            cut = cut.min(p);
+        }
+    }
+    stripped[..cut].to_string()
+}
+
+/// 剥掉单引号字面量内容(\' 与 '' 转义感知)
+fn strip_literals(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_str = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek() == Some(&'\'') {
+            chars.next();
+            continue;
+        }
+        if c == '\'' {
+            in_str = !in_str;
+            continue;
+        }
+        if !in_str {
+            out.push(c);
+        }
+    }
+    out
 }
 
 // ── 执行计划解析 ────────────────────────────────────
@@ -210,21 +250,41 @@ fn check_mysql(r: &ExecResult, out: &mut Vec<Finding>) {
         let key = cell(row, ik);
         let rows = cell(row, ir);
         let extra = cell(row, ie);
+        let extra_l = extra.to_lowercase();
+        let rows_n: i64 = rows.trim().parse().unwrap_or(-1);
 
         if ty == "ALL" {
-            out.push(finding(
-                Level::Danger,
-                &format!("全表扫描 {scope}"),
-                &format!("type=ALL,预估扫描 {rows} 行;WHERE/JOIN 列建议建立索引"),
-            ));
-        } else if ty == "index" {
+            if rows_n >= 0 && rows_n < 1000 {
+                // 小表/码表:建索引无收益,降到 Info 避免狼来了
+                out.push(finding(
+                    Level::Info,
+                    &format!("全表扫描 {scope}"),
+                    &format!("type=ALL,预估扫描 {rows} 行;表很小,全扫通常即最优"),
+                ));
+            } else if extra_l.contains("using where") {
+                out.push(finding(
+                    Level::Danger,
+                    &format!("全表扫描 {scope}"),
+                    &format!("type=ALL,预估扫描 {rows} 行;WHERE/JOIN 列建议建立索引"),
+                ));
+            } else {
+                // 无过滤谓词的全表浏览,建索引无从谈起
+                out.push(finding(
+                    Level::Info,
+                    &format!("全表扫描 {scope}"),
+                    &format!("type=ALL,预估扫描 {rows} 行;无过滤条件,属于全表浏览"),
+                ));
+            }
+        } else if ty == "index" && !extra_l.contains("using index") {
+            // Extra=Using index 是覆盖索引扫描(优化器有意不回表),不是问题
             out.push(finding(
                 Level::Warn,
                 &format!("全索引扫描 {scope}"),
                 "type=index(扫描整个索引),通常比走索引定位慢;检查条件列是否为索引最左前缀",
             ));
         }
-        if key.is_empty() && ty != "const" && ty != "system" {
+        if key.is_empty() && ty != "const" && ty != "system" && ty != "ALL" {
+            // ALL 已由上面报告,这里重复只会稀释注意力
             out.push(finding(
                 Level::Warn,
                 &format!("未使用索引 {scope}"),
@@ -238,12 +298,22 @@ fn check_mysql(r: &ExecResult, out: &mut Vec<Finding>) {
                 "Using filesort:排序未走索引;ORDER BY/GROUP BY 列考虑加索引",
             ));
         }
-        if extra.to_lowercase().contains("using temporary") {
-            out.push(finding(
-                Level::Warn,
-                &format!("临时表 {scope}"),
-                "Using temporary:常见于 DISTINCT/GROUP BY/UNION;分组列建索引可避免",
-            ));
+        if extra_l.contains("using temporary") && !extra_l.contains("using index for group-by") {
+            if extra_l.contains("using filesort") {
+                // 分组+排序都没走索引:这才是值得 Warn 的组合
+                out.push(finding(
+                    Level::Warn,
+                    &format!("临时表+额外排序 {scope}"),
+                    "Using temporary + filesort:GROUP BY 列建索引可同时消除临时表与排序",
+                ));
+            } else {
+                // 纯 GROUP BY/DISTINCT 的临时表是聚合的正常代价
+                out.push(finding(
+                    Level::Info,
+                    &format!("临时表 {scope}"),
+                    "Using temporary:常见于 DISTINCT/GROUP BY/UNION;结果集小可忽略",
+                ));
+            }
         }
     }
     if out.is_empty() {
@@ -414,10 +484,38 @@ mod tests {
     fn static_info_cases() {
         let f = static_check("SELECT * FROM users WHERE id = 1");
         assert!(f.iter().any(|x| x.title == "SELECT *"));
+        // 静态排序规则已删:plan 层 Using filesort 才能精确判定,静态版只产噪音
         let f = static_check("SELECT a FROM t ORDER BY a");
-        assert!(f.iter().any(|x| x.title == "大结果集排序"));
+        assert!(!f.iter().any(|x| x.title == "大结果集排序"));
         let f = static_check("SELECT a FROM t UNION SELECT b FROM u");
         assert!(f.iter().any(|x| x.title == "UNION 去重"));
+    }
+
+    #[test]
+    fn static_where_clause_scoping() {
+        // ORDER BY/GROUP BY 里的函数不算 WHERE 条件
+        let f = static_check("SELECT a FROM t WHERE id = 1 ORDER BY upper(name)");
+        assert!(!f.iter().any(|x| x.title == "WHERE 中对列使用函数"));
+        let f = static_check("SELECT a FROM t WHERE x = 1 GROUP BY date(dt)");
+        assert!(!f.iter().any(|x| x.title == "WHERE 中对列使用函数"));
+        // 表名 wherever 不构成 where 关键字
+        let f = static_check("SELECT a FROM wherever ORDER BY upper(b)");
+        assert!(!f.iter().any(|x| x.title == "WHERE 中对列使用函数"));
+        // 字符串字面量里的函数名不算
+        let f = static_check("SELECT a FROM t WHERE remark = 'use upper(x)' AND id = 1");
+        assert!(!f.iter().any(|x| x.title == "WHERE 中对列使用函数"));
+        // 真命中
+        let f = static_check("SELECT a FROM t WHERE substr(code, 2, 3) = 'X' ORDER BY id");
+        assert!(f.iter().any(|x| x.title == "WHERE 中对列使用函数"));
+    }
+
+    #[test]
+    fn static_join_using_not_cartesian() {
+        // USING 与 CROSS JOIN 是合法/有意写法,不算缺连接条件
+        let f = static_check("SELECT a FROM t1 JOIN t2 USING (id)");
+        assert!(!f.iter().any(|x| x.title == "JOIN 缺少 ON 条件"));
+        let f = static_check("SELECT a FROM t1 CROSS JOIN t2");
+        assert!(!f.iter().any(|x| x.title == "JOIN 缺少 ON 条件"));
     }
 
     #[test]
@@ -461,8 +559,68 @@ mod tests {
         );
         let f = plan_check(DbType::MySql, &r);
         assert!(f.iter().any(|x| x.title.contains("全表扫描")));
-        assert!(f.iter().any(|x| x.title.contains("未使用索引")));
-        assert!(f.iter().any(|x| x.title.contains("临时表")));
+        // ALL 时不再叠加"未使用索引"(重复告警稀释注意力)
+        assert!(!f.iter().any(|x| x.title.contains("未使用索引")));
+        // temporary 不伴 filesort:降为 Info 但标题保留
+        assert!(f
+            .iter()
+            .any(|x| x.title.contains("临时表") && x.level == Level::Info));
+    }
+
+    #[test]
+    fn mysql_plan_noise_narrowed() {
+        // 小表全表扫描:Info 而非 Danger
+        let r = exec(
+            &["type", "key", "rows", "Extra"],
+            vec![vec![Some("ALL".into()), None, Some("8".into()), Some("".into())]],
+        );
+        let f = plan_check(DbType::MySql, &r);
+        assert!(f
+            .iter()
+            .any(|x| x.title.contains("全表扫描") && x.level == Level::Info));
+
+        // 无过滤条件的全表浏览:不喊建索引
+        let r = exec(
+            &["type", "key", "rows", "Extra"],
+            vec![vec![
+                Some("ALL".into()),
+                None,
+                Some("99999".into()),
+                Some("".into()),
+            ]],
+        );
+        let f = plan_check(DbType::MySql, &r);
+        assert!(f.iter().any(|x| x.title.contains("全表扫描")
+            && x.level == Level::Info
+            && x.detail.contains("全表浏览")));
+
+        // 覆盖索引扫描(type=index + Using index):不是问题
+        let r = exec(
+            &["type", "key", "rows", "Extra"],
+            vec![vec![
+                Some("index".into()),
+                Some("idx_a".into()),
+                Some("99999".into()),
+                Some("Using index".into()),
+            ]],
+        );
+        let f = plan_check(DbType::MySql, &r);
+        assert!(!f.iter().any(|x| x.title.contains("全索引扫描")));
+
+        // temporary + filesort 才值得 Warn
+        let r = exec(
+            &["type", "key", "rows", "Extra"],
+            vec![vec![
+                Some("ref".into()),
+                Some("idx_a".into()),
+                Some("10".into()),
+                Some("Using temporary; Using filesort".into()),
+            ]],
+        );
+        let f = plan_check(DbType::MySql, &r);
+        assert!(f
+            .iter()
+            .any(|x| x.title.contains("临时表+额外排序") && x.level == Level::Warn));
     }
 
     #[test]

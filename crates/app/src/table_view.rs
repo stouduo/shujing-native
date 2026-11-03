@@ -3849,6 +3849,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 input: String::new(),
                 conn_id: String::new(),
                 sql: String::new(),
+                database: None,
                 action: Some(format!(
                     "delete-rows:{}:{}:{}",
                     tab_id,
@@ -3871,6 +3872,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 input: String::new(),
                 conn_id: String::new(),
                 sql: String::new(),
+                database: None,
                 action: Some(format!("delete-rows:{}:{}:{}", tab_id, t.rows_gen, ri)),
             });
         }

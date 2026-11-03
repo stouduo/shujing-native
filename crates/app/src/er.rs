@@ -184,8 +184,10 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                 HEAD_H + ROW_H * rows as f32 + 6.0
             };
 
-            // 平移:拖空白(未点在任何节点上)
+            // 平移:拖空白(按下起点不在任何节点上)。判节点用按下起点而非当前指针——
+            // 快速拖小节点时指针当帧已甩出节点矩形,若按当前指针判定会画布/节点同时位移
             let pointer = ui.input(|i| i.pointer.latest_pos()).unwrap_or(canvas.min);
+            let press_origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pointer);
             let on_node = layout
                 .iter()
                 .any(|(name, pos)| {
@@ -193,7 +195,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                         world_to_screen(e, *pos),
                         egui::vec2(NODE_W, node_h(name)) * e.zoom,
                     );
-                    r.contains(pointer)
+                    r.contains(press_origin)
                 });
             if e.dragging_node.is_none() && !on_node && ui.rect_contains_pointer(canvas) {
                 e.pan += drag_delta;

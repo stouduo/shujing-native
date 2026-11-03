@@ -87,31 +87,37 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
     .map(|n| shujing_core::TableMeta {
         name: n.to_string(),
         kind: "table".into(),
+        owner: None,
     })
     .collect();
     let mut tables = tables;
     tables.push(shujing_core::TableMeta {
         name: "v_user_summary".into(),
         kind: "view".into(),
+        owner: None,
     });
     tables.push(shujing_core::TableMeta {
         name: "trg_touch_user".into(),
         kind: "trigger".into(),
+        owner: None,
     });
     tables.push(shujing_core::TableMeta {
         name: "fn_heat_score".into(),
         kind: "function".into(),
+        owner: None,
     });
     let archive: Vec<shujing_core::TableMeta> = (0..7)
         .map(|i| shujing_core::TableMeta {
             name: format!("archive_table_{i}"),
             kind: "table".into(),
+        owner: None,
         })
         .collect();
     let comic: Vec<shujing_core::TableMeta> = (0..4)
         .map(|i| shujing_core::TableMeta {
             name: format!("comic_table_{i}"),
             kind: "table".into(),
+        owner: None,
         })
         .collect();
     let tree = ConnTree {
@@ -737,6 +743,133 @@ fn render_designer_edit() {
         crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
         draw_app(&mut b, ctx);
     });
+}
+
+#[test]
+fn render_designer_create() {
+    let mut app = test_app(vec![], 0);
+    app.open_designer("c1", None, Some("dramato".to_string()));
+    if let TabKind::Designer(d) = &mut app.tabs.last_mut().unwrap().kind {
+        d.loading = false;
+        d.loaded = true;
+        d.columns = vec![
+            crate::app::DesignerColumn {
+                name: "id".into(),
+                data_type: "INT".into(),
+                nullable: false,
+                pk: true,
+                auto_inc: true,
+                ..Default::default()
+            },
+            crate::app::DesignerColumn {
+                name: "title".into(),
+                data_type: "VARCHAR".into(),
+                length: "200".into(),
+                ..Default::default()
+            },
+            crate::app::DesignerColumn {
+                name: "created_at".into(),
+                data_type: "DATETIME".into(),
+                ..Default::default()
+            },
+        ];
+    }
+    let app = std::cell::RefCell::new(app);
+    render("designer_create", 1200.0, 700.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
+        draw_app(&mut b, ctx);
+    });
+}
+
+/// 回归:新建模式删除中间列曾因 for-range 上限定死而越界 panic
+/// 删除按钮逻辑坐标(从 designer_create.png 校准,1200×700 视口)
+const DESIGNER_DEL_X: f32 = 1134.0;
+const DESIGNER_DEL_Y0: f32 = 140.0;
+#[test]
+fn designer_delete_column_no_panic() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = test_app(vec![], 0);
+    app.open_designer("c1", None, Some("dramato".to_string()));
+    if let TabKind::Designer(d) = &mut app.tabs.last_mut().unwrap().kind {
+        d.loading = false;
+        d.loaded = true;
+        d.columns = vec![
+            crate::app::DesignerColumn {
+                name: "id".into(),
+                data_type: "INT".into(),
+                nullable: false,
+                pk: true,
+                auto_inc: true,
+                ..Default::default()
+            },
+            crate::app::DesignerColumn {
+                name: "title".into(),
+                data_type: "VARCHAR".into(),
+                length: "200".into(),
+                ..Default::default()
+            },
+            crate::app::DesignerColumn {
+                name: "created_at".into(),
+                data_type: "DATETIME".into(),
+                ..Default::default()
+            },
+        ];
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    // 坐标从 designer_create.png 校准:第 0 行删除按钮(逻辑坐标)
+    let click = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>, pos: egui::Pos2| {
+        h.input_mut().events.push(egui::Event::PointerMoved(pos));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+    };
+    click(&mut harness, egui::pos2(DESIGNER_DEL_X, DESIGNER_DEL_Y0));
+    harness.run_steps(3);
+    let b = harness.state();
+    let n = b
+        .borrow()
+        .tabs
+        .last()
+        .map(|t| match &t.kind {
+            TabKind::Designer(d) => d.columns.len(),
+            _ => usize::MAX,
+        })
+        .unwrap_or(usize::MAX);
+    assert_eq!(n, 2, "点击第 0 行删除后应剩 2 列且不 panic");
 }
 
 #[test]

@@ -159,7 +159,8 @@ fn ident(name: &str, mysql: bool) -> String {
 fn schema_sqlite(conn: &rusqlite::Connection) -> Result<Vec<TableMeta>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT name, type FROM sqlite_master \
+            "SELECT name, type, CASE type WHEN 'trigger' THEN tbl_name ELSE NULL END \
+             FROM sqlite_master \
              WHERE type IN ('table','view','trigger') AND name NOT LIKE 'sqlite_%' \
              ORDER BY name",
         )
@@ -169,7 +170,8 @@ fn schema_sqlite(conn: &rusqlite::Connection) -> Result<Vec<TableMeta>, String> 
     while let Some(row) = rows.next().map_err(es)? {
         let name: String = row.get(0).map_err(es)?;
         let kind: String = row.get(1).map_err(es)?;
-        out.push(TableMeta { name, kind });
+        let owner: Option<String> = row.get(2).map_err(es)?;
+        out.push(TableMeta { name, kind, owner });
     }
     Ok(out)
 }
@@ -195,7 +197,7 @@ async fn schema_mysql(conn: &mut mysql_async::Conn, database: &str) -> Result<Ve
                 })
             };
             if let (Some(name), Some(kind)) = (get(0), get(1)) {
-                out.push(TableMeta { name, kind });
+                out.push(TableMeta { name, kind, owner: None });
             }
         })
         .await
@@ -221,7 +223,7 @@ async fn schema_mysql(conn: &mut mysql_async::Conn, database: &str) -> Result<Ve
                 })
             };
             if let (Some(name), Some(kind)) = (get(0), get(1)) {
-                out.push(TableMeta { name, kind });
+                out.push(TableMeta { name, kind, owner: None });
             }
         })
         .await
@@ -233,17 +235,18 @@ async fn schema_pg(client: &tokio_postgres::Client) -> Result<Vec<TableMeta>, St
     use tokio_postgres::SimpleQueryMessage;
     let messages = client
         .simple_query(
-            "SELECT c.relname, CASE c.relkind WHEN 'r' THEN 'table' ELSE 'view' END AS kind \
+            "SELECT c.relname, CASE c.relkind WHEN 'r' THEN 'table' ELSE 'view' END AS kind, \
+                    CAST(NULL AS text) \
              FROM pg_catalog.pg_class c \
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
              WHERE n.nspname = 'public' AND c.relkind IN ('r','v','m') \
              UNION ALL \
-             SELECT t.tgname, 'trigger' FROM pg_trigger t \
+             SELECT t.tgname, 'trigger', c.relname FROM pg_trigger t \
              JOIN pg_class c ON c.oid = t.tgrelid \
              JOIN pg_namespace n ON n.oid = c.relnamespace \
              WHERE n.nspname = 'public' AND NOT t.tgisinternal \
              UNION ALL \
-             SELECT p.proname, 'function' FROM pg_proc p \
+             SELECT p.proname, 'function', CAST(NULL AS text) FROM pg_proc p \
              JOIN pg_namespace n ON n.oid = p.pronamespace \
              WHERE n.nspname = 'public' \
              ORDER BY 1",
@@ -254,7 +257,11 @@ async fn schema_pg(client: &tokio_postgres::Client) -> Result<Vec<TableMeta>, St
     for msg in messages {
         if let SimpleQueryMessage::Row(row) = msg {
             if let (Some(name), Some(kind)) = (row.get(0), row.get(1)) {
-                out.push(TableMeta { name: name.to_string(), kind: kind.to_string() });
+                out.push(TableMeta {
+                    name: name.to_string(),
+                    kind: kind.to_string(),
+                    owner: row.get(2).map(str::to_string),
+                });
             }
         }
     }
@@ -678,6 +685,7 @@ impl Backend {
                     .map(|(idx, keys)| TableMeta {
                         name: format!("db{idx}"),
                         kind: format!("redis-db:{idx}:{keys}"),
+                        owner: None,
                     })
                     .collect()
             }),
