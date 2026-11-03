@@ -213,6 +213,7 @@ mod tx_tests {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("tx.db");
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::write(&path, b"");
         let (mut b, info) = test_backend(path.to_str().unwrap()).await;
 
         b.run_sql(

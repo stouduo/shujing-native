@@ -854,9 +854,17 @@ pub struct ShujingApp {
     pub global_search: Option<GlobalSearchState>,
     /// SQL 自动补全的列名缓存(键 "conn|db|table",懒加载)
     pub ac_columns: std::collections::HashMap<String, Vec<String>>,
+    /// ac_columns 变更版本号(写入递增):查询页补全快照缓存失效判定
+    pub ac_rev: u64,
+    /// 查询页补全快照缓存:(版本, 前缀键, 过滤结果)——免每帧 filter+深拷贝
+    pub ac_cache: Option<(
+        u64,
+        String,
+        std::sync::Arc<std::collections::HashMap<String, Vec<String>>>,
+    )>,
     pub confirm: Option<ConfirmState>,
     /// 会话持久化
-    pub snippets: Vec<String>,
+    pub snippets: std::sync::Arc<Vec<String>>,
     pub settings_open: bool,
     /// 库筛选弹窗(每连接勾选显示哪些库)
     pub db_filter: Option<DbFilterState>,
@@ -918,7 +926,7 @@ impl ShujingApp {
         crate::theme::apply(&cc.egui_ctx);
         #[cfg(target_os = "macos")]
         crate::force_appearance(dark);
-        let snippets = Self::load_snippets(&config_dir);
+        let snippets = std::sync::Arc::new(Self::load_snippets(&config_dir));
         let mut app = Self {
             service,
             config_dir,
@@ -941,6 +949,8 @@ impl ShujingApp {
             new_table: None,
             global_search: None,
             ac_columns: Default::default(),
+            ac_rev: 0,
+            ac_cache: None,
             confirm: None,
             snippets,
             settings_open: false,
@@ -2429,7 +2439,7 @@ impl ShujingApp {
     }
 
     fn save_snippets(&self) {
-        if let Ok(j) = serde_json::to_string_pretty(&self.snippets) {
+        if let Ok(j) = serde_json::to_string_pretty(&*self.snippets) {
             let _ = std::fs::write(Self::snippets_path(&self.config_dir), j);
         }
     }
@@ -2439,15 +2449,18 @@ impl ShujingApp {
         if sql.is_empty() {
             return;
         }
-        self.snippets.retain(|s| s != &sql);
-        self.snippets.insert(0, sql);
-        self.snippets.truncate(50);
+        std::sync::Arc::make_mut(&mut self.snippets).retain(|s| s != &sql);
+        {
+            let v = std::sync::Arc::make_mut(&mut self.snippets);
+            v.insert(0, sql);
+            v.truncate(50);
+        }
         self.save_snippets();
     }
 
     pub fn snippet_delete(&mut self, idx: usize) {
         if idx < self.snippets.len() {
-            self.snippets.remove(idx);
+            std::sync::Arc::make_mut(&mut self.snippets).remove(idx);
             self.save_snippets();
         }
     }
@@ -3612,6 +3625,7 @@ impl ShujingApp {
                     } else {
                         self.ac_columns.insert(key, cols);
                     }
+                    self.ac_rev += 1;
                 }
                 BgEvent::QueryPkDone { tab_id, cols } => {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
@@ -3743,26 +3757,20 @@ pub fn build_cond_where(
 
 /// 检测 SQL 是否为可回写的单表 SELECT,返回表名(取最后一段标识符)
 pub fn detect_single_table(sql: &str) -> Option<(Option<String>, String)> {
-    let lower = sql.to_lowercase();
+    // ascii 小写化等长(Unicode 小写化字节可变,偏移切原串会 panic)
+    let lower = sql.to_ascii_lowercase();
     let head = lower.trim_start();
     if !head.starts_with("select") {
         return None;
     }
-    for bad in [
-        " join ",
-        " union ",
-        " group by ",
-        " having ",
-        " into ",
-        "insert ",
-        "update ",
-        "delete ",
-        ") select ",
-        ")select",
-    ] {
-        if lower.contains(bad) {
-            return None;
-        }
+    // 词边界黑名单:contains("update ") 会误杀 last_update 列名;
+    // 逗号连接(SELECT * FROM t1, t2)的回写只会落 t1,一并拒绝
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let word_hit = |w: &[&str], needles: &[&str]| w.iter().any(|x| needles.contains(x));
+    if word_hit(&words, &["join", "union", "group", "having", "into"])
+        || word_hit(&words, &["insert", "update", "delete"])
+    {
+        return None;
     }
     // 子查询:select 出现两次以上即放弃
     if lower.matches("select").count() > 1 {
@@ -3770,18 +3778,29 @@ pub fn detect_single_table(sql: &str) -> Option<(Option<String>, String)> {
     }
     let from_pos = lower.find(" from ")?;
     let rest = sql[from_pos + 6..].trim();
-    // 取第一个标识符(容忍 `db`.`table` / "db"."table" / db.table,引号段可与点交错)
+    // 取第一个标识符(容忍 `db`.`table` / "db"."table" / db.table,引号段可与点交错)。
+    // 遇逗号立即放弃(多表);引号内双写引号是转义,不当段尾
     let mut ident = String::new();
     let mut chars = rest.chars();
+    let mut comma = false;
     loop {
         match chars.next() {
+            Some(',') => {
+                // FROM t1, t2:回写落点歧义,放弃(仅当逗号出现在表名段)
+                if !ident.is_empty() {
+                    comma = true;
+                }
+                break;
+            }
             Some(q @ ('`' | '"')) => {
                 ident.push(q);
-                for c2 in chars.by_ref() {
+                let mut prev = q;
+                while let Some(c2) = chars.next() {
                     ident.push(c2);
-                    if c2 == q {
+                    if c2 == q && prev != q {
                         break;
                     }
+                    prev = c2;
                 }
             }
             Some(c) if c.is_alphanumeric() || c == '_' || c == '$' || c == '.' => {
@@ -3789,6 +3808,9 @@ pub fn detect_single_table(sql: &str) -> Option<(Option<String>, String)> {
             }
             _ => break,
         }
+    }
+    if comma {
+        return None;
     }
     let cleaned: String = ident.chars().filter(|c| *c != '`' && *c != '"').collect();
     let parts: Vec<&str> = cleaned.split('.').filter(|s| !s.trim().is_empty()).collect();

@@ -3592,6 +3592,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             }
             // 占位防重复拉取
             app.ac_columns.insert(key.clone(), vec![]);
+            app.ac_rev += 1;
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             net::spawn(async move {
@@ -4439,7 +4440,7 @@ impl eframe::App for ShujingApp {
                 TabKind::Structure(s) => structure::draw_structure_view(ctx, &tab_id, s),
                 TabKind::Query(q) => {
                     let conns = self.conns.clone();
-                    let snippets = self.snippets.clone();
+                    let snippets = self.snippets.clone(); // Arc:廉价引用计数,不再深拷贝
                     // 补全环境:当前库表名 + 已缓存的列名
                     let ac_db = q
                         .database
@@ -4464,12 +4465,22 @@ impl eframe::App for ShujingApp {
                         .map(|v| v.iter().map(|m| m.name.clone()).collect::<Vec<_>>())
                         .unwrap_or_default();
                     let prefix = format!("{}|{}|", q.conn_id, ac_db.clone().unwrap_or_default());
-                    let ac_columns: std::collections::HashMap<String, Vec<String>> = self
-                        .ac_columns
-                        .iter()
-                        .filter(|(k, _)| k.starts_with(&prefix))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
+                    // 补全列快照带版本缓存:免每帧 filter+深拷贝整个 HashMap
+                    let ac_columns = match &self.ac_cache {
+                        Some((rev, p, m)) if *rev == self.ac_rev && *p == prefix => m.clone(),
+                        _ => {
+                            let m: std::sync::Arc<std::collections::HashMap<String, Vec<String>>> =
+                                std::sync::Arc::new(
+                                    self.ac_columns
+                                        .iter()
+                                        .filter(|(k, _)| k.starts_with(&prefix))
+                                        .map(|(k, v)| (k.clone(), v.clone()))
+                                        .collect(),
+                                );
+                            self.ac_cache = Some((self.ac_rev, prefix.clone(), m.clone()));
+                            m
+                        }
+                    };
                     let dbs = self
                         .trees
                         .get(&q.conn_id)

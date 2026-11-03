@@ -416,49 +416,38 @@ async fn struct_mysql(
 async fn struct_pg(client: &tokio_postgres::Client, table: &str) -> Result<TableStructure, String> {
     use tokio_postgres::SimpleQueryMessage;
     let mut out = TableStructure::default();
+    let mut is_matview = false;
     let qualified = format!("public.{}", ident(table, false));
 
-    // 字段 + 注释(varchar/numeric 带精度,长度不回填的话设计器保存会把
-    // varchar(n) 改写成无界)。pg_class 必须再按 namespace 限定,否则跨 schema
-    // 同名表列翻倍;注释用 attnum——ordinal_position 在 DROP COLUMN 后与物理
-    // 编号错位,注释会串列
+    // 字段 + 注释:改用 pg_attribute + format_type——精度/长度天然完整(numeric(10,2)/
+    // varchar(255)),且物化视图(information_schema.columns 不含)也有列可查;
+    // namespace 限定防跨 schema 同名表翻倍;attnum 对齐注释(DROP COLUMN 后不错位)
     let sql = format!(
-        "SELECT c.column_name, c.data_type, c.character_maximum_length::text, \
-                c.numeric_precision::text, c.numeric_scale::text, \
-                c.is_nullable, c.column_default, \
-                col_description(pgc.oid, a.attnum) \
-         FROM information_schema.columns c \
-         JOIN pg_catalog.pg_class pgc ON pgc.relname = c.table_name \
-         JOIN pg_catalog.pg_namespace ns ON ns.oid = pgc.relnamespace AND ns.nspname = 'public' \
-         JOIN pg_catalog.pg_attribute a ON a.attrelid = pgc.oid AND a.attname = c.column_name \
-         WHERE c.table_schema = 'public' AND c.table_name = {q} \
-         ORDER BY c.ordinal_position",
+        "SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, \
+                pg_get_expr(d.adbin, d.adrelid), \
+                col_description(a.attrelid, a.attnum), c.relkind \
+         FROM pg_catalog.pg_attribute a \
+         JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+         LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+         WHERE n.nspname = 'public' AND c.relname = {q} \
+           AND a.attnum > 0 AND NOT a.attisdropped \
+         ORDER BY a.attnum",
         q = format!("'{}'", table.replace('\'', "''"))
     );
     for msg in client.simple_query(&sql).await.map_err(es)? {
         if let SimpleQueryMessage::Row(row) = msg {
-            let mut data_type = row.get(1).unwrap_or_default().to_string();
-            // 精度回填:varchar 用字符长度;numeric 用(精度,标度)
-            let maxlen = row.get(2).unwrap_or_default();
-            let np = row.get(3).unwrap_or_default();
-            let nscale = row.get(4).unwrap_or_default();
-            if !maxlen.is_empty() {
-                data_type = format!("{data_type}({maxlen})");
-            } else if !np.is_empty() && data_type.to_lowercase().contains("numeric") {
-                if nscale.is_empty() {
-                    data_type = format!("{data_type}({np})");
-                } else {
-                    data_type = format!("{data_type}({np},{nscale})");
-                }
-            }
+            let data_type = row.get(1).unwrap_or_default().to_string();
+            is_matview = row.get(5) == Some("m");
             out.columns.push(ColumnDef {
                 name: row.get(0).unwrap_or_default().to_string(),
+                // format_type 已含完整精度,无需再拼
                 data_type,
-                nullable: row.get(5) == Some("YES"),
+                nullable: row.get(2) != Some("t"),
                 key: String::new(),
-                default: row.get(6).map(str::to_string),
+                default: row.get(3).map(str::to_string),
                 extra: String::new(),
-                comment: row.get(7).map(str::to_string).unwrap_or_default(),
+                comment: row.get(4).map(str::to_string).unwrap_or_default(),
             });
         }
     }
@@ -531,8 +520,10 @@ async fn struct_pg(client: &tokio_postgres::Client, table: &str) -> Result<Table
     if !pks.is_empty() {
         lines.push(format!("  PRIMARY KEY ({})", pks.join(", ")));
     }
+    let head = if is_matview { "CREATE MATERIALIZED VIEW" } else { "CREATE TABLE" };
     out.ddl = format!(
-        "-- 由列信息拼装(pg 无 SHOW CREATE TABLE)\nCREATE TABLE {} (\n{}\n);",
+        "-- 由列信息拼装(pg 无 SHOW CREATE TABLE)\n{} {} (\n{}\n);",
+        head,
         qi(table),
         lines.join(",\n")
     );

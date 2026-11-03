@@ -18,6 +18,11 @@ pub async fn connect(
     match info.db_type {
         DbType::Sqlite => {
             let path = req(&info.file_path, "缺少 SQLite 数据库文件路径")?;
+            // 路径必须已存在:Connection::open 默认带 CREATE,打错的路径会静默
+            // 新建空库(随后 SELECT 1 校验照样通过,用户以为连上了真库)
+            if !std::path::Path::new(path).exists() {
+                return Err(format!("文件不存在: {path}(不会自动新建数据库文件)"));
+            }
             let conn = rusqlite::Connection::open(path)
                 .map_err(|e| format!("打开 SQLite 文件失败: {e}"))?;
             let _ = conn.busy_timeout(Duration::from_secs(5));
@@ -47,6 +52,21 @@ pub async fn connect(
                     ),
                 );
             let pool = mysql_async::Pool::new(opts);
+            // 池是惰性的:立即探活一次,给不可达主机一个 8s 上限(否则 OS 级 TCP 超时 75s+)
+            {
+                use mysql_async::prelude::*;
+                let mut probe = tokio::time::timeout(
+                    std::time::Duration::from_secs(8),
+                    pool.get_conn(),
+                )
+                .await
+                .map_err(|_| "连接 MySQL 超时(8 秒): 请检查主机/端口/防火墙".to_string())?
+                .map_err(|e| format!("连接 MySQL 失败: {e}"))?;
+                probe
+                    .query_drop("SELECT 1")
+                    .await
+                    .map_err(|e| format!("MySQL 探活失败: {e}"))?;
+            }
             Ok(Backend::MySql(crate::model::MySqlPool {
                 pool,
                 session_db: None,
@@ -62,12 +82,23 @@ pub async fn connect(
                 .as_deref()
                 .and_then(|d| d.trim().parse().ok())
                 .unwrap_or(0);
-            let auth = pass.map(|p| format!(":{p}@")).unwrap_or_default();
+            // 密码 percent-encode:驱动会 percent-decode userinfo,含 /#?% 的明文密码会错位
+            let enc: String = pass
+                .unwrap_or_default()
+                .bytes()
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() || b"._~-".contains(&b) {
+                        format!("{}", b as char)
+                    } else {
+                        format!("%{b:02X}")
+                    }
+                })
+                .collect();
+            let auth = (!enc.is_empty()).then(|| format!(":{enc}@")).unwrap_or_default();
             let url = format!("redis://{auth}{host}:{port}/{db_idx}");
             let client = redis::Client::open(url).map_err(|e| format!("Redis 地址无效: {e}"))?;
-            // 试连 + PING
-            let mut con = client
-                .get_async_connection()
+            // 试连 + PING(用 ConnectionManager 验证,与运行期连接类型一致)
+            let mut con = redis::aio::ConnectionManager::new(client.clone())
                 .await
                 .map_err(|e| format!("连接 Redis 失败: {e}"))?;
             redis::cmd("PING")
@@ -162,6 +193,16 @@ impl Backend {
         }
         let n = mp.next.fetch_add(1, Ordering::Relaxed) % mp.clients.len();
         let client = mp.clients[n].clone();
+        // 回填会话 pid:取消查询(pg_cancel_backend)依赖它,不填则取消永远报"无运行中查询"
+        if let Ok(rows) = client.simple_query("SELECT pg_backend_pid").await {
+            if let Some(tokio_postgres::SimpleQueryMessage::Row(r)) = rows.first() {
+                if let Some(pid) = r.get(0) {
+                    if let Ok(p) = pid.parse::<u32>() {
+                        mp.running_pid.store(p, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
         let want = mp.session_db.clone();
         if want.is_some() && mp.applied.get(n).map(|a| a.as_deref()) != Some(want.as_deref()) {
             let stmt = format!(

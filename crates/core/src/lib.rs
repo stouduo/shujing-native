@@ -221,8 +221,6 @@ impl Service {
             "server has gone away",
             "gone away",
             "lost connection",
-            "timed out",
-            "timeout",
             "2006",
             "2013",
         ];
@@ -286,10 +284,17 @@ impl Service {
                 if !Self::is_dead_conn(&e) {
                     return Err(e);
                 }
-                // 连接已整体失效(池不可用/网络中断):重建后端并恢复会话库后重试
+                // 连接已整体失效(池不可用/网络中断):重建后端并恢复会话库后重试。
+                // 仅限单语句:多语句脚本前半可能已在服务器生效,整段重放=重复写入
+                let stmts = exec::split_statements(&sql);
+                if stmts.len() > 1 {
+                    return Err(format!(
+                        "{e}(连接已断开;多语句脚本不自动重试,以免重复执行,请检查后重跑)"
+                    ));
+                }
                 let info = guard.info.clone();
                 let session_db = guard.backend.session_db().map(str::to_string);
-                let mut nb = backend::connect(&info, None)
+                let mut nb = backend::connect(&info, Some(cancel_state.pg_pid.clone()))
                     .await
                     .map_err(|e2| format!("连接已断开,自动重连失败: {e2}(原错误: {e})"))?;
                 nb.set_session_db(session_db.as_deref());
@@ -693,6 +698,9 @@ mod tests {
         let mut p = std::env::temp_dir();
         p.push(format!("shujing_native_test_{}_{tag}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
+        // 连接层现在拒绝不存在的路径(防打错路径静默新建空库),测试先落空文件
+        // (0 字节是合法空 SQLite 库)
+        let _ = std::fs::write(&p, b"");
         p.to_string_lossy().into_owned()
     }
 

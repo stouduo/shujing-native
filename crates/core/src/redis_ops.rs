@@ -1,11 +1,11 @@
 //! Redis 专用命令通道:键空间 / SCAN / 详情 / 删除 / SET / 原始命令
 use crate::model::{es, Backend, ConnInfo, DbType};
-use redis::aio::MultiplexedConnection;
+use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 
 /// 命令句柄:Deref 到多路复用连接;持有期间独占串行锁
 pub(crate) struct RedisHandle<'a> {
-    pub con: MultiplexedConnection,
+    pub con: ConnectionManager,
     _serialize: tokio::sync::MutexGuard<'a, ()>,
 }
 
@@ -32,7 +32,7 @@ impl redis::aio::ConnectionLike for RedisHandle<'_> {
 }
 
 impl std::ops::Deref for RedisHandle<'_> {
-    type Target = MultiplexedConnection;
+    type Target = ConnectionManager;
     fn deref(&self) -> &Self::Target {
         &self.con
     }
@@ -45,7 +45,8 @@ impl std::ops::DerefMut for RedisHandle<'_> {
 }
 
 async fn get_con<'a>(backend: &'a mut Backend) -> Result<RedisHandle<'a>, String> {
-    // 缓存多路复用连接(Clone 是同一驱动任务的句柄,断线由驱动自动重连);
+    // ConnectionManager:驱动自动重连(MultiplexedConnection 出错即终止不重连,
+    // Redis server 重启后所有操作会一直 "connection closed");
     // SELECT 影响该共享连接,先拿串行锁保证 SELECT+命令成对执行
     let Backend::Redis(rs) = backend else {
         return Err("非 Redis 连接".into());
@@ -58,9 +59,7 @@ async fn get_con<'a>(backend: &'a mut Backend) -> Result<RedisHandle<'a>, String
             _serialize: serialize,
         });
     }
-    let con = rs
-        .client
-        .get_multiplexed_async_connection()
+    let con = redis::aio::ConnectionManager::new(rs.client.clone())
         .await
         .map_err(|e| format!("Redis 连接失败: {e}"))?;
     *guard = Some(con.clone());
@@ -188,9 +187,12 @@ pub async fn key_detail_page(
             d.pairs = items.into_iter().map(|v| (String::new(), v)).collect();
         }
         "set" => {
-            let mut items: Vec<String> = con.smembers(key).await.map_err(es)?;
+            // SSCAN 首页而非 SMEMBERS 全量:set 是大 key 高发类型,百万成员全拉会打爆内存
+            let (_, mut items): (u64, Vec<String>) = redis::cmd("SSCAN")
+                .arg(key).arg(0).arg("COUNT").arg(PAGE)
+                .query_async(&mut con).await.map_err(es)?;
             items.sort();
-            d.len = items.len() as u64;
+            d.len = redis::cmd("SCARD").arg(key).query_async(&mut con).await.map_err(es)?;
             d.pairs = items.into_iter().map(|v| (String::new(), v)).collect();
         }
         "zset" => {
@@ -199,10 +201,17 @@ pub async fn key_detail_page(
             d.pairs = items.into_iter().map(|(m, s)| (m, format!("{s}"))).collect();
         }
         "hash" => {
-            let map: std::collections::HashMap<String, String> = con.hgetall(key).await.map_err(es)?;
-            d.len = redis::cmd("HLEN").arg(key).query_async(&mut con).await.map_err(es)?;
-            let mut pairs: Vec<(String, String)> = map.into_iter().collect();
+            // HSCAN 首页而非 HGETALL 全量(同 set)
+            let (_, flat): (u64, Vec<String>) = redis::cmd("HSCAN")
+                .arg(key).arg(0).arg("COUNT").arg(PAGE / 2)
+                .query_async(&mut con).await.map_err(es)?;
+            let mut pairs: Vec<(String, String)> = flat
+                .chunks(2)
+                .filter(|c| c.len() == 2)
+                .map(|c| (c[0].clone(), c[1].clone()))
+                .collect();
             pairs.sort();
+            d.len = redis::cmd("HLEN").arg(key).query_async(&mut con).await.map_err(es)?;
             d.pairs = pairs;
         }
         "stream" => {
@@ -285,6 +294,24 @@ pub async fn analyze(
         return Ok(vec![]);
     }
 
+    // 先过滤掉采样期间已过期的键:后续 OBJECT FREQ 对不存在键返回错误,
+    // 会把整条 pipeline 结果变 Err(pipeline 错误递归整体失败)
+    let mut epipe = redis::pipe();
+    for k in &keys {
+        epipe.cmd("EXISTS").arg(k);
+    }
+    let exists: Vec<Option<i64>> = epipe.query_async(&mut con).await.map_err(es)?;
+    keys.retain(|_| true);
+    let keys: Vec<String> = keys
+        .into_iter()
+        .zip(exists)
+        .filter(|(_, e)| e.unwrap_or(0) == 1)
+        .map(|(k, _)| k)
+        .collect();
+    if keys.is_empty() {
+        return Ok(vec![]);
+    }
+
     // 分批 pipeline 统计
     let mut stats: Vec<KeyStat> = Vec::new();
     const BATCH: usize = 100;
@@ -329,7 +356,9 @@ pub async fn analyze(
                 "hash" => pipe.cmd("HLEN").arg(k),
                 "set" => pipe.cmd("SCARD").arg(k),
                 "zset" => pipe.cmd("ZCARD").arg(k),
-                _ => pipe.cmd("STRLEN").arg(k),
+                // 不支持的类型(stream 等)发恒成功的 TYPE:此前发 STRLEN 会 WRONGTYPE
+                // 把整条 pipeline 结果变 Err,采样里 1 个 stream 就全盘失败
+                _ => pipe.cmd("TYPE").arg(k),
             };
         }
         let lens: Vec<Option<i64>> = pipe.query_async(&mut con).await.map_err(es)?;
@@ -394,6 +423,15 @@ pub async fn new_key(
 ) -> Result<(), String> {
     let mut con = get_con(backend).await?;
     redis::cmd("SELECT").arg(db).query_async::<()>(&mut con).await.map_err(es)?;
+    // 新建语义:任何类型先判重(hash/list/set/zset 的追加/覆盖写不该静默落到既有 key 上)
+    let exists: bool = redis::cmd("EXISTS")
+        .arg(key)
+        .query_async(&mut con)
+        .await
+        .map_err(es)?;
+    if exists {
+        return Err(format!("key `{key}` 已存在(新建不会覆盖既有数据)"));
+    }
     match key_type {
         "string" => {
             // NX:新建语义,已存在直接报错而不是静默覆盖旧值
@@ -553,7 +591,18 @@ pub async fn run_command(
         return Err("只读连接:该 Redis 命令被拒绝".into());
     }
     let mut con = get_con(backend).await?;
-    // db 编号默认 SELECT(连接串已带,这里不强制)
+    // 显式 SELECT 回连接串默认库:共享连接的 db 会被浏览操作改写并残留,
+    // 不重置的话命令行会落在最后浏览的库上
+    let db_idx: u8 = info
+        .database
+        .as_deref()
+        .and_then(|d| d.trim().parse().ok())
+        .unwrap_or(0);
+    redis::cmd("SELECT")
+        .arg(db_idx)
+        .query_async::<()>(&mut con)
+        .await
+        .map_err(es)?;
     let parts = split_args(cmd_text)?;
     if parts.is_empty() {
         return Err("命令为空".into());
@@ -615,8 +664,14 @@ fn split_args(s: &str) -> Result<Vec<String>, String> {
     let mut cur = String::new();
     let mut has_token = false; // 当前 token 已由引号或字符开启
     let mut quote = false;
-    for ch in s.chars() {
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
         if quote {
+            // 反斜杠转义:\" 与 \\ 不再结束/误入 token
+            if ch == '\\' && matches!(chars.peek(), Some('"') | Some('\\')) {
+                cur.push(chars.next().unwrap());
+                continue;
+            }
             if ch == '"' {
                 quote = false;
             } else {

@@ -62,6 +62,13 @@ pub fn split_statements(sql: &str) -> Vec<String> {
         let c = cs[i];
         if quote != '\0' {
             cur.push(c);
+            // MySQL 转义:'a\'; b' 里的 \' 不闭合字符串(PG 标准串是字面反斜杠,
+            // 误吞闭合只会让只读校验偏保守,安全方向)
+            if c == '\\' && (quote == '\'' || quote == '"') && cs.get(i + 1).is_some_and(|&n| n == quote || n == '\\') {
+                cur.push(cs[i + 1]);
+                i += 2;
+                continue;
+            }
             if c == quote {
                 if cs.get(i + 1) == Some(&quote) {
                     cur.push(quote);
@@ -72,6 +79,17 @@ pub fn split_statements(sql: &str) -> Vec<String> {
             }
             i += 1;
             continue;
+        }
+        // mysqldump 的 DELIMITER 行:不是语句,原样吞掉(否则当 SQL 发给服务器必报错)
+        if depth == 0 && (c == 'D' || c == 'd') {
+            let head: String = cs[i..(i + 9).min(cs.len())].iter().collect::<String>()
+                .to_ascii_lowercase();
+            if head == "delimiter" && cs.get(i + 9).is_some_and(|&n| n.is_whitespace()) {
+                while i < cs.len() && cs[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
         }
         if c.is_alphabetic() {
             let mut w = String::new();
@@ -293,6 +311,27 @@ async fn run_mysql(conn: &mut mysql_async::Conn, sql: &str, max: usize) -> Resul
 async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Result<Vec<ExecResult>, String> {
     use tokio_postgres::SimpleQueryMessage;
     let started = Instant::now();
+    // simple_query 会把整个结果集一次性物化进内存,行数上限只在组装时生效——
+    // 千万行 SELECT 直接 OOM。单条 SELECT 且不带 LIMIT 时自动补一行硬上限
+    // (多语句不拼,拼在中间语句尾部是语法错误)
+    let sql_owned;
+    let mut sql = sql;
+    {
+        let stmts = split_statements(sql);
+        if let [one] = stmts.as_slice() {
+            let low = one.to_ascii_lowercase();
+            let is_select = low == "select"
+                || low.starts_with("select")
+                    && low
+                        .as_bytes()
+                        .get(6)
+                        .is_some_and(|b| b.is_ascii_whitespace());
+            if is_select && !low.split_whitespace().any(|w| w == "limit") {
+                sql_owned = format!("{one} LIMIT {}", HARD_MAX_ROWS + 1);
+                sql = &sql_owned;
+            }
+        }
+    }
     let messages = client.simple_query(sql).await.map_err(es)?;
     let mut results: Vec<ExecResult> = Vec::new();
     let mut columns: Vec<String> = vec![];
@@ -439,5 +478,25 @@ mod split_tests {
         let ss = split_statements("SELECT 'a;b'; SELECT 2");
         assert_eq!(ss.len(), 2);
         assert_eq!(ss[0], "SELECT 'a;b'");
+    }
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::split_statements;
+
+    /// MySQL 反斜杠转义:'a\'; b' 不在 \' 处断句
+    #[test]
+    fn mysql_backslash_quote_not_split() {
+        let stmts = split_statements("INSERT INTO t VALUES ('a\\'; b'); SELECT 1;");
+        assert_eq!(stmts.len(), 2, "转义引号不该断句: {stmts:?}");
+        assert!(stmts[0].contains("'a\\'; b'"), "{}", stmts[0]);
+    }
+
+    /// mysqldump 的 DELIMITER 行原样跳过
+    #[test]
+    fn delimiter_line_skipped() {
+        let stmts = split_statements("DELIMITER ;;\nSELECT 1;\nDELIMITER ;\nSELECT 2;");
+        assert_eq!(stmts, vec!["SELECT 1", "SELECT 2"]);
     }
 }
