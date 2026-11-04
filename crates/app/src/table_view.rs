@@ -321,15 +321,13 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                             if ev.closed {
                                 close = Some(i);
                             }
-                            if ev.double_clicked && !renaming_now {
-                                rename = Some((i, title.clone()));
-                                activate = None;
-                            }
                             if let Some(m) = ev.menu {
                                 match m {
                                     0 => close_set.extend((0..app.tabs.len()).filter(|j| *j != i)),
                                     1 => close_set.extend(0..i),
-                                    _ => close_set.extend(i + 1..app.tabs.len()),
+                                    2 => close_set.extend(i + 1..app.tabs.len()),
+                                    // 右键「重命名标签…」:双击触发已删(误触率高且会取消切换)
+                                    _ => rename = Some((i, title.clone())),
                                 }
                             }
                             // 拖拽排序累计
@@ -461,7 +459,6 @@ pub struct TabEvents {
     pub closed: bool,
     pub menu: Option<u8>,
     pub drag_delta: f32,
-    pub double_clicked: bool,
     pub rename_commit: bool,
     pub rename_cancel: bool,
 }
@@ -515,7 +512,6 @@ fn draw_one_tab(
     } else {
         0.0
     };
-    let double_clicked = resp.double_clicked() && !closed;
     let mut rename_commit = false;
     let mut rename_cancel = false;
     let mut menu: Option<u8> = None;
@@ -530,6 +526,11 @@ fn draw_one_tab(
         }
         if ui.button("关闭右侧").clicked() {
             menu = Some(2);
+            ui.close_menu();
+        }
+        // 重命名从双击迁来:双击易误触(快连点两下就弹输入框还取消切换)
+        if ui.button("重命名标签…").clicked() {
+            menu = Some(3);
             ui.close_menu();
         }
     });
@@ -639,7 +640,6 @@ fn draw_one_tab(
             closed,
             menu,
             drag_delta,
-            double_clicked,
             rename_commit,
             rename_cancel,
         },
