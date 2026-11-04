@@ -2249,6 +2249,160 @@ fn tab_overflow_click_close_context_menu_work() {
     );
 }
 
+
+/// 真根因复现:标签条在指针按压/惯性期间移动 → egui 要求点击的按下/松开
+/// 命中同一 widget,内容一滑松开就落进邻格,点击被静默取消(="点了没反应")。
+/// 断言用 TABBAR_OFFSET_X 镜像:一次滚轮后偏移必须在极短帧数内停稳
+/// (旧实现读 smooth_scroll_delta,停滚后还要放 0.1-0.3s 尾巴,标签一直在滑)。
+#[test]
+fn tabbar_wheel_scroll_settles_fast() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    for i in 0..8 {
+        app.tabs.push(stub_tab(
+            &format!("溢出标签 {i}"),
+            &format!("overflow_table_{i}"),
+        ));
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let off = |h: &egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| {
+        f32::from_bits(table_view::TABBAR_OFFSET_X.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    // 指针先进标签栏(滚轮处理有 rect_contains_pointer 门,指针不在栏内不动)
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(500.0, 14.0)));
+    harness.step();
+    let before = off(&harness);
+    // 一格大步进滚轮(负向=滚进溢出区;Point |120| ≥ 8 → egui 归入
+    // unprocessed 分帧释放,尾巴最重)
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -120.0),
+        modifiers: Default::default(),
+    });
+    harness.step();
+    // 记录随后 12 帧的偏移:统计"仍在变化"的帧数
+    let mut drift_frames = 0;
+    let mut last = off(&harness);
+    for _ in 0..12 {
+        harness.step();
+        let cur = off(&harness);
+        if (cur - last).abs() > 0.5 {
+            drift_frames += 1;
+        }
+        last = cur;
+    }
+    assert!(
+        last > before + 50.0,
+        "滚轮应实际滚动标签栏(before={before}, after={last})"
+    );
+    assert!(
+        drift_frames <= 2,
+        "滚轮后标签栏必须在 2 帧内停稳(实际漂移 {drift_frames} 帧)—— \
+        尾巴期间任何点击的按下/松开都会落在不同标签上被 egui 静默取消"
+    );
+}
+
+/// 激活标签自动滚入必须瞬跳:旧实现 scroll_to_rect 默认动画 0.1-0.3s,
+/// 期间标签条在滑,紧跟着的 ×/切换点击全部作废("切完马上关不掉"的根源)。
+#[test]
+fn tabbar_autoscroll_is_instant() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    for i in 0..8 {
+        app.tabs.push(stub_tab(
+            &format!("溢出标签 {i}"),
+            &format!("overflow_table_{i}"),
+        ));
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let off = |h: &egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| {
+        f32::from_bits(table_view::TABBAR_OFFSET_X.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    // 激活远端标签(x=800 实测命中溢出区)→ 触发 scroll_to_rect
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(800.0, 14.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(800.0, 14.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(800.0, 14.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    assert!(
+        harness.state().borrow().active_tab >= 3,
+        "前置:应激活了溢出区的标签"
+    );
+    // 随后 12 帧:自动滚入产生的偏移变化帧数必须 ≤3(瞬跳=1-2 帧;动画=6-18 帧)
+    let mut drift_frames = 0;
+    let mut last = off(&harness);
+    for _ in 0..12 {
+        harness.step();
+        let cur = off(&harness);
+        if (cur - last).abs() > 0.5 {
+            drift_frames += 1;
+        }
+        last = cur;
+    }
+    assert!(
+        drift_frames <= 3,
+        "激活标签自动滚入必须瞬跳(实际漂移 {drift_frames} 帧)—— \
+        动画期间紧跟着的关闭/切换点击会被 egui 静默取消"
+    );
+}
+
 #[test]
 fn tab_close_button_works() {
     // 用真实 eframe::App::update 路径(draw_app 不含 update 的弹窗/快捷键块)

@@ -11,6 +11,8 @@ use egui_extras::Column;
 use shujing_core::Service;
 
 /// 诊断:数据网格外层横向滚动偏移(kittest 行为测试读取)
+/// 标签栏横向滚动偏移的每帧镜像(测试断言"滚轮后是否快速停稳"用;AtomicF32 不可用走 bits)
+pub static TABBAR_OFFSET_X: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 pub static LAST_HSCROLL_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 /// 取 Redis 标签的 (连接, service, 事件通道);非 Redis 标签返回 None
@@ -260,7 +262,10 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.spacing_mut().scroll.dormant_handle_opacity = 0.5;
             ui.spacing_mut().scroll.dormant_background_opacity = 0.0;
             ui.spacing_mut().scroll.active_handle_opacity = 0.85;
-            egui::ScrollArea::horizontal()
+            // 单向滚动区合并滚轮的 y 分量到 x(默认 false 时横向区无视纯 y 滚轮);
+            // native 直改 offset 的路径零动画,配合上面的 smooth=raw 覆写=一步到位
+            ui.style_mut().always_scroll_the_only_direction = true;
+            let scroll_out = egui::ScrollArea::horizontal()
                 .id_salt("tabbar-scroll")
                 .auto_shrink([false, true])
                 // 关键:标签栏本身必须由 tab 自己处理拖拽排序,
@@ -270,14 +275,62 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     // 鼠标滚轮在标签栏上 = 横向滚动;必须判断指针是否真的在标签栏内,
                     // 否则滚表格时标签栏也会跟着横滚。
+                    // 两个关键选择(都是为了让标签条绝不在指针按压期间移动——
+                    // egui 的点击路由要求按下/松开命中同一 widget,内容在指下滑动
+                    // 会让松开落进邻格,点击被静默取消,即"点了没反应"的真根因):
+                    // ① raw 而非 smooth:smooth 把一次滚轮拆成多帧慢慢放,停滚后
+                    //    还有 0.1-0.3s 惯性尾巴,期间点击必死;
+                    // ② 主键按下期间不平移:正在点的那一下绝不能被滚轮顶掉
+                    // 滚轮:ScrollArea 原生路径读 smooth_scroll_delta(停滚后还有
+                    // 0.1-0.3s 惯性尾巴,期间标签在指针下继续滑,点击会被 egui 静默取消)。
+                    // 悬停标签栏时改喂 raw(当帧真实滚轮量):滚动一步到位;尾巴帧清零;
+                    // 主键按住期间(正在点标签)一律清零——按压中内容绝不能动。
                     if ui.rect_contains_pointer(ui.max_rect()) {
-                        let wheel_y = ui.input(|i| i.smooth_scroll_delta.y);
-                        if wheel_y.abs() > 0.1 {
-                            ui.scroll_with_delta(egui::vec2(wheel_y, 0.0));
-                        }
+                        ui.ctx().input_mut(|i| {
+                            let zooming = i.modifiers.ctrl || i.modifiers.mac_cmd || i.modifiers.command;
+                            i.smooth_scroll_delta =
+                                if i.pointer.primary_down() || zooming {
+                                    egui::Vec2::ZERO
+                                } else {
+                                    i.raw_scroll_delta
+                                };
+                        });
                     }
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
+                        // —— 自有点击手势 ——
+                        // egui 的 click 路由要求按下与松开命中同一 widget:任何让标签条
+                        // 在按压期间移动的东西(滚轮尾巴/自动滚入动画/未来任何布局变化)
+                        // 都会让点击被静默取消——历轮"点了没反应"的真根因。
+                        // 自管手势只看"按下与松开是否落在同一标签的当前矩形内",
+                        // × 区按按下位置判定,完全绕开 widget 级 hit-test。
+                        let primary_pressed_now = ui.input(|i| i.pointer.primary_pressed());
+                        let primary_released_now = ui.input(|i| i.pointer.primary_released());
+                        let middle_released_now =
+                            ui.input(|i| i.pointer.button_released(egui::PointerButton::Middle));
+                        let press_origin = ui.input(|i| i.pointer.press_origin());
+                        let latest_pos = ui.input(|i| i.pointer.latest_pos());
+                        if primary_pressed_now {
+                            // 只登记按下位置;命中哪个标签在松开帧用当帧矩形判定
+                            // (按压期间标签条移动后,以按下时命中的"那个标签"为准)
+                            ui.ctx().memory_mut(|m| {
+                                m.data.insert_temp(
+                                    egui::Id::new("tab-gesture-press"),
+                                    press_origin,
+                                )
+                            });
+                        }
+                        let gesture_press: Option<egui::Pos2> = ui.ctx().memory(|m| {
+                            m.data
+                                .get_temp::<Option<egui::Pos2>>(egui::Id::new("tab-gesture-press"))
+                                .flatten()
+                        });
+                        if primary_released_now || middle_released_now {
+                            ui.ctx().memory_mut(|m| {
+                                m.data
+                                    .remove_temp::<Option<egui::Pos2>>(egui::Id::new("tab-gesture-press"))
+                            });
+                        }
                         for i in 0..app.tabs.len() {
                             let title = app.tabs[i].title.clone();
                             let glyph = match &app.tabs[i].kind {
@@ -296,13 +349,41 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                             } else {
                                 None
                             };
-                            let (ev, tab_rect) = draw_one_tab(
+                            let (mut ev, tab_rect) = draw_one_tab(
                                 ui,
                                 i == app.active_tab,
                                 &title,
                                 glyph,
                                 draft_owned.as_mut(),
                             );
+                            // 自有手势接管点击:按下与松开都落在本标签的当前矩形内
+                            // (× 区看按下位置;位移 ≤24px 防与拖拽排序打架)
+                            if let Some(pp) = gesture_press {
+                                let close_rect = egui::Rect::from_center_size(
+                                    egui::pos2(tab_rect.right() - 16.0, tab_rect.center().y),
+                                    egui::vec2(22.0, 22.0),
+                                );
+                                let dist_ok = latest_pos
+                                    .map(|lp| lp.distance(pp) <= 24.0)
+                                    .unwrap_or(false);
+                                let both_in = latest_pos
+                                    .map(|lp| tab_rect.contains(lp) && tab_rect.contains(pp))
+                                    .unwrap_or(false);
+                                if both_in && dist_ok {
+                                    if primary_released_now {
+                                        if close_rect.contains(pp) {
+                                            ev.closed = true;
+                                        } else {
+                                            ev.activated = true;
+                                        }
+                                    } else if middle_released_now {
+                                        ev.closed = true;
+                                    }
+                                }
+                            }
+                            if ev.closed {
+                                ev.activated = false;
+                            }
                             if renaming_now {
                                 rename = Some((i, draft_owned.unwrap_or_default()));
                                 if ev.rename_commit {
@@ -382,10 +463,20 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                     });
                     if active_changed {
                         if let Some(rect) = active_rect {
-                            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                            // 瞬跳而非默认动画(默认 0.1-0.3s 内标签条在滑,期间
+                            // 任何点击的松开都会落在错的 widget 上被 egui 静默取消)
+                            ui.scroll_to_rect_animation(
+                                rect,
+                                Some(egui::Align::Center),
+                                egui::style::ScrollAnimation::none(),
+                            );
                         }
                     }
                 });
+            TABBAR_OFFSET_X.store(
+                scroll_out.state.offset.x.to_bits(),
+                std::sync::atomic::Ordering::Relaxed,
+            );
         });
 
     ctx.memory_mut(|m| {
