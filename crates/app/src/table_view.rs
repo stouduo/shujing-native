@@ -233,6 +233,11 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
         m.data
             .get_temp::<(usize, String)>(egui::Id::new("tab-rename"))
     });
+    if let Some((ri, _)) = &rename {
+        if *ri >= app.tabs.len() {
+            rename = None;
+        }
+    }
 
     egui::TopBottomPanel::top("tabbar")
         .show_separator_line(false)
@@ -246,6 +251,9 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             egui::ScrollArea::horizontal()
                 .id_salt("tabbar-scroll")
                 .auto_shrink([false, true])
+                // 关键:标签栏本身必须由 tab 自己处理拖拽排序,
+                // 不能让 ScrollArea 把“按下+轻微移动”吞成拖拽滚动,否则点击/关闭/右键会间歇失效。
+                .drag_to_scroll(false)
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
                     // 鼠标滚轮在标签栏上 = 横向滚动;必须判断指针是否真的在标签栏内,
@@ -403,12 +411,18 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 .remove_temp::<(usize, String)>(egui::Id::new("tab-rename"))
         });
     }
+    let had_close = !close_set.is_empty() || close.is_some();
     if !close_set.is_empty() {
         for i in close_set.into_iter().rev() {
             app.close_tab(i);
         }
     } else if let Some(i) = close {
         app.close_tab(i);
+    }
+    // 关闭任何标签后清掉重命名状态,避免索引落空后“下一个标签”被误当成重命名输入框,
+    // 表现为点击/右键/关闭都失灵。
+    if had_close {
+        rename = None;
     }
     if let Some(i) = activate {
         app.active_tab = i;
@@ -451,14 +465,33 @@ fn draw_one_tab(
         w - 76.0,
     );
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), Sense::click_and_drag());
+    let close_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 16.0, rect.center().y),
+        egui::vec2(22.0, 22.0),
+    );
+    let close_hovered = resp.hovered()
+        && resp
+            .hover_pos()
+            .map(|p| close_rect.contains(p))
+            .unwrap_or(false);
     let mut activated = resp.clicked();
     let mut closed = resp.middle_clicked();
+    // × 不再用第二个重叠 widget:在同一个 tab response 上按释放位置分流。
+    // 这样不会出现“tab 体抢走 × 的 click”或两组命中区互相打架。
+    if resp.clicked() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            if close_rect.contains(p) {
+                activated = false;
+                closed = true;
+            }
+        }
+    }
     let drag_delta = if resp.dragged() {
         resp.drag_delta().x
     } else {
         0.0
     };
-    let double_clicked = resp.double_clicked();
+    let double_clicked = resp.double_clicked() && !closed;
     let mut rename_commit = false;
     let mut rename_cancel = false;
     let mut menu: Option<u8> = None;
@@ -536,8 +569,7 @@ fn draw_one_tab(
         // 属于正常拖选,不能当退出;框外按下(click 或 drag 起点)则立即退出——
         // egui 0.31 的 TextEdit 只在回车时交焦点,不主动 surrender 的话
         // request_focus 每帧把焦点抢回,重命名粘死(⌘W 拦死、右键无菜单)
-        let press_outside =
-            ui.input(|i| i.pointer.primary_pressed()) && !r.hovered();
+        let press_outside = ui.input(|i| i.pointer.primary_pressed()) && !r.hovered();
         if press_outside && r.has_focus() {
             ui.memory_mut(|mem| mem.surrender_focus(r.id));
         }
@@ -548,8 +580,8 @@ fn draw_one_tab(
         // 提交判定要认「本帧曾持有(lost_focus)或仍持有」两种形态
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
         rename_commit = enter && (r.has_focus() || r.lost_focus());
-        rename_cancel = (press_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)))
-            && !rename_commit;
+        rename_cancel =
+            (press_outside || ui.input(|i| i.key_pressed(egui::Key::Escape))) && !rename_commit;
     } else {
         let text_painter = ui.painter().with_clip_rect(egui::Rect::from_min_max(
             egui::pos2(rect.left() + 32.0, rect.top()),
@@ -562,27 +594,21 @@ fn draw_one_tab(
         );
     }
 
-    let crect = egui::Rect::from_center_size(
-        egui::pos2(rect.right() - 16.0, rect.center().y),
-        egui::vec2(20.0, 20.0),
-    );
-    let cresp = ui.allocate_rect(crect, Sense::click());
-    if cresp.hovered() {
-        ui.painter()
-            .rect_filled(crect.shrink(2.0), egui::CornerRadius::same(5), p.elevated);
+    if close_hovered {
+        ui.painter().rect_filled(
+            close_rect.shrink(2.0),
+            egui::CornerRadius::same(5),
+            p.elevated,
+        );
     }
-    let xcol = if cresp.hovered() {
+    let xcol = if close_hovered {
         p.text
     } else if active {
         p.text2
     } else {
         p.muted
     };
-    icons::paint_close(ui.painter(), crect.center(), 4.0, xcol);
-    if cresp.clicked() {
-        closed = true;
-        activated = false;
-    }
+    icons::paint_close(ui.painter(), close_rect.center(), 4.0, xcol);
     (
         TabEvents {
             activated,
@@ -1344,8 +1370,7 @@ pub(crate) fn draw_table_view(
                 if tab.base_widths.len() != columns.len() {
                     tab.base_widths = suggested_widths_vis(rows, columns, &vis_idx);
                 }
-                let col_widths =
-                    fitted_from_base(tab.base_widths.clone(), ui.available_width());
+                let col_widths = fitted_from_base(tab.base_widths.clone(), ui.available_width());
                 let desired_w =
                     if tab.show_rowno { 48.0 } else { 0.0 } + col_widths.iter().sum::<f32>();
 
@@ -1413,8 +1438,7 @@ pub(crate) fn draw_table_view(
                         }
                     });
                 // 冻结列编辑框归属判定用「上一帧」横向偏移(与表格渲染时的判定一致)
-                let prev_hscroll =
-                    LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
+                let prev_hscroll = LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
                 LAST_HSCROLL_X.store(
                     hout.state.offset.x as i32,
                     std::sync::atomic::Ordering::Relaxed,
@@ -1536,7 +1560,8 @@ pub(crate) fn draw_table_view(
                 let typed = ui.input(|i| {
                     i.events.iter().find_map(|e| match e {
                         egui::Event::Text(t)
-                            if !t.is_empty() && t.chars().next().is_some_and(|c| !c.is_control()) =>
+                            if !t.is_empty()
+                                && t.chars().next().is_some_and(|c| !c.is_control()) =>
                         {
                             t.chars().next().map(|c| c.to_string())
                         }
@@ -1564,8 +1589,7 @@ pub(crate) fn draw_table_view(
                 }
             }
             if copy_text.is_none() && editing.is_none() && !field_focused {
-                if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C))
-                    && sel_spanning
+                if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) && sel_spanning
                 {
                     // 矩形选区:复制 行×可见列 TSV
                     if let Some(r) = *sel_range {
@@ -1682,15 +1706,10 @@ pub(crate) fn draw_table_view(
                                 pk_cols
                                     .iter()
                                     .map(|pc| {
-                                        let pi =
-                                            columns.iter().position(|c| c == pc).unwrap_or(0);
+                                        let pi = columns.iter().position(|c| c == pc).unwrap_or(0);
                                         (
                                             pc.clone(),
-                                            rows[ri]
-                                                .get(pi)
-                                                .cloned()
-                                                .flatten()
-                                                .unwrap_or_default(),
+                                            rows[ri].get(pi).cloned().flatten().unwrap_or_default(),
                                         )
                                     })
                                     .collect(),
@@ -1928,14 +1947,9 @@ fn range_tint(accent: Color32) -> Color32 {
 }
 
 /// 选区两端归一化为(左上,右下)
-fn norm_range(
-    r: ((usize, usize), (usize, usize)),
-) -> ((usize, usize), (usize, usize)) {
+fn norm_range(r: ((usize, usize), (usize, usize))) -> ((usize, usize), (usize, usize)) {
     let ((r1, c1), (r2, c2)) = r;
-    (
-        (r1.min(r2), c1.min(c2)),
-        (r1.max(r2), c1.max(c2)),
-    )
+    ((r1.min(r2), c1.min(c2)), (r1.max(r2), c1.max(c2)))
 }
 
 /// 冻结列覆盖层需要的渲染几何(每帧由 draw_data_table 填充)
@@ -1997,11 +2011,13 @@ fn draw_data_table(
         )
     });
     let pointer_pos_dv = ui.input(|i| i.pointer.latest_pos());
-    let (pointer_cmd_dv, pointer_shift_dv) =
-        ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+    let (pointer_cmd_dv, pointer_shift_dv) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
     // 按压点必须在本网格层(模态/菜单在其上层,几何命中需手动避让)
     let pointer_on_grid_layer = pointer_pos_dv
-        .map(|pt| ui.ctx().memory(|m| m.layer_id_at(pt) == Some(ui.layer_id())))
+        .map(|pt| {
+            ui.ctx()
+                .memory(|m| m.layer_id_at(pt) == Some(ui.layer_id()))
+        })
         .unwrap_or(false);
     // TableBuilder 的行/列间距取自 item_spacing:清零才能得到原型的连续表头与 32pt 行高
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
@@ -2032,8 +2048,12 @@ fn draw_data_table(
     for (vw, _vi) in vis_idx.iter().enumerate() {
         // initial(而非 exact):exact 把 width_range 钉死在 w..=w,拖拽调宽被钳到 0。
         // 首帧用启发式宽度建状态,之后由 TableState 保持(可拖宽)。
-        tb = tb
-            .column(Column::initial(col_widths[vw]).resizable(true).clip(true).at_least(40.0));
+        tb = tb.column(
+            Column::initial(col_widths[vw])
+                .resizable(true)
+                .clip(true)
+                .at_least(40.0),
+        );
     }
     tb = tb.column(Column::remainder().at_least(0.0));
     tb.header(theme::HEADER_H, |mut header| {
@@ -2145,7 +2165,12 @@ fn draw_data_table(
                     let hit = ri >= r1 && ri <= r2 && ci >= c1 && ci <= c2;
                     (
                         hit,
-                        (hit && ri == r1, hit && ri == r2, hit && ci == c1, hit && ci == c2),
+                        (
+                            hit && ri == r1,
+                            hit && ri == r2,
+                            hit && ci == c1,
+                            hit && ci == c2,
+                        ),
                     )
                 }
                 None => (false, (false, false, false, false)),
@@ -2156,7 +2181,10 @@ fn draw_data_table(
         let hovers = |rect: egui::Rect| {
             pointer
                 .map(|pt| {
-                    pt.y >= rect.top() && pt.y < rect.bottom() && pt.x >= table_left && pt.x <= table_right
+                    pt.y >= rect.top()
+                        && pt.y < rect.bottom()
+                        && pt.x >= table_left
+                        && pt.x <= table_right
                 })
                 .unwrap_or(false)
         };
@@ -2222,8 +2250,8 @@ fn draw_data_table(
                 let frozen_scrolled = frozen_vis > 0
                     && ci < frozen_vis
                     && LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32 > 0.5;
-                let cell_editing = matches!(*editing, Some((er, ec)) if er == ri && ec == ci)
-                    && !frozen_scrolled;
+                let cell_editing =
+                    matches!(*editing, Some((er, ec)) if er == ri && ec == ci) && !frozen_scrolled;
                 let changed = changes.iter().any(|(r, cn, _)| *r == ri && cn == col_name);
                 if cell_editing {
                     row.col(|ui| {
@@ -2321,131 +2349,133 @@ fn draw_data_table(
             geom.vis_rows.push((ri, row_y.get()));
             let _ = is_editing_row;
         });
-            // —— 矩形拖选状态机(直接操作):按住数据格拖 = 选区;按住行号拖 = 行多选。
-            // 命中用几何反推;钉住覆盖层滚动时做逆映射(按上一帧横向偏移)
-            {
-                let pointer_pos = pointer_pos_dv;
-                let ws = &ws_snapshot;
-                let rowno_w =
-                    if show_rowno { ws.first().copied().unwrap_or(48.0) } else { 0.0 };
-                let w_of = |i: usize| -> f32 {
-                    ws.get(if show_rowno { 1 + i } else { i }).copied().unwrap_or(120.0)
-                };
-                let body_top =
-                    geom.header_top.unwrap_or(f32::NEG_INFINITY) + theme::HEADER_H;
-                let off_x = LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
-                // 屏幕 y → 行号(行虚拟化首行带裁剪,须按记录的真实行带查)
-                let row_at = |py: f32| -> Option<usize> {
-                    geom
-                        .vis_rows
-                        .iter()
-                        .find(|(_, y)| py >= *y && py < *y + theme::ROW_H)
-                        .map(|(ri, _)| *ri)
-                };
-                // 屏幕坐标 → (行, 可视列);行号列返回 None 由行号分支处理
-                let hit = |pt: egui::Pos2| -> Option<(usize, usize)> {
-                    if pt.y < body_top {
-                        return None;
-                    }
-                    let ri = row_at(pt.y)?;
-                    if ri >= rows.len() {
-                        return None;
-                    }
-                    if frozen_vis > 0 && off_x > 0.5 {
-                        let viewport_left = table_left + off_x;
-                        let region_w = rowno_w + (0..frozen_vis).map(w_of).sum::<f32>();
-                        if pt.x >= viewport_left && pt.x < viewport_left + region_w {
-                            if pt.x < viewport_left + rowno_w {
-                                return None;
-                            }
-                            let fx = pt.x - viewport_left - rowno_w;
-                            let mut acc = 0.0;
-                            let mut ci = frozen_vis - 1;
-                            for i in 0..frozen_vis {
-                                let w2 = w_of(i);
-                                if fx < acc + w2 {
-                                    ci = i;
-                                    break;
-                                }
-                                acc += w2;
-                            }
-                            return Some((ri, ci));
+        // —— 矩形拖选状态机(直接操作):按住数据格拖 = 选区;按住行号拖 = 行多选。
+        // 命中用几何反推;钉住覆盖层滚动时做逆映射(按上一帧横向偏移)
+        {
+            let pointer_pos = pointer_pos_dv;
+            let ws = &ws_snapshot;
+            let rowno_w = if show_rowno {
+                ws.first().copied().unwrap_or(48.0)
+            } else {
+                0.0
+            };
+            let w_of = |i: usize| -> f32 {
+                ws.get(if show_rowno { 1 + i } else { i })
+                    .copied()
+                    .unwrap_or(120.0)
+            };
+            let body_top = geom.header_top.unwrap_or(f32::NEG_INFINITY) + theme::HEADER_H;
+            let off_x = LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
+            // 屏幕 y → 行号(行虚拟化首行带裁剪,须按记录的真实行带查)
+            let row_at = |py: f32| -> Option<usize> {
+                geom.vis_rows
+                    .iter()
+                    .find(|(_, y)| py >= *y && py < *y + theme::ROW_H)
+                    .map(|(ri, _)| *ri)
+            };
+            // 屏幕坐标 → (行, 可视列);行号列返回 None 由行号分支处理
+            let hit = |pt: egui::Pos2| -> Option<(usize, usize)> {
+                if pt.y < body_top {
+                    return None;
+                }
+                let ri = row_at(pt.y)?;
+                if ri >= rows.len() {
+                    return None;
+                }
+                if frozen_vis > 0 && off_x > 0.5 {
+                    let viewport_left = table_left + off_x;
+                    let region_w = rowno_w + (0..frozen_vis).map(w_of).sum::<f32>();
+                    if pt.x >= viewport_left && pt.x < viewport_left + region_w {
+                        if pt.x < viewport_left + rowno_w {
+                            return None;
                         }
-                    }
-                    let cx = pt.x - table_left;
-                    if cx < rowno_w {
-                        return None;
-                    }
-                    let mut acc = rowno_w;
-                    for i in 0..vis_idx.len() {
-                        let w2 = w_of(i);
-                        if cx < acc + w2 {
-                            return Some((ri, i));
-                        }
-                        acc += w2;
-                    }
-                    None
-                };
-                let rowno_hit = |pt: egui::Pos2| -> Option<usize> {
-                    if rowno_w <= 0.0 || pt.y < body_top {
-                        return None;
-                    }
-                    let ri = row_at(pt.y)?;
-                    if ri >= rows.len() {
-                        return None;
-                    }
-                    if frozen_vis > 0 && off_x > 0.5 {
-                        let viewport_left = table_left + off_x;
-                        ((pt.x >= viewport_left) && (pt.x < viewport_left + rowno_w))
-                            .then_some(ri)
-                    } else {
-                        ((pt.x >= table_left) && (pt.x < table_left + rowno_w)).then_some(ri)
-                    }
-                };
-                if p_pressed && pointer_on_grid_layer {
-                    if let Some(pt) = pointer_pos {
-                        let (cmd, shift) = (pointer_cmd_dv, pointer_shift_dv);
-                        if let Some(ri) = rowno_hit(pt) {
-                            *drag_row = Some(ri);
-                            *sel_range = None;
-                            if !cmd && !shift {
-                                multi_sel.clear();
+                        let fx = pt.x - viewport_left - rowno_w;
+                        let mut acc = 0.0;
+                        let mut ci = frozen_vis - 1;
+                        for i in 0..frozen_vis {
+                            let w2 = w_of(i);
+                            if fx < acc + w2 {
+                                ci = i;
+                                break;
                             }
-                        } else if let Some((ri, ci)) = hit(pt) {
-                            let anchor = if shift {
-                                (*selected).unwrap_or((ri, ci))
-                            } else {
-                                (ri, ci)
-                            };
-                            *sel_range = Some(norm_range((anchor, (ri, ci))));
-                            *drag_sel = Some(anchor);
-                            *selected = Some((ri, ci));
-                            if !shift {
-                                multi_sel.clear();
-                            }
-                        } else {
-                            // 按在占位列/表尾空白:解除矩形选区(拖选高亮不残留)
-                            *sel_range = None;
+                            acc += w2;
                         }
-                    }
-                } else if p_down {
-                    if let Some(pt) = pointer_pos {
-                        if let (Some(a), Some(ri)) = (*drag_row, rowno_hit(pt)) {
-                            let (lo, hi) = (a.min(ri), a.max(ri));
-                            *multi_sel = (lo..=hi).collect();
-                        } else if let (Some(anchor), Some((ri, ci))) = (*drag_sel, hit(pt)) {
-                            let next = norm_range((anchor, (ri, ci)));
-                            if *sel_range != Some(next) {
-                                *sel_range = Some(next);
-                            }
-                        }
+                        return Some((ri, ci));
                     }
                 }
-                if p_released {
-                    *drag_sel = None;
-                    *drag_row = None;
+                let cx = pt.x - table_left;
+                if cx < rowno_w {
+                    return None;
+                }
+                let mut acc = rowno_w;
+                for i in 0..vis_idx.len() {
+                    let w2 = w_of(i);
+                    if cx < acc + w2 {
+                        return Some((ri, i));
+                    }
+                    acc += w2;
+                }
+                None
+            };
+            let rowno_hit = |pt: egui::Pos2| -> Option<usize> {
+                if rowno_w <= 0.0 || pt.y < body_top {
+                    return None;
+                }
+                let ri = row_at(pt.y)?;
+                if ri >= rows.len() {
+                    return None;
+                }
+                if frozen_vis > 0 && off_x > 0.5 {
+                    let viewport_left = table_left + off_x;
+                    ((pt.x >= viewport_left) && (pt.x < viewport_left + rowno_w)).then_some(ri)
+                } else {
+                    ((pt.x >= table_left) && (pt.x < table_left + rowno_w)).then_some(ri)
+                }
+            };
+            if p_pressed && pointer_on_grid_layer {
+                if let Some(pt) = pointer_pos {
+                    let (cmd, shift) = (pointer_cmd_dv, pointer_shift_dv);
+                    if let Some(ri) = rowno_hit(pt) {
+                        *drag_row = Some(ri);
+                        *sel_range = None;
+                        if !cmd && !shift {
+                            multi_sel.clear();
+                        }
+                    } else if let Some((ri, ci)) = hit(pt) {
+                        let anchor = if shift {
+                            (*selected).unwrap_or((ri, ci))
+                        } else {
+                            (ri, ci)
+                        };
+                        *sel_range = Some(norm_range((anchor, (ri, ci))));
+                        *drag_sel = Some(anchor);
+                        *selected = Some((ri, ci));
+                        if !shift {
+                            multi_sel.clear();
+                        }
+                    } else {
+                        // 按在占位列/表尾空白:解除矩形选区(拖选高亮不残留)
+                        *sel_range = None;
+                    }
+                }
+            } else if p_down {
+                if let Some(pt) = pointer_pos {
+                    if let (Some(a), Some(ri)) = (*drag_row, rowno_hit(pt)) {
+                        let (lo, hi) = (a.min(ri), a.max(ri));
+                        *multi_sel = (lo..=hi).collect();
+                    } else if let (Some(anchor), Some((ri, ci))) = (*drag_sel, hit(pt)) {
+                        let next = norm_range((anchor, (ri, ci)));
+                        if *sel_range != Some(next) {
+                            *sel_range = Some(next);
+                        }
+                    }
                 }
             }
+            if p_released {
+                *drag_sel = None;
+                *drag_row = None;
+            }
+        }
     });
     // 编辑行滚出视口(本帧未渲染):取消编辑,避免悬死状态
     if editing_at_frame_start && editing.is_some() && !editing_row_rendered.get() {
@@ -2552,7 +2582,13 @@ fn draw_frozen_overlay(
         }
         let color = if sorted.is_some() { p.accent } else { p.text2 };
         let font = egui::FontId::proportional(theme::FS_HEADER);
-        let g = icons::text_galley(&cp, c.clone(), font, Color32::PLACEHOLDER, rect.width() - 24.0);
+        let g = icons::text_galley(
+            &cp,
+            c.clone(),
+            font,
+            Color32::PLACEHOLDER,
+            rect.width() - 24.0,
+        );
         match sorted {
             Some(asc) => {
                 cp.galley(
@@ -2578,7 +2614,9 @@ fn draw_frozen_overlay(
         }
         // 与底层列头一致的交互:点击排序、右键同款菜单
         let resp = ui.interact(rect, egui::Id::new(("fz-h", tab_id, vw)), Sense::click());
-        let _ = resp.clone().on_hover_text("点击排序:升序 → 降序 → 取消;拖动列边缘调宽");
+        let _ = resp
+            .clone()
+            .on_hover_text("点击排序:升序 → 降序 → 取消;拖动列边缘调宽");
         if resp.clicked() {
             *sc = Some(c.clone());
         }
@@ -2615,12 +2653,15 @@ fn draw_frozen_overlay(
             break;
         }
         let rowdata = &rows[ri];
-        let row_selected = matches!(*selected, Some((sr, _)) if sr == ri)
-            || multi_sel.binary_search(&ri).is_ok();
+        let row_selected =
+            matches!(*selected, Some((sr, _)) if sr == ri) || multi_sel.binary_search(&ri).is_ok();
         let hovered = pointer
-            .map(|pt| pt.y >= y && pt.y < y + theme::ROW_H && pt.x >= left && pt.x < left + region_w)
+            .map(|pt| {
+                pt.y >= y && pt.y < y + theme::ROW_H && pt.x >= left && pt.x < left + region_w
+            })
             .unwrap_or(false);
-        let band = egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(region_w, theme::ROW_H));
+        let band =
+            egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(region_w, theme::ROW_H));
         if row_selected {
             painter.rect_filled(band, 0, p.selected_row);
         } else if hovered {
@@ -2642,7 +2683,8 @@ fn draw_frozen_overlay(
                 ],
                 egui::Stroke::new(1.0, p.row_line),
             );
-            let r = egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(rowno_w, theme::ROW_H));
+            let r =
+                egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(rowno_w, theme::ROW_H));
             let resp = ui.interact(r, egui::Id::new(("fz-r", tab_id, ri)), Sense::click());
             let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
             if resp.clicked() {
@@ -2678,12 +2720,19 @@ fn draw_frozen_overlay(
                     let hit = ri >= r1 && ri <= r2 && ci >= c1 && ci <= c2;
                     (
                         hit,
-                        (hit && ri == r1, hit && ri == r2, hit && ci == c1, hit && ci == c2),
+                        (
+                            hit && ri == r1,
+                            hit && ri == r2,
+                            hit && ci == c1,
+                            hit && ci == c2,
+                        ),
                     )
                 }
                 None => (false, (false, false, false, false)),
             };
-            let changed = changes.iter().any(|(r2, cn, _)| *r2 == ri && cn == col_name);
+            let changed = changes
+                .iter()
+                .any(|(r2, cn, _)| *r2 == ri && cn == col_name);
             let cell_editing = matches!(*editing, Some((er, ec)) if er == ri && ec == ci);
             let mut cell_ui = ui.new_child(
                 egui::UiBuilder::new()
@@ -3074,7 +3123,10 @@ fn draw_data_cell(
         if multi_sel.len() > 1 && multi_sel.binary_search(&ri).is_ok() {
             // 多选上下文:批量删除(直接操作)
             if ui
-                .add_enabled(has_pk, egui::Button::new(format!("删除选中 {} 行…", multi_sel.len())))
+                .add_enabled(
+                    has_pk,
+                    egui::Button::new(format!("删除选中 {} 行…", multi_sel.len())),
+                )
                 .clicked()
             {
                 *menu_action = Some(TabAction::DeleteRows {
@@ -3369,7 +3421,10 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             let mut by_row: std::collections::BTreeMap<usize, Vec<(String, Option<String>)>> =
                 Default::default();
             for (ri, col, val) in &t.changes {
-                by_row.entry(*ri).or_default().push((col.clone(), val.clone()));
+                by_row
+                    .entry(*ri)
+                    .or_default()
+                    .push((col.clone(), val.clone()));
             }
             let mut updates = Vec::new();
             let mut skipped_empty_pk = 0usize;
@@ -3580,13 +3635,11 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 return;
             };
             let conn_id = q.conn_id.clone();
-            let db = q.database.clone().or_else(|| {
-                app.trees.get(&conn_id).and_then(|t| t.expanded_db.clone())
-            });
-            let key = format!(
-                "{conn_id}|{}|{table}",
-                db.clone().unwrap_or_default()
-            );
+            let db = q
+                .database
+                .clone()
+                .or_else(|| app.trees.get(&conn_id).and_then(|t| t.expanded_db.clone()));
+            let key = format!("{conn_id}|{}|{table}", db.clone().unwrap_or_default());
             if app.ac_columns.contains_key(&key) {
                 return;
             }
@@ -3738,7 +3791,10 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             let mut by_row: std::collections::BTreeMap<usize, Vec<(String, Option<String>)>> =
                 Default::default();
             for (ri, col, val) in &q.q_changes {
-                by_row.entry(*ri).or_default().push((col.clone(), val.clone()));
+                by_row
+                    .entry(*ri)
+                    .or_default()
+                    .push((col.clone(), val.clone()));
             }
             let mut updates = Vec::new();
             for (ri, sets) in by_row {
@@ -3812,8 +3868,8 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             let path = path.display().to_string();
             let tx = app.event_tx.clone();
             net::spawn(async move {
-                let result = shujing_core::excel::export_xlsx(&columns, &rows, &path)
-                    .map(|_| path.clone());
+                let result =
+                    shujing_core::excel::export_xlsx(&columns, &rows, &path).map(|_| path.clone());
                 let _ = tx.send(BgEvent::ExportDone { result });
             });
         }
@@ -3867,7 +3923,10 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
             };
             app.confirm = Some(crate::app::ConfirmState {
                 title: "删除行".into(),
-                message: format!("确认删除第 {} 行?将直接对数据库执行 DELETE,不可撤销。", ri + 1),
+                message: format!(
+                    "确认删除第 {} 行?将直接对数据库执行 DELETE,不可撤销。",
+                    ri + 1
+                ),
                 expect: None,
                 input: String::new(),
                 conn_id: String::new(),
@@ -4343,11 +4402,7 @@ impl eframe::App for ShujingApp {
                 self.run_query(&id);
             } else {
                 // 表标签:走动作通道(带未保存修改拦截;直接 load_rows 会静默清空改动)
-                execute_tab_action(
-                    self,
-                    ctx,
-                    TabAction::Reload { tab_id: id },
-                );
+                execute_tab_action(self, ctx, TabAction::Reload { tab_id: id });
             }
         }
         if !modal_open
@@ -4356,7 +4411,10 @@ impl eframe::App for ShujingApp {
         {
             ctx.memory_mut(|m| m.request_focus(egui::Id::new("table-filter")));
         }
-        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::L) && i.modifiers.command && i.modifiers.shift) {
+        if !modal_open
+            && ctx
+                .input(|i| i.key_pressed(egui::Key::L) && i.modifiers.command && i.modifiers.shift)
+        {
             let dark = !theme::is_dark();
             self.set_theme_dark(ctx, dark);
         }
@@ -4366,7 +4424,10 @@ impl eframe::App for ShujingApp {
                 sel: 0,
             });
         }
-        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command && i.modifiers.shift) {
+        if !modal_open
+            && ctx
+                .input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command && i.modifiers.shift)
+        {
             self.global_search = Some(crate::app::GlobalSearchState {
                 conn_id: String::new(),
                 db: None,
@@ -4397,7 +4458,8 @@ impl eframe::App for ShujingApp {
                 self.active_tab = n - 1;
             }
         }
-        if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command)
+        if !modal_open
+            && ctx.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command)
             && !self.tabs.is_empty()
         {
             let id = self.tabs[self.active_tab].id.clone();
@@ -4443,7 +4505,7 @@ impl eframe::App for ShujingApp {
                 TabKind::Query(q) => {
                     let conns = self.conns.clone();
                     let snippets = self.snippets.clone(); // Arc:廉价引用计数,不再深拷贝
-                    // 补全环境:当前库表名 + 已缓存的列名
+                                                          // 补全环境:当前库表名 + 已缓存的列名
                     let ac_db = q
                         .database
                         .clone()

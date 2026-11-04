@@ -110,14 +110,14 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         .map(|i| shujing_core::TableMeta {
             name: format!("archive_table_{i}"),
             kind: "table".into(),
-        owner: None,
+            owner: None,
         })
         .collect();
     let comic: Vec<shujing_core::TableMeta> = (0..4)
         .map(|i| shujing_core::TableMeta {
             name: format!("comic_table_{i}"),
             kind: "table".into(),
-        owner: None,
+            owner: None,
         })
         .collect();
     let tree = ConnTree {
@@ -391,7 +391,19 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         }
         TabKind::Query(q) => {
             let conns = app.conns.clone();
-            let _ = query::draw_query_view(&conns, ctx, &tab_id, q, &[], &[], false, &[], &Default::default(), None, false);
+            let _ = query::draw_query_view(
+                &conns,
+                ctx,
+                &tab_id,
+                q,
+                &[],
+                &[],
+                false,
+                &[],
+                &Default::default(),
+                None,
+                false,
+            );
         }
         TabKind::Designer(d) => {
             crate::designer::stash_dialect(ctx, shujing_core::DbType::MySql);
@@ -617,11 +629,27 @@ fn render_query_view() {
         read_only: false,
     }];
     let cell = std::cell::RefCell::new(Some(q));
-    let dbs = vec!["dramato".to_string(), "shop".to_string(), "stats".to_string()];
+    let dbs = vec![
+        "dramato".to_string(),
+        "shop".to_string(),
+        "stats".to_string(),
+    ];
     render("query", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
-        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true, &[], &Default::default(), None, false);
+        let _ = query::draw_query_view(
+            &conns,
+            ctx,
+            "q1",
+            q,
+            &[],
+            &dbs,
+            true,
+            &[],
+            &Default::default(),
+            None,
+            false,
+        );
     });
 }
 
@@ -667,7 +695,19 @@ fn render_query_view_narrow_with_db() {
     render("query_narrow_db", 1024.0, 700.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
-        let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &dbs, true, &[], &Default::default(), None, false);
+        let _ = query::draw_query_view(
+            &conns,
+            ctx,
+            "q1",
+            q,
+            &[],
+            &dbs,
+            true,
+            &[],
+            &Default::default(),
+            None,
+            false,
+        );
     });
 }
 
@@ -1253,8 +1293,7 @@ fn data_grid_hscroll_works() {
         for _ in 0..12 {
             harness.step();
         }
-        let x_before_drag =
-            table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
+        let x_before_drag = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
         harness
             .input_mut()
             .events
@@ -1286,8 +1325,7 @@ fn data_grid_hscroll_works() {
             .push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
         harness.step();
         harness.step();
-        let x_after_drag =
-            table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
+        let x_after_drag = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(
             x_before_drag, x_after_drag,
             "数据网格按住拖动应是选区,不应连带平移"
@@ -1440,7 +1478,11 @@ fn render_query_autocomplete() {
     let mut cols = std::collections::HashMap::new();
     cols.insert(
         "c1|dramato|users".to_string(),
-        vec!["id".to_string(), "user_name".to_string(), "status".to_string()],
+        vec![
+            "id".to_string(),
+            "user_name".to_string(),
+            "status".to_string(),
+        ],
     );
     render("query_autocomplete", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
@@ -1515,19 +1557,20 @@ fn frozen_columns_pin_while_hscrolling() {
         h.step();
         h.step();
     };
-    let crop_frozen_region = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| -> Vec<u8> {
-        let img = h.render().expect("render");
-        let raw = img.as_raw();
-        let width = img.width() as usize;
-        // 逻辑 (260..420, 200..520) → 物理 ×2:落在冻结区内、表头之下
-        let (x0, x1, y0, y1) = (260usize * 2, 420usize * 2, 200usize * 2, 520usize * 2);
-        let mut out = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);
-        for y in y0..y1 {
-            let base = y * width * 4;
-            out.extend_from_slice(&raw[base + x0 * 4..base + x1 * 4]);
-        }
-        out
-    };
+    let crop_frozen_region =
+        |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| -> Vec<u8> {
+            let img = h.render().expect("render");
+            let raw = img.as_raw();
+            let width = img.width() as usize;
+            // 逻辑 (260..420, 200..520) → 物理 ×2:落在冻结区内、表头之下
+            let (x0, x1, y0, y1) = (260usize * 2, 420usize * 2, 200usize * 2, 520usize * 2);
+            let mut out = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);
+            for y in y0..y1 {
+                let base = y * width * 4;
+                out.extend_from_slice(&raw[base + x0 * 4..base + x1 * 4]);
+            }
+            out
+        };
 
     wheel(&mut harness, 600.0);
     let crop1 = crop_frozen_region(&mut harness);
@@ -1620,7 +1663,8 @@ fn frozen_overlay_editor_and_unfreeze() {
     // 取消冻结:视觉回到底层渲染,不再有覆盖层
     let img = harness.render().expect("render");
     let _ = std::fs::create_dir_all("/tmp/shujing_ui");
-    img.save("/tmp/shujing_ui/frozen_edit.png").expect("保存 PNG 失败");
+    img.save("/tmp/shujing_ui/frozen_edit.png")
+        .expect("保存 PNG 失败");
 }
 
 #[test]
@@ -1651,11 +1695,7 @@ fn query_grid_frozen_columns_pin() {
     q.results = vec![shujing_core::ExecResult {
         columns: (0..6).map(|i| format!("col_{i}")).collect(),
         rows: (0..14)
-            .map(|i| {
-                (0..6)
-                    .map(|_| Some(format!("{filler}-{i}")))
-                    .collect()
-            })
+            .map(|i| (0..6).map(|_| Some(format!("{filler}-{i}"))).collect())
             .collect(),
         affected: 0,
         truncated: false,
@@ -1690,25 +1730,38 @@ fn query_grid_frozen_columns_pin() {
                 }
                 let mut b = cell.borrow_mut();
                 let q = b.as_mut().unwrap();
-                let _ = query::draw_query_view(&conns, ctx, "q1", q, &[], &[], false, &[], &Default::default(), None, false);
+                let _ = query::draw_query_view(
+                    &conns,
+                    ctx,
+                    "q1",
+                    q,
+                    &[],
+                    &[],
+                    false,
+                    &[],
+                    &Default::default(),
+                    None,
+                    false,
+                );
             },
             cell,
         );
     harness.run_steps(6);
 
-    let crop_frozen = |h: &mut egui_kittest::Harness<std::cell::RefCell<Option<QueryTab>>>| -> Vec<u8> {
-        let img = h.render().expect("render");
-        let raw = img.as_raw();
-        let width = img.width() as usize;
-        // 逻辑 (250..360, 460..700) → 物理 ×2:冻结区内、分界线(≈x381)左侧、表头下、滚动条上
-        let (x0, x1, y0, y1) = (250usize * 2, 360usize * 2, 460usize * 2, 700usize * 2);
-        let mut out = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);
-        for y in y0..y1 {
-            let base = y * width * 4;
-            out.extend_from_slice(&raw[base + x0 * 4..base + x1 * 4]);
-        }
-        out
-    };
+    let crop_frozen =
+        |h: &mut egui_kittest::Harness<std::cell::RefCell<Option<QueryTab>>>| -> Vec<u8> {
+            let img = h.render().expect("render");
+            let raw = img.as_raw();
+            let width = img.width() as usize;
+            // 逻辑 (250..360, 460..700) → 物理 ×2:冻结区内、分界线(≈x381)左侧、表头下、滚动条上
+            let (x0, x1, y0, y1) = (250usize * 2, 360usize * 2, 460usize * 2, 700usize * 2);
+            let mut out = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);
+            for y in y0..y1 {
+                let base = y * width * 4;
+                out.extend_from_slice(&raw[base + x0 * 4..base + x1 * 4]);
+            }
+            out
+        };
     let wheel = |h: &mut egui_kittest::Harness<std::cell::RefCell<Option<QueryTab>>>, dx: f32| {
         h.input_mut()
             .events
@@ -1739,7 +1792,8 @@ fn query_grid_frozen_columns_pin() {
 
     let img = harness.render().expect("render final");
     let _ = std::fs::create_dir_all("/tmp/shujing_ui");
-    img.save("/tmp/shujing_ui/query_frozen.png").expect("保存 PNG 失败");
+    img.save("/tmp/shujing_ui/query_frozen.png")
+        .expect("保存 PNG 失败");
 }
 
 #[test]
@@ -1787,7 +1841,9 @@ fn cell_range_drag_select_and_type_fill() {
         for k in 1..=4 {
             let x = from.x + (to.x - from.x) * k as f32 / 4.0;
             let y = from.y + (to.y - from.y) * k as f32 / 4.0;
-            h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y)));
+            h.input_mut()
+                .events
+                .push(egui::Event::PointerMoved(egui::pos2(x, y)));
             h.step();
         }
         h.input_mut().events.push(egui::Event::PointerButton {
@@ -1808,10 +1864,7 @@ fn cell_range_drag_select_and_type_fill() {
         let app = harness.state().borrow();
         let t = app.tabs[2].table_data().unwrap();
         let r = t.sel_range.expect("拖选后应有矩形选区");
-        assert!(
-            !t.changes.is_empty() == false,
-            "拖选本身不应产生改动"
-        );
+        assert!(!t.changes.is_empty() == false, "拖选本身不应产生改动");
         r
     };
 
@@ -1863,7 +1916,8 @@ fn cell_range_drag_select_and_type_fill() {
 
     let img = harness.render().expect("render");
     let _ = std::fs::create_dir_all("/tmp/shujing_ui");
-    img.save("/tmp/shujing_ui/range_fill.png").expect("保存 PNG 失败");
+    img.save("/tmp/shujing_ui/range_fill.png")
+        .expect("保存 PNG 失败");
 }
 
 #[test]
@@ -1926,7 +1980,11 @@ fn cmd_a_selects_page_range() {
         let app = harness.state().borrow();
         let t = app.tabs[2].table_data().unwrap();
         // 8 行 × 5 个非主键列(id 是主键,跳过)= 40 处暂存
-        assert_eq!(t.changes.len(), 40, "Delete 全选置 NULL 应暂存 40 处非主键改动");
+        assert_eq!(
+            t.changes.len(),
+            40,
+            "Delete 全选置 NULL 应暂存 40 处非主键改动"
+        );
         assert!(t.changes.iter().all(|(_, cn, _)| cn != "id"));
     }
 }
@@ -1993,7 +2051,10 @@ fn double_click_edit_opens_editor() {
         let app = harness.state().borrow();
         let t = app.tabs[2].table_data().unwrap();
         let pk = !t.pk_cols.is_empty();
-        eprintln!("[dblclick final] pk_cols={:?} editing={:?}", t.pk_cols, t.editing);
+        eprintln!(
+            "[dblclick final] pk_cols={:?} editing={:?}",
+            t.pk_cols, t.editing
+        );
         assert!(pk, "测试表应有主键");
         assert!(t.editing.is_some(), "双击应进入编辑态");
     }
@@ -2078,6 +2139,114 @@ fn tab_close_and_context_menu_work() {
         eprintln!("[tabmenu] tabs={}", app.tabs.len());
         assert_eq!(app.tabs.len(), 1, "「关闭其他」应只留激活标签");
     }
+}
+
+#[test]
+fn tab_overflow_click_close_context_menu_work() {
+    // 标签多到横向溢出时,ScrollArea 的 drag_to_scroll 曾把“按下+轻微移动”
+    // 吞成拖拽滚动,导致 tab 点击/×/右键间歇失效。这里用 11 个标签复现。
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    for i in 0..8 {
+        app.tabs.push(stub_tab(
+            &format!("溢出标签 {i}"),
+            &format!("overflow_table_{i}"),
+        ));
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let click = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>,
+                 pos: egui::Pos2,
+                 button: egui::PointerButton,
+                 jitter: f32| {
+        h.input_mut().events.push(egui::Event::PointerMoved(pos));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        if jitter != 0.0 {
+            h.input_mut()
+                .events
+                .push(egui::Event::PointerMoved(egui::pos2(pos.x + jitter, pos.y)));
+            h.step();
+        }
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(pos.x + jitter, pos.y),
+            button,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+    };
+
+    // 带 8px 手抖点击第 1 个标签 → 应激活
+    click(
+        &mut harness,
+        egui::pos2(300.0, 14.0),
+        egui::PointerButton::Primary,
+        8.0,
+    );
+    assert_eq!(
+        harness.state().borrow().active_tab,
+        0,
+        "溢出标签栏中带手抖点击也应激活 tab"
+    );
+
+    // 点第 1 个标签的 ×(标题宽度实测右缘≈394.7,× 中心≈378.7)
+    click(
+        &mut harness,
+        egui::pos2(378.7, 14.0),
+        egui::PointerButton::Primary,
+        0.0,
+    );
+    assert_eq!(
+        harness.state().borrow().tabs.len(),
+        10,
+        "溢出标签栏中点 × 应关闭标签"
+    );
+
+    // 右键第 1 个标签 → 菜单 →「关闭其他」
+    click(
+        &mut harness,
+        egui::pos2(300.0, 14.0),
+        egui::PointerButton::Secondary,
+        0.0,
+    );
+    click(
+        &mut harness,
+        egui::pos2(340.0, 40.0),
+        egui::PointerButton::Primary,
+        0.0,
+    );
+    assert_eq!(
+        harness.state().borrow().tabs.len(),
+        1,
+        "溢出标签栏右键「关闭其他」应生效"
+    );
 }
 
 #[test]
@@ -2325,7 +2494,9 @@ fn tab_rename_sticky_focus_and_exit() {
     harness.step();
     eprintln!(
         "[rename dbg] focused after click-away = {:?}",
-        harness.ctx.memory(|m| m.focused().map(|f| f.short_debug_format()))
+        harness
+            .ctx
+            .memory(|m| m.focused().map(|f| f.short_debug_format()))
     );
     let n = harness.state().tabs.len();
     eprintln!("[rename] after cmd-w tabs={n} (baseline {base})");
@@ -2470,7 +2641,6 @@ fn tab_rename_exit_by_drag_and_enter_commit() {
         harness.ctx.memory(|m| m.focused().is_none()),
         "拖动后重命名应退出(焦点释放)"
     );
-
 }
 
 #[test]
@@ -2515,7 +2685,10 @@ fn tab_rename_enter_commits() {
         harness.ctx.memory(|m| m.focused().is_some()),
         "双击后重命名框应持有焦点"
     );
-    harness.input_mut().events.push(egui::Event::Text("X".into()));
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::Text("X".into()));
     harness.step();
     harness.input_mut().events.push(egui::Event::Key {
         key: egui::Key::Enter,
