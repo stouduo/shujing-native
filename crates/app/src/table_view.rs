@@ -238,6 +238,10 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             rename = None;
         }
     }
+    // 只在 active 发生变化时把对应标签滚进可视区;首次绘制不强行滚动,避免打断用户。
+    let last_active = ctx.memory(|m| m.data.get_temp::<usize>(egui::Id::new("tabbar-active")));
+    let active_changed = last_active.is_some() && last_active != Some(app.active_tab);
+    let mut active_rect: Option<egui::Rect> = None;
 
     egui::TopBottomPanel::top("tabbar")
         .show_separator_line(false)
@@ -248,13 +252,21 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             bottom: 0,
         }))
         .show(ctx, |ui| {
+            // 标签溢出时给一条可见的细横向滚动条:只有滚轮的话,鼠标用户很难发现
+            // 末尾的“全部标签/＋”。悬浮细条不占标签高度。
+            ui.spacing_mut().scroll.floating = true;
+            ui.spacing_mut().scroll.floating_width = 5.0;
+            ui.spacing_mut().scroll.bar_width = 6.0;
+            ui.spacing_mut().scroll.dormant_handle_opacity = 0.5;
+            ui.spacing_mut().scroll.dormant_background_opacity = 0.0;
+            ui.spacing_mut().scroll.active_handle_opacity = 0.85;
             egui::ScrollArea::horizontal()
                 .id_salt("tabbar-scroll")
                 .auto_shrink([false, true])
                 // 关键:标签栏本身必须由 tab 自己处理拖拽排序,
                 // 不能让 ScrollArea 把“按下+轻微移动”吞成拖拽滚动,否则点击/关闭/右键会间歇失效。
                 .drag_to_scroll(false)
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
                 .show(ui, |ui| {
                     // 鼠标滚轮在标签栏上 = 横向滚动;必须判断指针是否真的在标签栏内,
                     // 否则滚表格时标签栏也会跟着横滚。
@@ -328,7 +340,9 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                     _ => {}
                                 }
                             }
-                            let _ = tab_rect;
+                            if i == app.active_tab {
+                                active_rect = Some(tab_rect);
+                            }
                         }
                         ui.add_space(4.0);
                         // 全部标签(溢出时可下拉直达)
@@ -368,8 +382,18 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                             new_query = true;
                         }
                     });
+                    if active_changed {
+                        if let Some(rect) = active_rect {
+                            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                        }
+                    }
                 });
         });
+
+    ctx.memory_mut(|m| {
+        m.data
+            .insert_temp(egui::Id::new("tabbar-active"), app.active_tab)
+    });
 
     // 拖拽:累计位移超过 48px 与相邻标签交换(一帧一次,余量下一帧继续)
     if let Some((mut di, mut acc)) = drag {
