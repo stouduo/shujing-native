@@ -977,6 +977,7 @@ pub(crate) fn draw_table_view(
         .show(ctx, |ui| {
             theme::hairline_top(ui);
             ui.horizontal_centered(|ui| {
+                let compact_footer = ui.available_width() < 1000.0;
                 let total_text = match tab.total {
                     Some(t) => format!("共 {} 行", icons::thousands(t)),
                     None => "行数未知".to_string(),
@@ -984,8 +985,9 @@ pub(crate) fn draw_table_view(
                 ui.label(RichText::new(total_text).size(11.5).color(p.text2));
                 if let Some(f) = tab.active_filter.clone() {
                     vsep(ui);
+                    let clip = if compact_footer { 10 } else { 20 };
                     ui.label(
-                        RichText::new(format!("已筛选「{}」", icons::clip(&f, 20)))
+                        RichText::new(format!("已筛选「{}」", icons::clip(&f, clip)))
                             .size(11.5)
                             .color(p.accent),
                     );
@@ -1045,26 +1047,27 @@ pub(crate) fn draw_table_view(
                     let ((r1, c1), (r2, c2)) = norm_range(r);
                     if r2 > r1 || c2 > c1 {
                         vsep(ui);
-                        ui.label(
-                            RichText::new(format!(
+                        let msg = if compact_footer {
+                            format!("已选 {}×{}", r2 - r1 + 1, c2 - c1 + 1)
+                        } else {
+                            format!(
                                 "已选 {}×{} · 输入值回车填充 · ⌘C 复制 · Delete 置 NULL",
                                 r2 - r1 + 1,
                                 c2 - c1 + 1
-                            ))
-                            .size(11.5)
-                            .color(p.accent),
-                        );
+                            )
+                        };
+                        ui.label(RichText::new(msg).size(11.5).color(p.accent))
+                            .on_hover_text("输入值回车填充 · ⌘C 复制 · Delete 置 NULL");
                     }
                 } else if tab.multi_sel.len() > 1 {
                     vsep(ui);
-                    ui.label(
-                        RichText::new(format!(
-                            "已选 {} 行 · ⌘C 复制 · 行右键批量删除",
-                            tab.multi_sel.len()
-                        ))
-                        .size(11.5)
-                        .color(p.accent),
-                    );
+                    let msg = if compact_footer {
+                        format!("已选 {} 行", tab.multi_sel.len())
+                    } else {
+                        format!("已选 {} 行 · ⌘C 复制 · 行右键批量删除", tab.multi_sel.len())
+                    };
+                    ui.label(RichText::new(msg).size(11.5).color(p.accent))
+                        .on_hover_text("⌘C 复制 · 行右键批量删除");
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
