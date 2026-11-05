@@ -2254,6 +2254,62 @@ fn tab_overflow_click_close_context_menu_work() {
 /// 命中同一 widget,内容一滑松开就落进邻格,点击被静默取消(="点了没反应")。
 /// 断言用 TABBAR_OFFSET_X 镜像:一次滚轮后偏移必须在极短帧数内停稳
 /// (旧实现读 smooth_scroll_delta,停滚后还要放 0.1-0.3s 尾巴,标签一直在滑)。
+
+/// 数据网格滚轮一步到位(全应用 smooth=raw 覆写的代表用例):
+/// 滚完立刻点单元格/行,内容不能还在滑(旧 smooth 停滚后尾巴 ~0.18s,
+/// 期间点击被 egui 静默取消——与标签栏 v0.12.4 同病同源)。
+#[test]
+fn grid_wheel_scroll_settles_fast() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role"); // role_tab 是 12 列宽表 fixture,保证横向可滚
+    // 真实 update 路径(全局 smooth=raw 覆写在 eframe update 里,draw_app 简化路径不含)
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = app;
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    let off = || table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
+    // 指针放到网格内容区,横向大步进滚轮(shift 语义直接给 x)
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(600.0, 380.0)));
+    harness.step();
+    let before = off();
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-80.0, 0.0),
+        modifiers: Default::default(),
+    });
+    harness.step();
+    let mut drift = 0;
+    let mut last = off();
+    for _ in 0..12 {
+        harness.step();
+        let cur = off();
+        if (cur - last).abs() > 0 {
+            drift += 1;
+        }
+        last = cur;
+    }
+    assert!(
+        (last - before).abs() > 30,
+        "横向滚轮应实际滚动数据网格(before={before}, after={last})"
+    );
+    assert!(
+        drift <= 2,
+        "滚轮后数据网格必须在 2 帧内停稳(实际漂移 {drift} 帧)—— \
+        尾巴期间点单元格/行会被 egui 静默取消"
+    );
+}
+
 #[test]
 fn tabbar_wheel_scroll_settles_fast() {
     let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2264,28 +2320,20 @@ fn tabbar_wheel_scroll_settles_fast() {
             &format!("overflow_table_{i}"),
         ));
     }
-    let cell = std::cell::RefCell::new(app);
-    let setup_done = std::cell::Cell::new(false);
+    // 真实 update 路径(全局 smooth=raw 覆写在 eframe update 里,draw_app 简化路径不含)
     let mut harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1000.0, 700.0))
         .with_pixels_per_point(2.0)
         .with_step_dt(1.0 / 60.0)
-        .build_state(
-            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
-                if !setup_done.get() {
-                    setup_done.set(true);
-                    ShujingApp::apply_fonts(ctx);
-                    crate::theme::set_dark(true);
-                    crate::theme::apply(ctx);
-                    return;
-                }
-                let mut b = app.borrow_mut();
-                draw_app(&mut b, ctx);
-            },
-            cell,
-        );
-    harness.run_steps(6);
-    let off = |h: &egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| {
+        .build_eframe(|cc| {
+            let mut app = app;
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    let off = || {
         f32::from_bits(table_view::TABBAR_OFFSET_X.load(std::sync::atomic::Ordering::Relaxed))
     };
     // 指针先进标签栏(滚轮处理有 rect_contains_pointer 门,指针不在栏内不动)
@@ -2294,7 +2342,7 @@ fn tabbar_wheel_scroll_settles_fast() {
         .events
         .push(egui::Event::PointerMoved(egui::pos2(500.0, 14.0)));
     harness.step();
-    let before = off(&harness);
+    let before = off();
     // 一格大步进滚轮(负向=滚进溢出区;Point |120| ≥ 8 → egui 归入
     // unprocessed 分帧释放,尾巴最重)
     harness.input_mut().events.push(egui::Event::MouseWheel {
@@ -2305,10 +2353,10 @@ fn tabbar_wheel_scroll_settles_fast() {
     harness.step();
     // 记录随后 12 帧的偏移:统计"仍在变化"的帧数
     let mut drift_frames = 0;
-    let mut last = off(&harness);
+    let mut last = off();
     for _ in 0..12 {
         harness.step();
-        let cur = off(&harness);
+        let cur = off();
         if (cur - last).abs() > 0.5 {
             drift_frames += 1;
         }
@@ -2337,28 +2385,20 @@ fn tabbar_autoscroll_is_instant() {
             &format!("overflow_table_{i}"),
         ));
     }
-    let cell = std::cell::RefCell::new(app);
-    let setup_done = std::cell::Cell::new(false);
+    // 真实 update 路径(全局 smooth=raw 覆写在 eframe update 里,draw_app 简化路径不含)
     let mut harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1000.0, 700.0))
         .with_pixels_per_point(2.0)
         .with_step_dt(1.0 / 60.0)
-        .build_state(
-            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
-                if !setup_done.get() {
-                    setup_done.set(true);
-                    ShujingApp::apply_fonts(ctx);
-                    crate::theme::set_dark(true);
-                    crate::theme::apply(ctx);
-                    return;
-                }
-                let mut b = app.borrow_mut();
-                draw_app(&mut b, ctx);
-            },
-            cell,
-        );
-    harness.run_steps(6);
-    let off = |h: &egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| {
+        .build_eframe(|cc| {
+            let mut app = app;
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    let off = || {
         f32::from_bits(table_view::TABBAR_OFFSET_X.load(std::sync::atomic::Ordering::Relaxed))
     };
     // 激活远端标签(x=800 实测命中溢出区)→ 触发 scroll_to_rect
@@ -2382,15 +2422,15 @@ fn tabbar_autoscroll_is_instant() {
     });
     harness.step();
     assert!(
-        harness.state().borrow().active_tab >= 3,
+        harness.state().active_tab >= 3,
         "前置:应激活了溢出区的标签"
     );
     // 随后 12 帧:自动滚入产生的偏移变化帧数必须 ≤3(瞬跳=1-2 帧;动画=6-18 帧)
     let mut drift_frames = 0;
-    let mut last = off(&harness);
+    let mut last = off();
     for _ in 0..12 {
         harness.step();
-        let cur = off(&harness);
+        let cur = off();
         if (cur - last).abs() > 0.5 {
             drift_frames += 1;
         }

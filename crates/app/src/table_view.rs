@@ -281,21 +281,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                     // ① raw 而非 smooth:smooth 把一次滚轮拆成多帧慢慢放,停滚后
                     //    还有 0.1-0.3s 惯性尾巴,期间点击必死;
                     // ② 主键按下期间不平移:正在点的那一下绝不能被滚轮顶掉
-                    // 滚轮:ScrollArea 原生路径读 smooth_scroll_delta(停滚后还有
-                    // 0.1-0.3s 惯性尾巴,期间标签在指针下继续滑,点击会被 egui 静默取消)。
-                    // 悬停标签栏时改喂 raw(当帧真实滚轮量):滚动一步到位;尾巴帧清零;
-                    // 主键按住期间(正在点标签)一律清零——按压中内容绝不能动。
-                    if ui.rect_contains_pointer(ui.max_rect()) {
-                        ui.ctx().input_mut(|i| {
-                            let zooming = i.modifiers.ctrl || i.modifiers.mac_cmd || i.modifiers.command;
-                            i.smooth_scroll_delta =
-                                if i.pointer.primary_down() || zooming {
-                                    egui::Vec2::ZERO
-                                } else {
-                                    i.raw_scroll_delta
-                                };
-                        });
-                    }
+                    // 滚轮尾巴治理已上移到 update() 全局覆写(smooth=raw)
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         // —— 自有点击手势 ——
@@ -4386,6 +4372,20 @@ impl eframe::App for ShujingApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // 每帧强制 style == 当前调色板(切换主题即刻全局生效)
         crate::theme::apply(ctx);
+        // 滚轮一步到位(全应用,任何绘制之前):egui 把大步进滚轮(Point≥8)归入
+        // unprocessed 分帧释放,停滚后内容还要滑 0.1-0.3s("惯性尾巴")——期间任何
+        // 点击的按下/松开会命中不同 widget 而被 egui 静默取消(数据网格/查询结果/
+        // 侧栏树/标签栏同病,标签栏 v0.12.4 已实测 11 帧漂移)。每帧把 smooth 覆写为
+        // raw(当帧真实滚轮量):鼠标滚轮一步到位;触控板小步进 raw≈smooth 手感不变。
+        // 主键按住期间一律清零(按压中内容绝不能动);⌘/Ctrl+滚轮是缩放,不喂滚动。
+        let _ = ctx.input_mut(|i| {
+            let zooming = i.modifiers.ctrl || i.modifiers.mac_cmd || i.modifiers.command;
+            if i.pointer.primary_down() || zooming {
+                i.smooth_scroll_delta = egui::Vec2::ZERO;
+            } else {
+                i.smooth_scroll_delta = i.raw_scroll_delta;
+            }
+        });
         // 窗口标题与原型一致
         let title = "数镜".to_string();
         let cur = ctx.input(|i| i.viewport().title.clone());

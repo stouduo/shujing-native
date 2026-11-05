@@ -90,7 +90,12 @@ pub fn result_rows(
                 if drag_pan && in_body {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     if dx.abs() > 0.1 {
-                        ui.scroll_with_delta(egui::vec2(-dx, 0.0));
+                        // 瞬时平移:默认走 style 动画会跟手发飘,且松手后内容仍在滑,
+                        // 滑动尾巴里的点击会被 egui 静默取消
+                        ui.scroll_with_delta_animation(
+                            egui::vec2(-dx, 0.0),
+                            egui::style::ScrollAnimation::none(),
+                        );
                     }
                 }
             }
@@ -347,7 +352,12 @@ pub fn result_rows_editable(
                 if drag_pan && in_body {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     if dx.abs() > 0.1 {
-                        ui.scroll_with_delta(egui::vec2(-dx, 0.0));
+                        // 瞬时平移:默认走 style 动画会跟手发飘,且松手后内容仍在滑,
+                        // 滑动尾巴里的点击会被 egui 静默取消
+                        ui.scroll_with_delta_animation(
+                            egui::vec2(-dx, 0.0),
+                            egui::style::ScrollAnimation::none(),
+                        );
                     }
                 }
             }
