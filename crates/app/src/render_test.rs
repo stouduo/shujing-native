@@ -2742,6 +2742,73 @@ fn tab_double_click_switches_not_renames() {
 }
 
 
+
+/// 回归:右键菜单浮层盖在标签条上方,点菜单项(几何上落在某标签矩形内)
+/// 不得被手势层隔空判成"点了那个标签"(误切/误关)。
+/// 手势层 v2 用 layer_id_at 判定浮层:浮层上的点击不路由到背景层的标签。
+#[test]
+fn menu_overlay_click_does_not_hit_underlying_tab() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    let active_before = harness.state().active_tab;
+    let tabs_before = harness.state().tabs.len();
+    let click = |h: &mut egui_kittest::Harness<ShujingApp>, pos: egui::Pos2, btn: egui::PointerButton| {
+        h.input_mut().events.push(egui::Event::PointerMoved(pos));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: btn,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: btn,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+    };
+    // 右键第 0 个标签 → 菜单浮层展开(菜单项几何上覆盖标签条底部)
+    click(&mut harness, egui::pos2(260.0, 14.0), egui::PointerButton::Secondary);
+    // 点菜单第 4 项「重命名标签…」(菜单项 y≈30 附近,同时也在标签矩形内)
+    let mut entered = false;
+    for y in [120.0f32, 96.0, 144.0, 30.0, 108.0, 132.0] {
+        click(&mut harness, egui::pos2(272.0, y), egui::PointerButton::Primary);
+        let renaming = harness.ctx.memory(|m| {
+            m.data
+                .get_temp::<(usize, String)>(egui::Id::new("tab-rename"))
+                .is_some()
+        });
+        if renaming {
+            entered = true;
+            break;
+        }
+    }
+    assert!(entered, "菜单「重命名标签…」应进入重命名");
+    assert_eq!(
+        harness.state().tabs.len(),
+        tabs_before,
+        "点菜单项不得误关底层标签"
+    );
+    assert_ne!(
+        harness.state().active_tab, 0,
+        "点菜单项不得隔空激活菜单下方的标签(原 active={active_before})"
+    );
+}
+
 /// 右键菜单「重命名标签…」应能进入重命名(双击入口删除后的唯一入口)
 #[test]
 fn tab_rename_via_context_menu() {

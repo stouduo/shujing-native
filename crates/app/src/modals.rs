@@ -737,7 +737,10 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin::same(6))
                 .show(ui, |ui| {
-                    ui.set_min_height(140.0);
+                    // 恒定高度(命中再多也不撑高):Modal 居中锚定,结果异步到达
+                    // 撑高弹窗会把顶部的搜索条件行整体上移,按压中的点击落空
+                    ui.set_min_height(220.0);
+                    ui.set_max_height(220.0);
                     if gs.searching {
                         ui.centered_and_justified(|ui| {
                             ui.vertical(|ui| {
@@ -760,6 +763,10 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                             );
                             let hits = gs.hits.clone();
                             let kw = gs.keyword.trim().to_string();
+                            egui::ScrollArea::vertical()
+                                .id_salt("gs-hits")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
                             for h in &hits {
                                 let (rect, resp) = ui.allocate_exact_size(
                                     egui::vec2(ui.available_width(), 26.0),
@@ -784,6 +791,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                                     goto = Some((h.database.clone(), h.table.clone(), kw.clone()));
                                 }
                             }
+                                });
                         }
                     } else {
                         ui.centered_and_justified(|ui| {

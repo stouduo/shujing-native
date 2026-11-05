@@ -64,16 +64,25 @@ pub fn draw_redis_view(
                         reset: true,
                     });
                 }
+                // spinner 与「继续扫描」恒定占位:扫描状态异步翻转时工具栏其余
+                // 按钮的坐标绝不能跳(按压窗口内控件平移=点击被 egui 静默取消)
+                let (spin_r, _) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::hover());
                 if rt.scanning {
-                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                    let rect = egui::Rect::from_center_size(spin_r.center(), egui::vec2(11.0, 11.0));
+                    egui::Spinner::new().size(11.0).color(p.muted).paint_at(ui, rect);
                 }
-                if rt.cursor != 0 {
-                    if theme::button(ui, "继续扫描", theme::BtnKind::Secondary).clicked() {
-                        actions.push(TabAction::RedisScan {
-                            tab_id: tab_id.to_string(),
-                            reset: false,
-                        });
-                    }
+                // 「继续扫描」常驻(不可用时不响应),宽度恒定
+                let more_enabled = rt.cursor != 0 && !rt.scanning;
+                let more = theme::button(ui, "继续扫描", theme::BtnKind::Secondary);
+                let more_clicked = more.clicked();
+                if !more_enabled {
+                    more.on_disabled_hover_text("没有待续扫的游标");
+                }
+                if more_enabled && more_clicked {
+                    actions.push(TabAction::RedisScan {
+                        tab_id: tab_id.to_string(),
+                        reset: false,
+                    });
                 }
                 let sort_label = match rt.sort {
                     0 => "排序",
@@ -149,9 +158,13 @@ pub fn draw_redis_view(
                                 })
                                 .cloned()
                                 .collect();
+                            // 扫描在途(含游标未归零的续扫窗口)冻结排序:分批到达
+                            // 每批都整列表重排的话,按压中的行会被换成隔壁 key
+                            // (行是位置型 id,点击会确认在"当前位置的行"上)→ 点错 key
+                            let sorting_frozen = rt.scanning || rt.cursor != 0;
                             match rt.sort {
-                                1 => shown.sort(),
-                                2 => {
+                                1 if !sorting_frozen => shown.sort(),
+                                2 if !sorting_frozen => {
                                     shown.sort();
                                     shown.reverse();
                                 }

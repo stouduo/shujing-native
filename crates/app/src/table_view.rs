@@ -291,31 +291,40 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                         // 自管手势只看"按下与松开是否落在同一标签的当前矩形内",
                         // × 区按按下位置判定,完全绕开 widget 级 hit-test。
                         let primary_pressed_now = ui.input(|i| i.pointer.primary_pressed());
+                        let middle_pressed_now =
+                            ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Middle));
                         let primary_released_now = ui.input(|i| i.pointer.primary_released());
                         let middle_released_now =
                             ui.input(|i| i.pointer.button_released(egui::PointerButton::Middle));
                         let press_origin = ui.input(|i| i.pointer.press_origin());
                         let latest_pos = ui.input(|i| i.pointer.latest_pos());
-                        if primary_pressed_now {
-                            // 只登记按下位置;命中哪个标签在松开帧用当帧矩形判定
-                            // (按压期间标签条移动后,以按下时命中的"那个标签"为准)
-                            ui.ctx().memory_mut(|m| {
-                                m.data.insert_temp(
-                                    egui::Id::new("tab-gesture-press"),
-                                    press_origin,
-                                )
-                            });
+                        // 手势态:(标签 id, 按下点, 键种 0=主键/1=中键, 按下点在×区, 累计最大位移)
+                        type Gesture = (String, egui::Pos2, u8, bool, f32);
+                        let gid = egui::Id::new("tab-gesture-press");
+                        let mut gesture: Option<Gesture> =
+                            ui.ctx().memory(|m| m.data.get_temp::<Gesture>(gid));
+                        // 指针消失(拖出窗口释放丢事件)防陈旧手势残留
+                        if latest_pos.is_none() {
+                            gesture = None;
+                            ui.ctx().memory_mut(|m| m.data.remove_temp::<Gesture>(gid));
                         }
-                        let gesture_press: Option<egui::Pos2> = ui.ctx().memory(|m| {
-                            m.data
-                                .get_temp::<Option<egui::Pos2>>(egui::Id::new("tab-gesture-press"))
-                                .flatten()
-                        });
+                        // 顶层是浮层(右键菜单/Modal/下拉)时不登记也不判定——
+                        // 浮层上的点击不应当作点它背后的标签
+                        let bg_layer = |ctx: &egui::Context, pos: egui::Pos2| {
+                            ctx.memory(|m| {
+                                m.layer_id_at(pos)
+                                    .map(|l| l.order == egui::Order::Background)
+                                    .unwrap_or(true)
+                            })
+                        };
+                        // 按压期间每帧累计最大位移(拖拽换位后拖回原点的回程不算点击)
+                        if let Some((_, pp, _, _, md)) = gesture.as_mut() {
+                            if let Some(lp) = latest_pos {
+                                *md = md.max(lp.distance(*pp));
+                            }
+                        }
                         if primary_released_now || middle_released_now {
-                            ui.ctx().memory_mut(|m| {
-                                m.data
-                                    .remove_temp::<Option<egui::Pos2>>(egui::Id::new("tab-gesture-press"))
-                            });
+                            ui.ctx().memory_mut(|m| m.data.remove_temp::<Gesture>(gid));
                         }
                         for i in 0..app.tabs.len() {
                             let title = app.tabs[i].title.clone();
@@ -342,28 +351,57 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 glyph,
                                 draft_owned.as_mut(),
                             );
-                            // 自有手势接管点击:按下与松开都落在本标签的当前矩形内
-                            // (× 区看按下位置;位移 ≤24px 防与拖拽排序打架)
-                            if let Some(pp) = gesture_press {
-                                let close_rect = egui::Rect::from_center_size(
-                                    egui::pos2(tab_rect.right() - 16.0, tab_rect.center().y),
-                                    egui::vec2(22.0, 22.0),
-                                );
-                                let dist_ok = latest_pos
-                                    .map(|lp| lp.distance(pp) <= 24.0)
-                                    .unwrap_or(false);
-                                let both_in = latest_pos
-                                    .map(|lp| tab_rect.contains(lp) && tab_rect.contains(pp))
-                                    .unwrap_or(false);
-                                if both_in && dist_ok {
-                                    if primary_released_now {
-                                        if close_rect.contains(pp) {
+                            // 自有手势接管点击:同键种按下与松开都落在本标签(按 id 认,
+                            // 按压期间标签集合变化不会错绑到换位后的邻居)的当前矩形内,
+                            // 且整个手势累计位移 ≤24px(拖拽排序 48px 换位后拖回原点不算点击)。
+                            // 重命名中的标签豁免(点击输入框定位光标,不该激活引发滚入瞬跳)。
+                            if !renaming_now && (primary_pressed_now || middle_pressed_now) {
+                                if let Some(pp) = press_origin {
+                                    // 底部 7px 让给悬浮滚动条;浮层打开时不登记
+                                    if tab_rect.contains(pp)
+                                        && pp.y <= tab_rect.bottom() - 7.0
+                                        && bg_layer(ui.ctx(), pp)
+                                    {
+                                        let close_rect = egui::Rect::from_center_size(
+                                            egui::pos2(
+                                                tab_rect.right() - 16.0,
+                                                tab_rect.center().y,
+                                            ),
+                                            egui::vec2(22.0, 22.0),
+                                        );
+                                        let g = (
+                                            app.tabs[i].id.clone(),
+                                            pp,
+                                            if primary_pressed_now { 0u8 } else { 1u8 },
+                                            close_rect.contains(pp),
+                                            0.0f32,
+                                        );
+                                        ui.ctx()
+                                            .memory_mut(|m| m.data.insert_temp(gid, g.clone()));
+                                        gesture = Some(g);
+                                    }
+                                }
+                            }
+                            if let Some((g_tid, pp, g_btn, g_close, max_d)) = gesture.clone() {
+                                if !renaming_now
+                                    && (primary_released_now || middle_released_now)
+                                    && app.tabs.get(i).map(|t| t.id == g_tid).unwrap_or(false)
+                                {
+                                    let rel_btn =
+                                        if primary_released_now { 0u8 } else { 1u8 };
+                                    let lp_ok = latest_pos
+                                        .map(|lp| {
+                                            tab_rect.contains(lp)
+                                                && tab_rect.contains(pp)
+                                                && bg_layer(ui.ctx(), lp)
+                                        })
+                                        .unwrap_or(false);
+                                    if rel_btn == g_btn && lp_ok && max_d <= 24.0 {
+                                        if g_close || g_btn == 1u8 {
                                             ev.closed = true;
                                         } else {
                                             ev.activated = true;
                                         }
-                                    } else if middle_released_now {
-                                        ev.closed = true;
                                     }
                                 }
                             }
@@ -410,8 +448,9 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                             }
                         }
                         ui.add_space(4.0);
-                        // 全部标签(溢出时可下拉直达)
-                        if app.tabs.len() > 4 {
+                        // 全部标签常驻:标签数跨过 5 的瞬间出现/消失会把 ＋ 按钮
+                        // 平移 ~90px,肌肉记忆点到旧位置=误触(少标签时菜单照样可用)
+                        {
                             ui.menu_button(
                                 RichText::new("▾ 全部标签").size(11.0).color(p.text2),
                                 |ui| {
@@ -574,16 +613,8 @@ fn draw_one_tab(
             .unwrap_or(false);
     let mut activated = resp.clicked();
     let mut closed = resp.middle_clicked();
-    // × 不再用第二个重叠 widget:在同一个 tab response 上按释放位置分流。
-    // 这样不会出现“tab 体抢走 × 的 click”或两组命中区互相打架。
-    if resp.clicked() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            if close_rect.contains(p) {
-                activated = false;
-                closed = true;
-            }
-        }
-    }
+    // × 的归属统一由外层手势层按「按下位置」判定(单一标准);
+    // egui 通道仅作静态场景的冗余兜底,不再按释放位置分流
     let drag_delta = if resp.dragged() {
         resp.drag_delta().x
     } else {
@@ -1055,11 +1086,22 @@ pub(crate) fn draw_table_view(
             theme::hairline_top(ui);
             ui.horizontal_centered(|ui| {
                 let compact_footer = ui.available_width() < 1000.0;
+                // 固定宽度槽位:COUNT(*) 异步到达时文本从"行数未知"变"共 1,234,567 行",
+                // 若随内容伸缩会把右侧「每页 N ▾/清除筛选」顶走几十 px——按压中的
+                // 点击落空。固定槽位,文本左对齐画在槽内
                 let total_text = match tab.total {
                     Some(t) => format!("共 {} 行", icons::thousands(t)),
                     None => "行数未知".to_string(),
                 };
-                ui.label(RichText::new(total_text).size(11.5).color(p.text2));
+                let (slot, _) =
+                    ui.allocate_exact_size(egui::vec2(120.0, 18.0), Sense::hover());
+                ui.painter().text(
+                    slot.left_top() + egui::vec2(0.0, slot.height() / 2.0),
+                    egui::Align2::LEFT_CENTER,
+                    total_text,
+                    egui::FontId::proportional(11.5),
+                    p.text2,
+                );
                 if let Some(f) = tab.active_filter.clone() {
                     vsep(ui);
                     let clip = if compact_footer { 10 } else { 20 };
@@ -4217,20 +4259,26 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                 if theme::button(ui, "测试连接", theme::BtnKind::Secondary).clicked() {
                     test = true;
                 }
+                // spinner/结果恒占一行固定高度:Modal 居中锚定,内容高度随异步结果
+                // 突变会让整个表单上下平移(重居中),按压中的点击落空
+                let (slot, _) = ui.allocate_exact_size(egui::vec2(260.0, 16.0), Sense::hover());
                 if m.testing {
-                    ui.add(egui::Spinner::new().size(12.0).color(p.muted));
-                }
-                if let Some(r) = &m.test_result {
-                    match r {
-                        Ok(msg) => ui.label(
-                            RichText::new(icons::clip(msg, 48))
-                                .size(11.5)
-                                .color(p.green),
-                        ),
-                        Err(e) => {
-                            ui.label(RichText::new(icons::clip(e, 48)).size(11.5).color(p.red))
-                        }
-                    };
+                    let rect = egui::Rect::from_center_size(
+                        slot.left_top() + egui::vec2(10.0, slot.height() / 2.0),
+                        egui::vec2(12.0, 12.0),
+                    );
+                    egui::Spinner::new().size(12.0).color(p.muted).paint_at(ui, rect);
+                } else if let Some((txt, color)) = m.test_result.as_ref().map(|r| match r {
+                    Ok(msg) => (icons::clip(msg, 40), p.green),
+                    Err(e) => (icons::clip(e, 40), p.red),
+                }) {
+                    ui.painter().text(
+                        slot.left_top() + egui::vec2(4.0, slot.height() / 2.0),
+                        egui::Align2::LEFT_CENTER,
+                        txt,
+                        egui::FontId::proportional(11.5),
+                        color,
+                    );
                 }
             });
 

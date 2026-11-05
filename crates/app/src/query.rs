@@ -119,16 +119,24 @@ pub fn draw_query_view(
                         .get(q.active_set)
                         .map(|r| !r.columns.is_empty())
                         .unwrap_or(false);
-                    if has_grid
-                        && theme::button(ui, "导出 CSV", theme::BtnKind::Secondary).clicked()
-                    {
+                    // 导出按钮常驻(不可用时灰置):随结果集类型异步出现/消失会把
+                    // 右侧的 格式化/片段/计划/优化/历史 整体平移,按压中的点击被吞
+                    let csv = theme::button(ui, "导出 CSV", theme::BtnKind::Secondary);
+                    let csv_clicked = csv.clicked();
+                    if !has_grid {
+                        csv.on_disabled_hover_text("当前结果集不可导出(无表格)");
+                    }
+                    if has_grid && csv_clicked {
                         actions.push(TabAction::ExportQueryCsv {
                             tab_id: tab_id.to_string(),
                         });
                     }
-                    if has_grid
-                        && theme::button(ui, "导出 Excel", theme::BtnKind::Secondary).clicked()
-                    {
+                    let xlsx = theme::button(ui, "导出 Excel", theme::BtnKind::Secondary);
+                    let xlsx_clicked = xlsx.clicked();
+                    if !has_grid {
+                        xlsx.on_disabled_hover_text("当前结果集不可导出(无表格)");
+                    }
+                    if has_grid && xlsx_clicked {
                         if let Some(r) = q.results.get(q.active_set) {
                             if !r.columns.is_empty() {
                                 actions.push(TabAction::ExportXlsx {
