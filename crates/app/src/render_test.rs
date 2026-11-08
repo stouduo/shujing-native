@@ -732,6 +732,30 @@ fn render_conn_modal() {
 }
 
 #[test]
+fn render_db_filter_modal() {
+    let mut app = full_app("role");
+    app.db_filter = Some(crate::app::DbFilterState {
+        conn_id: "c1".into(),
+        search: String::new(),
+        all: vec![
+            "dramato".into(),
+            "archive".into(),
+            "comic".into(),
+            "mysql".into(),
+            "information_schema".into(),
+            "performance_schema".into(),
+        ],
+        selected: vec!["dramato".into(), "archive".into(), "comic".into()],
+    });
+    let cell = std::cell::RefCell::new(app);
+    render("db_filter", 1000.0, 720.0, true, move |ctx| {
+        let mut b = cell.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_db_filter_modal(&mut b, ctx);
+    });
+}
+
+#[test]
 fn render_designer_edit() {
     let mut app = test_app(vec![], 0);
     // 复用已有 c1;不能 push 一个同 id 的连接,否则侧栏漏斗会触发重复 widget ID 警告
@@ -2249,7 +2273,6 @@ fn tab_overflow_click_close_context_menu_work() {
     );
 }
 
-
 /// 真根因复现:标签条在指针按压/惯性期间移动 → egui 要求点击的按下/松开
 /// 命中同一 widget,内容一滑松开就落进邻格,点击被静默取消(="点了没反应")。
 /// 断言用 TABBAR_OFFSET_X 镜像:一次滚轮后偏移必须在极短帧数内停稳
@@ -2262,7 +2285,7 @@ fn tab_overflow_click_close_context_menu_work() {
 fn grid_wheel_scroll_settles_fast() {
     let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut app = full_app("role"); // role_tab 是 12 列宽表 fixture,保证横向可滚
-    // 真实 update 路径(全局 smooth=raw 覆写在 eframe update 里,draw_app 简化路径不含)
+                                    // 真实 update 路径(全局 smooth=raw 覆写在 eframe update 里,draw_app 简化路径不含)
     let mut harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1000.0, 700.0))
         .with_pixels_per_point(2.0)
@@ -2333,9 +2356,8 @@ fn tabbar_wheel_scroll_settles_fast() {
             app
         });
     harness.run_steps(8);
-    let off = || {
-        f32::from_bits(table_view::TABBAR_OFFSET_X.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let off =
+        || f32::from_bits(table_view::TABBAR_OFFSET_X.load(std::sync::atomic::Ordering::Relaxed));
     // 指针先进标签栏(滚轮处理有 rect_contains_pointer 门,指针不在栏内不动)
     harness
         .input_mut()
@@ -2398,9 +2420,8 @@ fn tabbar_autoscroll_is_instant() {
             app
         });
     harness.run_steps(8);
-    let off = || {
-        f32::from_bits(table_view::TABBAR_OFFSET_X.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let off =
+        || f32::from_bits(table_view::TABBAR_OFFSET_X.load(std::sync::atomic::Ordering::Relaxed));
     // 激活远端标签(x=800 实测命中溢出区)→ 触发 scroll_to_rect
     harness
         .input_mut()
@@ -2421,10 +2442,7 @@ fn tabbar_autoscroll_is_instant() {
         modifiers: Default::default(),
     });
     harness.step();
-    assert!(
-        harness.state().active_tab >= 3,
-        "前置:应激活了溢出区的标签"
-    );
+    assert!(harness.state().active_tab >= 3, "前置:应激活了溢出区的标签");
     // 随后 12 帧:自动滚入产生的偏移变化帧数必须 ≤3(瞬跳=1-2 帧;动画=6-18 帧)
     let mut drift_frames = 0;
     let mut last = off();
@@ -2681,7 +2699,6 @@ fn tab_rename_sticky_focus_and_exit() {
     assert_eq!(n, base - 1, "点击别处应退出重命名,⌘W 应能关标签");
 }
 
-
 /// 回归:双击重命名已删——快连点两下(300ms 双击窗内)必须照常切换标签,
 /// 不得弹重命名、不得取消切换(用户"点击切换不太好用"的主诉根源之一)
 #[test]
@@ -2699,10 +2716,7 @@ fn tab_double_click_switches_not_renames() {
             app
         });
     harness.run_steps(8);
-    assert_ne!(
-        harness.state().active_tab, 0,
-        "前置:第 0 个标签初始未激活"
-    );
+    assert_ne!(harness.state().active_tab, 0, "前置:第 0 个标签初始未激活");
     for _ in 0..2 {
         harness
             .input_mut()
@@ -2726,7 +2740,8 @@ fn tab_double_click_switches_not_renames() {
     }
     harness.step();
     assert_eq!(
-        harness.state().active_tab, 0,
+        harness.state().active_tab,
+        0,
         "双击第 0 个标签应照常切换过去(不得被重命名取消)"
     );
     let renaming = harness.ctx.memory(|m| {
@@ -2740,8 +2755,6 @@ fn tab_double_click_switches_not_renames() {
         "双击后不应有输入框持焦"
     );
 }
-
-
 
 /// 回归:右键菜单浮层盖在标签条上方,点菜单项(几何上落在某标签矩形内)
 /// 不得被手势层隔空判成"点了那个标签"(误切/误关)。
@@ -2763,30 +2776,39 @@ fn menu_overlay_click_does_not_hit_underlying_tab() {
     harness.run_steps(8);
     let active_before = harness.state().active_tab;
     let tabs_before = harness.state().tabs.len();
-    let click = |h: &mut egui_kittest::Harness<ShujingApp>, pos: egui::Pos2, btn: egui::PointerButton| {
-        h.input_mut().events.push(egui::Event::PointerMoved(pos));
-        h.step();
-        h.input_mut().events.push(egui::Event::PointerButton {
-            pos,
-            button: btn,
-            pressed: true,
-            modifiers: Default::default(),
-        });
-        h.step();
-        h.input_mut().events.push(egui::Event::PointerButton {
-            pos,
-            button: btn,
-            pressed: false,
-            modifiers: Default::default(),
-        });
-        h.step();
-    };
+    let click =
+        |h: &mut egui_kittest::Harness<ShujingApp>, pos: egui::Pos2, btn: egui::PointerButton| {
+            h.input_mut().events.push(egui::Event::PointerMoved(pos));
+            h.step();
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: btn,
+                pressed: true,
+                modifiers: Default::default(),
+            });
+            h.step();
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: btn,
+                pressed: false,
+                modifiers: Default::default(),
+            });
+            h.step();
+        };
     // 右键第 0 个标签 → 菜单浮层展开(菜单项几何上覆盖标签条底部)
-    click(&mut harness, egui::pos2(260.0, 14.0), egui::PointerButton::Secondary);
+    click(
+        &mut harness,
+        egui::pos2(260.0, 14.0),
+        egui::PointerButton::Secondary,
+    );
     // 点菜单第 4 项「重命名标签…」(菜单项 y≈30 附近,同时也在标签矩形内)
     let mut entered = false;
     for y in [120.0f32, 96.0, 144.0, 30.0, 108.0, 132.0] {
-        click(&mut harness, egui::pos2(272.0, y), egui::PointerButton::Primary);
+        click(
+            &mut harness,
+            egui::pos2(272.0, y),
+            egui::PointerButton::Primary,
+        );
         let renaming = harness.ctx.memory(|m| {
             m.data
                 .get_temp::<(usize, String)>(egui::Id::new("tab-rename"))
@@ -2804,7 +2826,8 @@ fn menu_overlay_click_does_not_hit_underlying_tab() {
         "点菜单项不得误关底层标签"
     );
     assert_ne!(
-        harness.state().active_tab, 0,
+        harness.state().active_tab,
+        0,
         "点菜单项不得隔空激活菜单下方的标签(原 active={active_before})"
     );
 }

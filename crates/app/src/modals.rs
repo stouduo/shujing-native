@@ -2,8 +2,8 @@
 //! 统一使用 egui::Modal(背景压暗 + 居中)+ theme 控件。
 
 use crate::app::{BgEvent, ShujingApp};
-use crate::net;
 use crate::icons;
+use crate::net;
 use crate::theme;
 use egui::{Color32, RichText, Sense};
 use std::cell::Cell;
@@ -73,19 +73,22 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
     let raw = q.query.trim().to_string();
     let lower = raw.to_lowercase();
     // 词边界:showcase/withdraw/description 这类表名不能被当成 SQL 关键字前缀
-    let is_sql = ["select", "with", "show", "desc", "describe", "explain", "pragma"].iter().any(
-        |k| {
-            lower == *k
-                || (lower.starts_with(k)
-                    && lower[k.len()..]
-                        .chars()
-                        .next()
-                        .map(|c| c.is_whitespace())
-                        .unwrap_or(false))
-        },
-    );
+    let is_sql = [
+        "select", "with", "show", "desc", "describe", "explain", "pragma",
+    ]
+    .iter()
+    .any(|k| {
+        lower == *k
+            || (lower.starts_with(k)
+                && lower[k.len()..]
+                    .chars()
+                    .next()
+                    .map(|c| c.is_whitespace())
+                    .unwrap_or(false))
+    });
     let table_cond = if !is_sql && raw.contains(' ') {
-        raw.split_once(' ').map(|(a, b)| (a.to_string(), b.to_string()))
+        raw.split_once(' ')
+            .map(|(a, b)| (a.to_string(), b.to_string()))
     } else {
         None
     };
@@ -96,7 +99,6 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
         }
     }
     // enter 在下方 modal 内读取;SQL 直跑的判定挪到 picked 使用处
-
 
     let modal = egui::Modal::new(egui::Id::new("quick-open-modal"))
         .frame(theme::modal_frame())
@@ -242,13 +244,10 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
         };
         let picked_cond = if cond_ok { picked_cond } else { None };
         // 库也要比对:多库连接下同名表会套错库的标签
-        let had = app
-            .tabs
-            .iter()
-            .any(|t| {
-                matches!(&t.kind, crate::app::TabKind::Table(tt)
+        let had = app.tabs.iter().any(|t| {
+            matches!(&t.kind, crate::app::TabKind::Table(tt)
                     if tt.conn_id == conn && tt.table == table && tt.database == db)
-            });
+        });
         app.open_table(&conn, &table, db.clone());
         // `表名 条件` 模式:套用条件到筛选栏
         if let Some(cond) = picked_cond {
@@ -369,7 +368,11 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
 
                 if im.parsing {
                     ui.add_space(8.0);
-                    ui.label(RichText::new("解析中…(大文件可能需要数秒)").size(11.5).color(p.muted));
+                    ui.label(
+                        RichText::new("解析中…(大文件可能需要数秒)")
+                            .size(11.5)
+                            .color(p.muted),
+                    );
                 }
                 if let Some(err) = &im.batch_errors {
                     ui.add_space(8.0);
@@ -651,7 +654,12 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
         .trees
         .iter()
         .filter(|(_, t)| t.online)
-        .filter_map(|(id, _)| app.conns.iter().find(|c| &c.id == id).map(|c| (c.id.clone(), c.name.clone())))
+        .filter_map(|(id, _)| {
+            app.conns
+                .iter()
+                .find(|c| &c.id == id)
+                .map(|c| (c.id.clone(), c.name.clone()))
+        })
         .collect();
     // 打开时未选连接:默认第一个在线的
     if app.global_search.as_ref().unwrap().conn_id.is_empty() {
@@ -666,10 +674,8 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
         .get(&cur_conn)
         .map(|t| t.databases.clone())
         .unwrap_or_default();
-    let conn_expanded: Option<String> = app
-        .trees
-        .get(&cur_conn)
-        .and_then(|t| t.expanded_db.clone());
+    let conn_expanded: Option<String> =
+        app.trees.get(&cur_conn).and_then(|t| t.expanded_db.clone());
     let mut do_search = false;
     let mut goto: Option<(Option<String>, String, String)> = None;
     let mut close = false;
@@ -688,7 +694,13 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     .iter()
                     .find(|(id, _)| *id == gs.conn_id)
                     .map(|(_, n)| n.clone())
-                    .unwrap_or_else(|| if online.is_empty() { "无在线连接".into() } else { "选择连接".into() });
+                    .unwrap_or_else(|| {
+                        if online.is_empty() {
+                            "无在线连接".into()
+                        } else {
+                            "选择连接".into()
+                        }
+                    });
                 if let Some(cid) = theme::select(ui, "gs-conn", &sel_name, &online, 170.0) {
                     gs.conn_id = cid;
                     gs.db = None;
@@ -696,10 +708,8 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     gs.hits.clear();
                 }
                 // 库范围(多库连接):默认侧栏展开的库;换连接后下一帧列表随新连接刷新
-                let dbs: Vec<(String, String)> = conn_dbs
-                    .iter()
-                    .map(|d| (d.clone(), d.clone()))
-                    .collect();
+                let dbs: Vec<(String, String)> =
+                    conn_dbs.iter().map(|d| (d.clone(), d.clone())).collect();
                 if !dbs.is_empty() {
                     let sel_db = gs
                         .db
@@ -717,7 +727,11 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                 let resp = ui.add_sized(
                     [ui.available_width() - 70.0, 28.0],
                     egui::TextEdit::singleline(&mut gs.keyword)
-                        .hint_text(RichText::new("关键词,回车搜索所有表…").size(12.0).color(p.muted))
+                        .hint_text(
+                            RichText::new("关键词,回车搜索所有表…")
+                                .size(12.0)
+                                .color(p.muted),
+                        )
                         .font(egui::FontId::proportional(12.5)),
                 );
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -767,30 +781,77 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .id_salt("gs-hits")
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                            for h in &hits {
-                                let (rect, resp) = ui.allocate_exact_size(
-                                    egui::vec2(ui.available_width(), 26.0),
-                                    egui::Sense::click(),
-                                );
-                                if resp.hovered() {
-                                    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), p.row_hover);
-                                }
-                                let g = icons::text_galley(ui.painter(), h.table.clone(), theme::mono(12.0), Color32::PLACEHOLDER, 130.0);
-                                ui.painter().galley(egui::pos2(rect.left() + 8.0, rect.center().y - g.size().y / 2.0), g, p.accent);
-                                let g = icons::text_galley(ui.painter(), h.column.clone(), theme::mono(11.5), Color32::PLACEHOLDER, 130.0);
-                                ui.painter().galley(egui::pos2(rect.left() + 148.0, rect.center().y - g.size().y / 2.0), g, p.green);
-                                let preview: String = h
-                                    .row
-                                    .iter()
-                                    .map(|v| v.clone().unwrap_or_else(|| "NULL".into()))
-                                    .collect::<Vec<_>>()
-                                    .join(" | ");
-                                let g = icons::text_galley(ui.painter(), preview, theme::mono(11.5), Color32::PLACEHOLDER, rect.width() - 300.0);
-                                ui.painter().galley(egui::pos2(rect.left() + 288.0, rect.center().y - g.size().y / 2.0), g, p.text2);
-                                if resp.clicked() {
-                                    goto = Some((h.database.clone(), h.table.clone(), kw.clone()));
-                                }
-                            }
+                                    for h in &hits {
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            egui::vec2(ui.available_width(), 26.0),
+                                            egui::Sense::click(),
+                                        );
+                                        if resp.hovered() {
+                                            ui.painter().rect_filled(
+                                                rect,
+                                                egui::CornerRadius::same(6),
+                                                p.row_hover,
+                                            );
+                                        }
+                                        let g = icons::text_galley(
+                                            ui.painter(),
+                                            h.table.clone(),
+                                            theme::mono(12.0),
+                                            Color32::PLACEHOLDER,
+                                            130.0,
+                                        );
+                                        ui.painter().galley(
+                                            egui::pos2(
+                                                rect.left() + 8.0,
+                                                rect.center().y - g.size().y / 2.0,
+                                            ),
+                                            g,
+                                            p.accent,
+                                        );
+                                        let g = icons::text_galley(
+                                            ui.painter(),
+                                            h.column.clone(),
+                                            theme::mono(11.5),
+                                            Color32::PLACEHOLDER,
+                                            130.0,
+                                        );
+                                        ui.painter().galley(
+                                            egui::pos2(
+                                                rect.left() + 148.0,
+                                                rect.center().y - g.size().y / 2.0,
+                                            ),
+                                            g,
+                                            p.green,
+                                        );
+                                        let preview: String = h
+                                            .row
+                                            .iter()
+                                            .map(|v| v.clone().unwrap_or_else(|| "NULL".into()))
+                                            .collect::<Vec<_>>()
+                                            .join(" | ");
+                                        let g = icons::text_galley(
+                                            ui.painter(),
+                                            preview,
+                                            theme::mono(11.5),
+                                            Color32::PLACEHOLDER,
+                                            rect.width() - 300.0,
+                                        );
+                                        ui.painter().galley(
+                                            egui::pos2(
+                                                rect.left() + 288.0,
+                                                rect.center().y - g.size().y / 2.0,
+                                            ),
+                                            g,
+                                            p.text2,
+                                        );
+                                        if resp.clicked() {
+                                            goto = Some((
+                                                h.database.clone(),
+                                                h.table.clone(),
+                                                kw.clone(),
+                                            ));
+                                        }
+                                    }
                                 });
                         }
                     } else {
@@ -853,7 +914,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                 // active_filter 约定存原始关键词:load_rows 会再包一层 build_like_filter,
                 // 此前存已构建片段 → 双重构建匹配不到行;未打开的表 columns 空还会拼出 WHERE ()
                 tt.active_filter = Some(kw.clone());
-    tt.filter = kw.clone();
+                tt.filter = kw.clone();
             }
         }
         let id = app.tabs[app.active_tab].id.clone();
@@ -862,7 +923,6 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
         app.global_search = None;
     }
 }
-
 
 /// 危险操作确认弹窗(重命名/清空/删除表/复制表)
 pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
@@ -902,7 +962,9 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 if !c.input.trim().is_empty() && c.input.trim() != exp {
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new(format!("输入与名称「{exp}」不一致")).size(11.0).color(p.red),
+                        RichText::new(format!("输入与名称「{exp}」不一致"))
+                            .size(11.0)
+                            .color(p.red),
                     );
                 }
             }
@@ -932,26 +994,36 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         if ok {
             let action = c.action.clone();
             let input_ok = c.input.trim().to_string();
-            if let Some(conn_id) = action.as_deref().and_then(|a| a.strip_prefix("delete-conn:")) {
+            if let Some(conn_id) = action
+                .as_deref()
+                .and_then(|a| a.strip_prefix("delete-conn:"))
+            {
                 app.confirm = None;
                 app.delete_connection(conn_id);
                 app.toast_error(format!("已删除连接 {}", input_ok));
-            } else if let Some(rest) =
-                action.as_deref().and_then(|a| a.strip_prefix("delete-rows:"))
+            } else if let Some(rest) = action
+                .as_deref()
+                .and_then(|a| a.strip_prefix("delete-rows:"))
             {
                 app.confirm = None;
                 // 格式 delete-rows:<tab_id>:<gen>:<ris csv>;gen 不符说明弹窗期间数据已刷新
                 let mut it = rest.splitn(3, ':');
                 let tid = it.next().unwrap_or("");
-                let gen = it.next().and_then(|g| g.parse::<u64>().ok()).unwrap_or(u64::MAX);
+                let gen = it
+                    .next()
+                    .and_then(|g| g.parse::<u64>().ok())
+                    .unwrap_or(u64::MAX);
                 let ris_csv = it.next().unwrap_or("");
-                let ris: Vec<usize> =
-                    ris_csv.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                let ris: Vec<usize> = ris_csv
+                    .split(',')
+                    .filter_map(|x| x.trim().parse().ok())
+                    .collect();
                 if !tid.is_empty() && !ris.is_empty() {
                     crate::table_view::run_delete_rows(app, tid, gen, &ris);
                 }
-            } else if let Some(conn_id) =
-                action.as_deref().and_then(|a| a.strip_prefix("disconnect-conn:"))
+            } else if let Some(conn_id) = action
+                .as_deref()
+                .and_then(|a| a.strip_prefix("disconnect-conn:"))
             {
                 app.confirm = None;
                 app.trees.remove(conn_id);
@@ -992,15 +1064,13 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 }
 
-
 /// 列统计弹窗(当前页)
 pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     // 只在有统计数据的激活表标签上显示
-    let Some(tab) = app.tabs.get(app.active_tab) else { return };
-    let Some((col, rows)) = tab
-        .table_data()
-        .and_then(|t| t.col_stats.clone())
-    else {
+    let Some(tab) = app.tabs.get(app.active_tab) else {
+        return;
+    };
+    let Some((col, rows)) = tab.table_data().and_then(|t| t.col_stats.clone()) else {
         return;
     };
     let p = theme::c();
@@ -1018,11 +1088,7 @@ pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(k).size(12.0).color(p.muted));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(v)
-                                .font(theme::mono(12.5))
-                                .color(p.text),
-                        );
+                        ui.label(RichText::new(v).font(theme::mono(12.5)).color(p.text));
                     });
                 });
                 theme::hairline_bottom(ui);
@@ -1041,7 +1107,6 @@ pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         }
     }
 }
-
 
 /// 外观设置弹窗(强调色)
 pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
@@ -1066,14 +1131,14 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         egui::vec2(26.0, 26.0),
                     );
                     let _ = ui.allocate_space(egui::vec2(26.0, 26.0));
-                    let resp =
-                        ui.interact(sw, egui::Id::new(("accent", i)), Sense::click());
+                    let resp = ui.interact(sw, egui::Id::new(("accent", i)), Sense::click());
                     let c2 = if theme::is_dark() {
                         theme::accent_color_dark(i)
                     } else {
                         theme::accent_color_light(i)
                     };
-                    ui.painter().rect_filled(sw, egui::CornerRadius::same(13), c2);
+                    ui.painter()
+                        .rect_filled(sw, egui::CornerRadius::same(13), c2);
                     if theme::accent_idx() == i {
                         ui.painter().rect_stroke(
                             sw.expand(2.0),
@@ -1094,19 +1159,19 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 // 跟随系统开关(手动点 ☀/☾ 会自动解除跟随)
                 let on = app.follow_system_theme;
-                let (rect, resp) =
-                    ui.allocate_exact_size(egui::vec2(38.0, 22.0), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(38.0, 22.0), Sense::click());
                 ui.painter().rect_filled(
                     rect,
                     egui::CornerRadius::same(11),
                     if on { p.accent } else { p.input_bg },
                 );
-                let knob_x = if on { rect.right() - 11.0 } else { rect.left() + 11.0 };
-                ui.painter().circle_filled(
-                    egui::pos2(knob_x, rect.center().y),
-                    8.0,
-                    p.text,
-                );
+                let knob_x = if on {
+                    rect.right() - 11.0
+                } else {
+                    rect.left() + 11.0
+                };
+                ui.painter()
+                    .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, p.text);
                 resp.clone().on_hover_text("系统切深浅色时应用自动跟随");
                 if resp.clicked() {
                     app.follow_system_theme = !app.follow_system_theme;
@@ -1118,9 +1183,13 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     app.save_theme_settings();
                 }
                 ui.label(
-                    RichText::new(if on { "跟随系统外观" } else { "手动(侧栏 ☀/☾ 切换)" })
-                        .size(12.0)
-                        .color(p.text2),
+                    RichText::new(if on {
+                        "跟随系统外观"
+                    } else {
+                        "手动(侧栏 ☀/☾ 切换)"
+                    })
+                    .size(12.0)
+                    .color(p.text2),
                 );
             });
             theme::modal_footer(ui, |ui| {
@@ -1133,7 +1202,6 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         app.settings_open = false;
     }
 }
-
 
 /// 库筛选弹窗:勾选该连接在侧栏显示哪些库(持久化 db_filters.json)
 pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
@@ -1179,7 +1247,10 @@ pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.label(
                 RichText::new(format!(
                     "已选 {}/{} · 未勾选的库不在侧栏显示",
-                    app.db_filter.as_ref().map(|f| f.selected.len()).unwrap_or(0),
+                    app.db_filter
+                        .as_ref()
+                        .map(|f| f.selected.len())
+                        .unwrap_or(0),
                     all_count
                 ))
                 .size(11.0)
@@ -1195,7 +1266,7 @@ pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     egui::ScrollArea::vertical()
                         .id_salt("db-filter-list")
                         .max_height(300.0)
-                        .auto_shrink([false, false])
+                        .auto_shrink([false, true])
                         .show(ui, |ui| {
                             let st = app.db_filter.as_mut().unwrap();
                             let kw = st.search.trim().to_lowercase();
@@ -1207,7 +1278,7 @@ pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 }
                                 any = true;
                                 let mut checked = st.selected.contains(d);
-                                if ui.checkbox(&mut checked, d).changed() {
+                                if theme::checkbox(ui, &mut checked, d).changed() {
                                     if checked {
                                         if !st.selected.contains(d) {
                                             st.selected.push(d.clone());
@@ -1219,9 +1290,7 @@ pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             }
                             if !any {
                                 ui.centered_and_justified(|ui| {
-                                    ui.label(
-                                        RichText::new("无匹配库").size(12.0).color(p.muted),
-                                    );
+                                    ui.label(RichText::new("无匹配库").size(12.0).color(p.muted));
                                 });
                             }
                         });

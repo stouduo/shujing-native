@@ -265,6 +265,25 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             // 单向滚动区合并滚轮的 y 分量到 x(默认 false 时横向区无视纯 y 滚轮);
             // native 直改 offset 的路径零动画,配合上面的 smooth=raw 覆写=一步到位
             ui.style_mut().always_scroll_the_only_direction = true;
+            // 标签条单独占左侧可滚动视口;“全部标签/＋”固定在右侧,不随标签滚动,
+            // 标签再多也能直接点到,不需要先滚到末尾。
+            let bar_h = theme::TABBAR_H - 5.0;
+            let full_w = ui.available_width();
+            let controls_w = 92.0 + 30.0 + 8.0;
+            let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(full_w, bar_h), Sense::hover());
+            let tabs_rect = egui::Rect::from_min_size(
+                bar_rect.min,
+                egui::vec2((full_w - controls_w).max(80.0), bar_h),
+            );
+            let controls_rect = egui::Rect::from_min_max(
+                egui::pos2(bar_rect.right() - controls_w, bar_rect.top()),
+                bar_rect.max,
+            );
+            let mut tabs_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(tabs_rect)
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
             let scroll_out = egui::ScrollArea::horizontal()
                 .id_salt("tabbar-scroll")
                 .auto_shrink([false, true])
@@ -272,7 +291,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 // 不能让 ScrollArea 把“按下+轻微移动”吞成拖拽滚动,否则点击/关闭/右键会间歇失效。
                 .drag_to_scroll(false)
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-                .show(ui, |ui| {
+                .show(&mut tabs_ui, |ui| {
                     // 鼠标滚轮在标签栏上 = 横向滚动;必须判断指针是否真的在标签栏内,
                     // 否则滚表格时标签栏也会跟着横滚。
                     // 两个关键选择(都是为了让标签条绝不在指针按压期间移动——
@@ -376,8 +395,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                             close_rect.contains(pp),
                                             0.0f32,
                                         );
-                                        ui.ctx()
-                                            .memory_mut(|m| m.data.insert_temp(gid, g.clone()));
+                                        ui.ctx().memory_mut(|m| m.data.insert_temp(gid, g.clone()));
                                         gesture = Some(g);
                                     }
                                 }
@@ -387,8 +405,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                     && (primary_released_now || middle_released_now)
                                     && app.tabs.get(i).map(|t| t.id == g_tid).unwrap_or(false)
                                 {
-                                    let rel_btn =
-                                        if primary_released_now { 0u8 } else { 1u8 };
+                                    let rel_btn = if primary_released_now { 0u8 } else { 1u8 };
                                     let lp_ok = latest_pos
                                         .map(|lp| {
                                             tab_rect.contains(lp)
@@ -447,44 +464,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 active_rect = Some(tab_rect);
                             }
                         }
-                        ui.add_space(4.0);
-                        // 全部标签常驻:标签数跨过 5 的瞬间出现/消失会把 ＋ 按钮
-                        // 平移 ~90px,肌肉记忆点到旧位置=误触(少标签时菜单照样可用)
-                        {
-                            ui.menu_button(
-                                RichText::new("▾ 全部标签").size(11.0).color(p.text2),
-                                |ui| {
-                                    ui.set_min_width(220.0);
-                                    for (i, t) in app.tabs.iter().enumerate() {
-                                        let sel = i == app.active_tab;
-                                        ui.horizontal(|ui| {
-                                            let lbl =
-                                                ui.selectable_label(
-                                                    sel,
-                                                    RichText::new(&t.title)
-                                                        .size(12.0)
-                                                        .color(if sel { p.text } else { p.text2 }),
-                                                );
-                                            if lbl.clicked() {
-                                                activate = Some(i);
-                                                ui.close_menu();
-                                            }
-                                        });
-                                    }
-                                },
-                            );
-                            ui.add_space(2.0);
-                        }
-                        let (rect, resp) = ui.allocate_exact_size(
-                            egui::vec2(28.0, theme::TABBAR_H - 5.0),
-                            Sense::click(),
-                        );
-                        let col = if resp.hovered() { p.text } else { p.muted };
-                        icons::paint_plus(ui.painter(), rect.center(), 6.5, col);
-                        resp.clone().on_hover_text("新建查询标签 (⌘T)");
-                        if resp.clicked() {
-                            new_query = true;
-                        }
+                        // 全部标签/＋固定到右侧(见下方 controls_ui),不再放在滚动内容里
                     });
                     if active_changed {
                         if let Some(rect) = active_rect {
@@ -501,6 +481,43 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             TABBAR_OFFSET_X.store(
                 scroll_out.state.offset.x.to_bits(),
                 std::sync::atomic::Ordering::Relaxed,
+            );
+            // 固定右侧控件:＋ 和“全部标签”
+            let mut controls_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(controls_rect)
+                    .layout(Layout::right_to_left(Align::Center)),
+            );
+            let (prect, presp) =
+                controls_ui.allocate_exact_size(egui::vec2(28.0, bar_h), Sense::click());
+            let pcol = if presp.hovered() { p.text } else { p.muted };
+            icons::paint_plus(controls_ui.painter(), prect.center(), 6.5, pcol);
+            presp.clone().on_hover_text("新建查询标签 (⌘T)");
+            if presp.clicked() {
+                new_query = true;
+            }
+            controls_ui.menu_button(
+                RichText::new("▾ 全部标签").size(11.0).color(p.text2),
+                |ui| {
+                    ui.set_min_width(220.0);
+                    for (i, t) in app.tabs.iter().enumerate() {
+                        let sel = i == app.active_tab;
+                        ui.horizontal(|ui| {
+                            let lbl = ui.selectable_label(
+                                sel,
+                                RichText::new(&t.title).size(12.0).color(if sel {
+                                    p.text
+                                } else {
+                                    p.text2
+                                }),
+                            );
+                            if lbl.clicked() {
+                                activate = Some(i);
+                                ui.close_menu();
+                            }
+                        });
+                    }
+                },
             );
         });
 
@@ -1093,8 +1110,7 @@ pub(crate) fn draw_table_view(
                     Some(t) => format!("共 {} 行", icons::thousands(t)),
                     None => "行数未知".to_string(),
                 };
-                let (slot, _) =
-                    ui.allocate_exact_size(egui::vec2(120.0, 18.0), Sense::hover());
+                let (slot, _) = ui.allocate_exact_size(egui::vec2(120.0, 18.0), Sense::hover());
                 ui.painter().text(
                     slot.left_top() + egui::vec2(0.0, slot.height() / 2.0),
                     egui::Align2::LEFT_CENTER,
@@ -4267,7 +4283,10 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                         slot.left_top() + egui::vec2(10.0, slot.height() / 2.0),
                         egui::vec2(12.0, 12.0),
                     );
-                    egui::Spinner::new().size(12.0).color(p.muted).paint_at(ui, rect);
+                    egui::Spinner::new()
+                        .size(12.0)
+                        .color(p.muted)
+                        .paint_at(ui, rect);
                 } else if let Some((txt, color)) = m.test_result.as_ref().map(|r| match r {
                     Ok(msg) => (icons::clip(msg, 40), p.green),
                     Err(e) => (icons::clip(e, 40), p.red),
