@@ -906,7 +906,12 @@ mod tests {
         let svc = crate::Service::new(&dir);
         assert!(svc.list_saved_connections().is_empty());
 
-        let info = sqlite_info("/tmp/shujing_native_svc.db");
+        // 预写 0 字节空库(SQLite 合法):v0.12.3 起连接拒绝不存在的文件,
+        // 固定路径曾靠历史残留文件侥幸通过,被 /tmp 定期清理暴露
+        let db = std::env::temp_dir().join(format!("shujing_svc_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&db);
+        std::fs::write(&db, b"").unwrap();
+        let info = sqlite_info(db.to_str().unwrap());
         let saved = svc.save_connection(info.clone()).unwrap();
         assert_eq!(saved.len(), 1);
         assert_eq!(svc.list_saved_connections().len(), 1);
@@ -923,5 +928,6 @@ mod tests {
         svc.delete_connection(&info.id).unwrap();
         assert!(svc.list_saved_connections().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&db);
     }
 }
