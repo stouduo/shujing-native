@@ -13,6 +13,9 @@ use shujing_core::Service;
 /// 诊断:数据网格外层横向滚动偏移(kittest 行为测试读取)
 /// 标签栏横向滚动偏移的每帧镜像(测试断言"滚轮后是否快速停稳"用;AtomicF32 不可用走 bits)
 pub static TABBAR_OFFSET_X: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// 标签栏是否横向溢出(=悬浮滚动条可见)。手势登记的底部排除带只在此时生效,
+/// 否则无溢出时标签底缘 7px 成了永久手势死区
+pub static TABBAR_OVERFLOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub static LAST_HSCROLL_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 /// 取 Redis 标签的 (连接, service, 事件通道);非 Redis 标签返回 None
@@ -336,10 +339,14 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                     .unwrap_or(true)
                             })
                         };
-                        // 按压期间每帧累计最大位移(拖拽换位后拖回原点的回程不算点击)
-                        if let Some((_, pp, _, _, md)) = gesture.as_mut() {
+                        // 按压期间每帧累计最大位移并写回(拖拽换位后拖回原点的回程不算点击;
+                        // 不写回则只剩松开帧距离,大幅晃动后回位会被误判成稳稳的点击)
+                        if let Some(g) = gesture.clone() {
                             if let Some(lp) = latest_pos {
-                                *md = md.max(lp.distance(*pp));
+                                let mut g2 = g;
+                                g2.4 = g2.4.max(lp.distance(g2.1));
+                                gesture = Some(g2.clone());
+                                ui.ctx().memory_mut(|m| m.data.insert_temp(gid, g2));
                             }
                         }
                         if primary_released_now || middle_released_now {
@@ -376,9 +383,12 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                             // 重命名中的标签豁免(点击输入框定位光标,不该激活引发滚入瞬跳)。
                             if !renaming_now && (primary_pressed_now || middle_pressed_now) {
                                 if let Some(pp) = press_origin {
-                                    // 底部 7px 让给悬浮滚动条;浮层打开时不登记
+                                    // 底部 7px 只在滚动条可见(溢出)时让给它;浮层打开时不登记
+                                    let band_ok = !TABBAR_OVERFLOW.load(
+                                        std::sync::atomic::Ordering::Relaxed,
+                                    ) || pp.y <= tab_rect.bottom() - 7.0;
                                     if tab_rect.contains(pp)
-                                        && pp.y <= tab_rect.bottom() - 7.0
+                                        && band_ok
                                         && bg_layer(ui.ctx(), pp)
                                     {
                                         let close_rect = egui::Rect::from_center_size(
@@ -413,7 +423,9 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                                 && bg_layer(ui.ctx(), lp)
                                         })
                                         .unwrap_or(false);
-                                    if rel_btn == g_btn && lp_ok && max_d <= 24.0 {
+                                    // 44px:低于换位阈值 48,高于 egui 的 20——
+                                    // 触控板/魔术鼠标点按常带 20-40px 晃动,这里兜底
+                                    if rel_btn == g_btn && lp_ok && max_d <= 44.0 {
                                         if g_close || g_btn == 1u8 {
                                             ev.closed = true;
                                         } else {
@@ -482,6 +494,10 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 scroll_out.state.offset.x.to_bits(),
                 std::sync::atomic::Ordering::Relaxed,
             );
+            TABBAR_OVERFLOW.store(
+                scroll_out.content_size.x > scroll_out.inner_rect.width() + 0.5,
+                std::sync::atomic::Ordering::Relaxed,
+            );
             // 固定右侧控件:＋ 和“全部标签”
             let mut controls_ui = ui.new_child(
                 egui::UiBuilder::new()
@@ -526,6 +542,15 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             .insert_temp(egui::Id::new("tabbar-active"), app.active_tab)
     });
 
+    // 松开清零拖拽累计:残留 acc 会叠加进后续点击的手抖,≥48px 时普通点击
+    // 触发换位——标签自己跳走,用户看到的就是"点了没反应/乱跳"
+    if ctx.input(|i| i.pointer.any_released()) {
+        drag = None;
+        ctx.memory_mut(|m| {
+            m.data
+                .remove_temp::<(usize, f32)>(egui::Id::new("tab-drag"))
+        });
+    }
     // 拖拽:累计位移超过 48px 与相邻标签交换(一帧一次,余量下一帧继续)
     if let Some((mut di, mut acc)) = drag {
         let threshold = 48.0f32;

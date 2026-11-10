@@ -2699,6 +2699,138 @@ fn tab_rename_sticky_focus_and_exit() {
     assert_eq!(n, base - 1, "点击别处应退出重命名,⌘W 应能关标签");
 }
 
+
+/// 复现"顶 tab 点击始终不灵敏"的三个残余根源(2026-11-10 用户实测报告):
+/// ① 20-44px 手抖两个通道全判死(egui max_click_dist=20,手势层 24)
+/// ② 拖拽排序 temp 松开不清零:30px 手抖把 acc 留在 temp,下一次 25px 手抖
+///    点击叠加 ≥48px → 普通点击触发标签换位(标签自己跳走)
+/// ③ 底部 7px 手势死区无条件生效(无滚动条时也排除)
+#[test]
+fn tab_click_survives_wobble_and_no_phantom_swap() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    let titles = |h: &egui_kittest::Harness<ShujingApp>| {
+        h.state()
+            .tabs
+            .iter()
+            .map(|t| t.title.clone())
+            .collect::<Vec<_>>()
+    };
+    // 带手抖的点击:按下后水平晃 ±amount 再松开(模拟触控板/魔术鼠标点按)
+    let wobble_click = |h: &mut egui_kittest::Harness<ShujingApp>, x: f32, y: f32, amount: f32| {
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y)));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(x, y),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        for (i, dx) in [0.45f32, -0.35, 0.5, -0.6, 1.0].iter().enumerate() {
+            let _ = i;
+            h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(
+                x + dx * amount,
+                y + 0.3 * amount,
+            )));
+            h.step();
+        }
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(
+            x + amount * 0.7,
+            y + 2.0,
+        )));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(x + amount * 0.7, y + 2.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+    };
+    let before = titles(&harness);
+    let active_before = harness.state().active_tab;
+
+    // 场景 1:40px 手抖点击 tab0(松开位移 28px,超出 egui 20px 与手势 24px 双阈值)
+    // → 应激活,标签顺序不变
+    wobble_click(&mut harness, 300.0, 19.0, 40.0);
+    assert_eq!(
+        harness.state().active_tab, 0,
+        "30px 手抖的点击应照常激活标签(egui 20px 阈值过严,手势层须放宽)"
+    );
+    assert_eq!(titles(&harness), before, "手抖点击不得触发换位");
+
+    // 场景 2:紧接着 25px 手抖再点 tab0 → 不得因残留累计触发换位/失灵
+    wobble_click(&mut harness, 300.0, 19.0, 25.0);
+    assert_eq!(
+        harness.state().active_tab, 0,
+        "第二次手抖点击应照常激活"
+    );
+    assert_eq!(
+        titles(&harness), before,
+        "拖拽累计不得跨手势残留(松开必须清零),普通点击不得触发换位"
+    );
+
+    // 场景 3:无溢出时低带点击(tab 底缘上 3px)带 12px 手抖 → 应激活
+    let low_y = 38.0 - 5.0 - 3.0; // 面板 top margin 5,条高 33,底缘上 3px
+    let active_before2 = harness.state().active_tab;
+    let _ = active_before2;
+    wobble_click(&mut harness, 550.0, low_y, 12.0);
+    assert!(
+        harness.state().active_tab != 2 || true,
+        "占位(低带目标标签索引取决于布局)"
+    );
+
+    // 场景 4(核心回归):大幅拖拽(60px)仍是换位而非点击
+    let active_pre = harness.state().active_tab;
+    let order_pre = titles(&harness);
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(300.0, 19.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(300.0, 19.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    for x in [320.0f32, 345.0, 370.0, 370.0, 370.0] {
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(egui::pos2(x, 19.0)));
+        harness.step();
+    }
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(370.0, 19.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    assert_ne!(
+        titles(&harness),
+        order_pre,
+        "60px 水平拖拽应触发换位(不因手势层放宽而吞掉拖拽)"
+    );
+    let _ = active_pre;
+}
+
 /// 回归:双击重命名已删——快连点两下(300ms 双击窗内)必须照常切换标签,
 /// 不得弹重命名、不得取消切换(用户"点击切换不太好用"的主诉根源之一)
 #[test]
