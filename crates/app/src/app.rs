@@ -538,6 +538,8 @@ pub struct ErTab {
     pub fit_done: bool,
     /// 适配尝试帧数(视口不稳时多重试几帧;内容超大的图不能无限重试)
     pub fit_tries: u32,
+    /// 上次适配尝试时的视口尺寸:同尺寸仍放不下=内容超限,立即停止覆写
+    pub last_fit_size: egui::Vec2,
     /// 正在被拖拽的节点(拖节点期间禁用画布平移,防双重位移)
     pub dragging_node: Option<String>,
     /// 请求重新适配(适配按钮)
@@ -1530,6 +1532,7 @@ impl ShujingApp {
                 positions: Default::default(),
                 fit_done: false,
                 fit_tries: 0,
+                        last_fit_size: egui::Vec2::ZERO,
                 dragging_node: None,
                 refit: false,
             }),
@@ -2740,6 +2743,7 @@ impl ShujingApp {
                             positions: Default::default(),
                             fit_done: false,
                             fit_tries: 0,
+                        last_fit_size: egui::Vec2::ZERO,
                             dragging_node: None,
                             refit: false,
                         }),

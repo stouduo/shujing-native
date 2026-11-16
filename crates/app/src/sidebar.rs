@@ -116,7 +116,9 @@ impl ShujingApp {
                 let conns = self.conns.clone();
                 for c in conns {
                     let cid = c.id.clone();
+                    ui.push_id(("connblk", &cid), |ui| {
                     self.draw_conn_block(ui, &cid, &c);
+                });
                     ui.add_space(10.0);
                 }
                 if self.conns.is_empty() {
@@ -439,7 +441,9 @@ impl ShujingApp {
                     theme::c().muted,
                 );
                 for t in matched {
+                    ui.push_id(("tblrow", conn_id, db, &t.name), |ui| {
                     self.draw_table_row(ui, conn_id, db, &t.name);
+                });
                 }
             }
             if shown == 0 {
@@ -466,12 +470,16 @@ impl ShujingApp {
                     .iter()
                     .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:"))
                     .count();
+                ui.push_id(("dbhdr", conn_id, &db), |ui| {
                 self.draw_db_header(ui, conn_id, &db, loading, table_count);
+            });
                 for m in tables
                     .iter()
                     .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:"))
                 {
-                    self.draw_table_row(ui, conn_id, &db, &m.name);
+                    ui.push_id(("tblrow", conn_id, &db, &m.name), |ui| {
+                                self.draw_table_row(ui, conn_id, &db, &m.name);
+                            });
                 }
                 let groups: [(&str, &str, Box<dyn Fn(&shujing_core::TableMeta) -> bool>); 2] = [
                     (
@@ -499,21 +507,29 @@ impl ShujingApp {
                         .get(conn_id)
                         .and_then(|t| t.groups_open.get(&open_key).copied())
                         .unwrap_or(false);
+                    ui.push_id(("grp", conn_id, &open_key), |ui| {
                     self.draw_group_header(ui, conn_id, &open_key, glabel, items.len(), open);
+                });
                     if open {
                         for m in items {
                             if gkey == "prog" {
+                                ui.push_id(("progrow", conn_id, &db, &m.name, &m.kind), |ui| {
                                 self.draw_prog_row(ui, conn_id, &db, &m.name, &m.kind, m.owner.as_deref());
+                            });
                             } else {
                                 // 视图:与表同款行,点击打开数据页
+                                ui.push_id(("tblrow", conn_id, &db, &m.name), |ui| {
                                 self.draw_table_row(ui, conn_id, &db, &m.name);
+                            });
                             }
                         }
                     }
                 }
                 ui.add_space(6.0);
             } else {
+                ui.push_id(("dbcol", conn_id, &db), |ui| {
                 self.draw_db_collapsed(ui, conn_id, &db);
+            });
             }
         }
     }
@@ -990,7 +1006,9 @@ impl ShujingApp {
             let idx: u8 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
             let keys: u64 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
             let _ = p;
-            self.draw_redis_db_row(ui, conn_id, idx, keys);
+            ui.push_id(("redisrow", conn_id, idx), |ui| {
+                self.draw_redis_db_row(ui, conn_id, idx, keys);
+            });
             return;
         }
         let is_view = redis_kind == "view";

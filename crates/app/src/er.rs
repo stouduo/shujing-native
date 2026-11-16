@@ -103,6 +103,10 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
             }
             if !e.fit_done || e.refit {
                 let fit_rect = ui.available_rect_before_wrap();
+                // 退化视口(首帧面板未就绪)直接等下一帧,不算尝试
+                if fit_rect.width() < 50.0 || fit_rect.height() < 50.0 {
+                    return;
+                }
                 let vh = fit_rect.height();
                 // 先布置一次拿包围盒,再以真实画布尺寸适配
                 let layout = auto_layout(e);
@@ -137,14 +141,17 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                         fit_rect.contains(world_to_screen(e, *pos))
                             && fit_rect.contains(world_to_screen(e, *pos + Vec2::new(NODE_W, h)))
                     });
-                    // 视口不稳时多重试几帧;内容大到最小缩放也放不下时
-                    // 不能无限重试覆盖 zoom/pan(否则用户缩放/平移/拖拽全部失效)
+                    // 视口尺寸与上次尝试相同仍放不下 = 内容超限,立即停止
+                    // (旧逻辑无脑重试 30 帧,每帧覆写 zoom/pan,节点跳动 ~0.5s);
+                    // 视口变了(面板就绪/窗口调整)才值得按新视口重算一次
                     e.fit_tries += 1;
-                    if all_inside || e.fit_tries > 30 {
+                    let settled = e.last_fit_size == fit_rect.size() && e.fit_tries > 1;
+                    if all_inside || e.fit_tries > 8 || settled {
                         e.fit_done = true;
                         e.refit = false;
                         e.fit_tries = 0;
                     }
+                    e.last_fit_size = fit_rect.size();
                 } else {
                     e.fit_done = true;
                 }

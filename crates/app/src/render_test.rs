@@ -2700,6 +2700,84 @@ fn tab_rename_sticky_focus_and_exit() {
 }
 
 
+
+/// 复现:侧栏树行是位置型 widget id——按压期间上方库的表列表异步到达插入,
+/// 松开落在"当前位置的行"上,点错目标(点 archive 变成打开 dramato 的表)。
+/// 稳定 id(push_id)后:点错降级为点击落空。
+#[test]
+fn sidebar_async_insert_no_wrong_target() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    if let Some(t) = app.trees.get_mut("c1") {
+        t.databases = vec!["dramato".into(), "archive".into()];
+        // dramato 展开但表列表未到(空);archive 收起且表未加载
+        t.tables_by_db = HashMap::from([("dramato".to_string(), vec![])]);
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let tabs_before = harness.state().borrow().tabs.len();
+    // 在 archive 行上按下(坐标由 [calib] 插桩校准)
+    let pos = egui::pos2(110.0, 175.0); // [calib] 插桩实测 archive 行中心
+    harness.input_mut().events.push(egui::Event::PointerMoved(pos));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    // 按压期间:dramato 的表列表异步到达(上方插入 5 行,archive 下移)
+    {
+        let mut b = harness.state().borrow_mut();
+        let t = b.trees.get_mut("c1").unwrap();
+        t.tables_by_db.insert(
+            "dramato".to_string(),
+            (0..5)
+                .map(|i| shujing_core::TableMeta {
+                    name: format!("late_table_{i}"),
+                    kind: "table".into(),
+                    owner: None,
+                })
+                .collect(),
+        );
+    }
+    harness.step();
+    // 原位置松开
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    let tabs_after = harness.state().borrow().tabs.len();
+    assert_eq!(
+        tabs_after, tabs_before,
+        "按压期间上方异步插入行,松开不得点开'当前位置的行'(应落空而不是点错目标)"
+    );
+}
+
 /// 复现"顶 tab 点击始终不灵敏"的三个残余根源(2026-11-10 用户实测报告):
 /// ① 20-44px 手抖两个通道全判死(egui max_click_dist=20,手势层 24)
 /// ② 拖拽排序 temp 松开不清零:30px 手抖把 acc 留在 temp,下一次 25px 手抖
