@@ -2701,6 +2701,137 @@ fn tab_rename_sticky_focus_and_exit() {
 
 
 
+
+/// 真实输入时序模糊测试:真机 winit 会合并事件到同一帧(快点的按下+松开同帧、
+/// 松开前无移动事件、多事件单帧),脚本化测试从不覆盖这些形态。
+/// 全部形态都必须照常激活标签。
+#[test]
+fn tab_click_realistic_timing_patterns() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    let active = |h: &egui_kittest::Harness<ShujingApp>| h.state().active_tab;
+    let reset = |h: &mut egui_kittest::Harness<ShujingApp>| {
+        // 切回 tab1(点 tab1 标题中部,稳妥坐标)
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(450.0, 19.0)));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(450.0, 19.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(450.0, 19.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+    };
+    // tab0 标题坐标(此前多个测试校准过 (300,19) 有效命中 tab0)
+    let (x, y) = (300.0, 19.0);
+
+    // 形态1:按下与松开合并进同一帧(快点)
+    reset(&mut harness);
+    assert_ne!(active(&harness), 0);
+    harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y)));
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x, y),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x, y),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    assert_eq!(active(&harness), 0, "同帧按下+松开(快点)应激活");
+
+    // 形态2:按下→长时间无任何事件(30 帧)→松开(无移动事件,松开事件带原坐标)
+    reset(&mut harness);
+    assert_ne!(active(&harness), 0);
+    harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x, y),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    for _ in 0..30 {
+        harness.step();
+    }
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x, y),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    assert_eq!(active(&harness), 0, "长按 30 帧后松开应激活(max_click_duration=3s)");
+
+    // 形态3:按下→移动→松开,移动与松开同帧(拖尾合并)
+    reset(&mut harness);
+    assert_ne!(active(&harness), 0);
+    harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x, y),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x + 8.0, y + 3.0)));
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x + 8.0, y + 3.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    assert_eq!(active(&harness), 0, "移动与松开同帧(8px 手抖)应激活");
+
+    // 形态4:松开后紧接下一帧立即再点(快速连点第二次)
+    harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(450.0, 19.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(450.0, 19.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(450.0, 19.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    assert_ne!(active(&harness), 0, "快速连点第二次应照常切换");
+}
+
 /// 复现:侧栏树行是位置型 widget id——按压期间上方库的表列表异步到达插入,
 /// 松开落在"当前位置的行"上,点错目标(点 archive 变成打开 dramato 的表)。
 /// 稳定 id(push_id)后:点错降级为点击落空。

@@ -15,6 +15,30 @@ use shujing_core::Service;
 pub static TABBAR_OFFSET_X: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// 标签栏是否横向溢出(=悬浮滚动条可见)。手势登记的底部排除带只在此时生效,
 /// 否则无溢出时标签底缘 7px 成了永久手势死区
+/// 标签点击诊断日志(常开):追加写 ~/shujing_tab_debug.log,超 512KB 自动重开。
+/// 用于真机"点了没反应"问题的数据采集(kittest 无法复现真实输入状态时)。
+fn tab_dbg(msg: String) {
+    // 常开(点一次一行,开销可忽略);每 200 写检查一次体积,超 512KB 重开(防无限增长)
+    use std::io::Write;
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let path = std::env::var("HOME").unwrap_or_default() + "/shujing_tab_debug.log";
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n % 200 == 0 {
+        if let Ok(m) = std::fs::metadata(&path) {
+            if m.len() > 512 * 1024 {
+                let _ = std::fs::File::create(&path);
+            }
+        }
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{t}] {msg}");
+    }
+}
+
 pub static TABBAR_OVERFLOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub static LAST_HSCROLL_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
@@ -350,6 +374,11 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                             }
                         }
                         if primary_released_now || middle_released_now {
+                            if gesture.is_none() {
+                                tab_dbg(format!(
+                                    "release {latest_pos:?} NO-GESTURE(press 未登记或已被清)"
+                                ));
+                            }
                             ui.ctx().memory_mut(|m| m.data.remove_temp::<Gesture>(gid));
                         }
                         for i in 0..app.tabs.len() {
@@ -387,7 +416,16 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                     let band_ok = !TABBAR_OVERFLOW.load(
                                         std::sync::atomic::Ordering::Relaxed,
                                     ) || pp.y <= tab_rect.bottom() - 7.0;
-                                    if tab_rect.contains(pp)
+                                    let in_rect = tab_rect.contains(pp);
+                                    if in_rect && !band_ok {
+                                        tab_dbg(format!("press {pp:?} tab{i} BLOCK:scrollbar-band"));
+                                    } else if in_rect && !bg_layer(ui.ctx(), pp) {
+                                        tab_dbg(format!(
+                                            "press {pp:?} tab{i} BLOCK:layer={:?}",
+                                            ui.ctx().memory(|m| m.layer_id_at(pp))
+                                        ));
+                                    }
+                                    if in_rect
                                         && band_ok
                                         && bg_layer(ui.ctx(), pp)
                                     {
@@ -406,6 +444,11 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                             0.0f32,
                                         );
                                         ui.ctx().memory_mut(|m| m.data.insert_temp(gid, g.clone()));
+                                        tab_dbg(format!(
+                                            "press {pp:?} REG tab{i} btn{} close{}",
+                                            if primary_pressed_now { 0 } else { 1 },
+                                            close_rect.contains(pp),
+                                        ));
                                         gesture = Some(g);
                                     }
                                 }
@@ -416,7 +459,8 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                     && app.tabs.get(i).map(|t| t.id == g_tid).unwrap_or(false)
                                 {
                                     let rel_btn = if primary_released_now { 0u8 } else { 1u8 };
-                                    let lp_ok = latest_pos
+                                    let lp = latest_pos;
+                                    let lp_ok = lp
                                         .map(|lp| {
                                             tab_rect.contains(lp)
                                                 && tab_rect.contains(pp)
@@ -426,11 +470,35 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                     // 44px:低于换位阈值 48,高于 egui 的 20——
                                     // 触控板/魔术鼠标点按常带 20-40px 晃动,这里兜底
                                     if rel_btn == g_btn && lp_ok && max_d <= 44.0 {
+                                        tab_dbg(format!(
+                                            "release {lp:?} HIT tab{i} btn{rel_btn} max_d={max_d:.1} -> {}",
+                                            if g_close || g_btn == 1u8 { "CLOSE" } else { "ACTIVATE" }
+                                        ));
                                         if g_close || g_btn == 1u8 {
                                             ev.closed = true;
                                         } else {
                                             ev.activated = true;
                                         }
+                                    } else {
+                                        let why = if rel_btn != g_btn {
+                                            format!("btn{rel_btn}!={g_btn}")
+                                        } else if !lp.is_some() {
+                                            "no-pos".into()
+                                        } else if !tab_rect.contains(lp.unwrap()) {
+                                            format!("lp-outside {lp:?}")
+                                        } else if !tab_rect.contains(pp) {
+                                            "pp-outside(tab moved)".into()
+                                        } else if !bg_layer(ui.ctx(), lp.unwrap()) {
+                                            format!(
+                                                "layer={:?}",
+                                                ui.ctx().memory(|m| m.layer_id_at(lp.unwrap()))
+                                            )
+                                        } else {
+                                            format!("max_d={max_d:.1}>44")
+                                        };
+                                        tab_dbg(format!(
+                                            "release {lp:?} DEAD tab{i} btn{rel_btn} max_d={max_d:.1} why={why}"
+                                        ));
                                     }
                                 }
                             }
