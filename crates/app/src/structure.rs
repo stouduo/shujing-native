@@ -158,29 +158,21 @@ pub fn draw_structure_view(
                     }
                     if ddl_open {
                         ui.add_space(6.0);
-                        // DDL 着色(与查询编辑器同源高亮)
+                        // DDL 着色(与查询编辑器同源高亮)。全高展开,滚动交给整页
+                        // ScrollArea——原实现内嵌 320px 小滚动区,长建表语句被压在
+                        // 小窗里(用户实测"DDL 压缩在很小空间"),嵌套竖滚也难用
                         egui::Frame::new()
                             .fill(p.bg)
                             .stroke(egui::Stroke::new(1.0, p.border))
                             .corner_radius(egui::CornerRadius::same(8))
                             .inner_margin(egui::Margin::same(12))
                             .show(ui, |ui| {
-                                egui::ScrollArea::vertical()
-                                    .id_salt(format!("ddl-scroll-{tab_id}"))
-                                    .max_height(320.0)
-                                    .auto_shrink([false, false])
-                                    .show(ui, |ui| {
-                                        let mut job = crate::sql_highlight::highlight(&data.ddl);
-                                        job.wrap.max_width = ui.available_width();
-                                        let galley = ui.fonts(|f| f.layout_job(job));
-                                        let gsize = galley.size();
-                                        ui.painter().galley(
-                                            ui.cursor().left_top(),
-                                            galley,
-                                            p.text2,
-                                        );
-                                        ui.allocate_space(gsize);
-                                    });
+                                let mut job = crate::sql_highlight::highlight(&data.ddl);
+                                job.wrap.max_width = ui.available_width();
+                                let galley = ui.fonts(|f| f.layout_job(job));
+                                let gsize = galley.size();
+                                ui.painter().galley(ui.cursor().left_top(), galley, p.text2);
+                                ui.allocate_space(gsize);
                             });
                     }
                     ui.add_space(8.0);

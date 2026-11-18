@@ -809,6 +809,137 @@ fn render_designer_edit() {
     });
 }
 
+
+
+/// 交互验证:整页滚动到底后,长 DDL 应自然展开(不再被 320px 内嵌滚动区压缩)
+#[test]
+fn structure_long_ddl_scroll_to_bottom() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cols: Vec<shujing_core::ColumnDef> = (0..30)
+        .map(|i| shujing_core::ColumnDef {
+            name: format!("col_{i}"),
+            data_type: "int".into(),
+            nullable: true,
+            key: if i == 0 { "PRI".into() } else { String::new() },
+            default: None,
+            extra: String::new(),
+            comment: format!("列 {i}"),
+        })
+        .collect();
+    let ddl = format!(
+        "CREATE TABLE `wide_table` (\n{}\n) ENGINE=InnoDB;",
+        (0..30)
+            .map(|i| format!("  `col_{i}` int DEFAULT NULL COMMENT '列 {i}'"))
+            .collect::<Vec<_>>()
+            .join(",\n")
+    );
+    let cell = std::cell::RefCell::new(test_app(
+        vec![Tab {
+            id: "t-struct2".into(),
+            title: "wide_table 结构".into(),
+            kind: TabKind::Structure(StructureTab {
+                conn_id: "c1".into(),
+                table: "wide_table".into(),
+                database: Some("dramato".into()),
+                data: Some(shujing_core::TableStructure {
+                    columns: cols,
+                    indexes: vec![],
+                    ddl,
+                }),
+                loading: false,
+                error: None,
+            }),
+        }],
+        0,
+    ));
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1100.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    // 指针放内容区,滚轮滚到底(30 字段+DDL 约 30 行,滚 6000px 足够)
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(700.0, 400.0)));
+    harness.step();
+    for _ in 0..50 {
+        harness.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -200.0),
+            modifiers: Default::default(),
+        });
+        harness.step();
+    }
+    let img = harness.render().expect("render 失败");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/structure_ddl_bottom.png")
+        .expect("保存 PNG 失败");
+}
+
+/// 结构页长 DDL:全高展开由整页滚动(原内嵌 320px 小滚动区已删),渲染自检
+#[test]
+fn render_structure_long_ddl() {
+    let cols: Vec<shujing_core::ColumnDef> = (0..30)
+        .map(|i| shujing_core::ColumnDef {
+            name: format!("col_{i}"),
+            data_type: if i % 3 == 0 { "varchar(64)".into() } else { "int".into() },
+            nullable: i % 2 == 0,
+            key: if i == 0 { "PRI".into() } else { String::new() },
+            default: None,
+            extra: if i == 0 { "auto_increment".into() } else { String::new() },
+            comment: format!("列 {i}"),
+        })
+        .collect();
+    let ddl = format!(
+        "CREATE TABLE `wide_table` (\n{}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+        (0..30)
+            .map(|i| format!("  `col_{i}` int DEFAULT NULL COMMENT '列 {i}'"))
+            .collect::<Vec<_>>()
+            .join(",\n")
+    );
+    let mut app = test_app(
+        vec![Tab {
+            id: "t-struct1".into(),
+            title: "wide_table 结构".into(),
+            kind: TabKind::Structure(StructureTab {
+                conn_id: "c1".into(),
+                table: "wide_table".into(),
+                database: Some("dramato".into()),
+                data: Some(shujing_core::TableStructure {
+                    columns: cols,
+                    indexes: vec![],
+                    ddl,
+                }),
+                loading: false,
+                error: None,
+            }),
+        }],
+        0,
+    );
+    let _ = &mut app;
+    let app = std::cell::RefCell::new(app);
+    render("structure_long_ddl", 1100.0, 720.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
 #[test]
 fn render_designer_create() {
     let mut app = test_app(vec![], 0);
