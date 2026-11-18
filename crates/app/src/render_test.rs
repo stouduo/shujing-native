@@ -2702,6 +2702,112 @@ fn tab_rename_sticky_focus_and_exit() {
 
 
 
+
+/// 真机日志实锤的死点击模式:激活标签强制居中滚动,快速连点时上一次激活的
+/// 瞬跳把下一个目标挪走(max_d=0 的 lp-outside 死亡)。修复=激活标签已可见时
+/// 不再滚动;断言:点击一个已完全可见的标签,标签条偏移必须纹丝不动。
+#[test]
+fn activating_visible_tab_does_not_scroll_strip() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    for i in 0..8 {
+        app.tabs.push(stub_tab(
+            &format!("溢出标签 {i}"),
+            &format!("overflow_table_{i}"),
+        ));
+    }
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = app;
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    harness.run_steps(8);
+    let off = || {
+        f32::from_bits(table_view::TABBAR_OFFSET_X.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    // 先滚一点制造溢出态(滚动条存在),随后点一个完全可见的中间标签
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(500.0, 19.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -60.0),
+        modifiers: Default::default(),
+    });
+    for _ in 0..6 {
+        harness.step();
+    }
+    let before = off();
+    // 点击 tab1(x≈450 完全可见)
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(450.0, 19.0)));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(450.0, 19.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(450.0, 19.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    for _ in 0..5 {
+        harness.step();
+    }
+    assert_eq!(
+        off(),
+        before,
+        "激活完全可见的标签不得滚动标签条(before={}, after={})——它会把快速连点的下一个目标挪走",
+        before,
+        off()
+    );
+    // 反向保证:激活一个出视野的标签仍会滚入(功能不回归)
+    // 滚到最右,点 tab0(出视野)
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -400.0),
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.input_mut().modifiers = egui::Modifiers {
+        command: true,
+        ..Default::default()
+    };
+    harness.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Num1,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+        physical_key: None,
+    });
+    harness.step();
+    harness.step();
+    assert_eq!(harness.state().active_tab, 0, "⌘1 应激活 tab0");
+    assert!(
+        off() < before - 50.0,
+        "出视野标签激活仍应滚入(偏移应左移,实际 before={before} after={})",
+        off()
+    );
+}
+
 /// 真实输入时序模糊测试:真机 winit 会合并事件到同一帧(快点的按下+松开同帧、
 /// 松开前无移动事件、多事件单帧),脚本化测试从不覆盖这些形态。
 /// 全部形态都必须照常激活标签。

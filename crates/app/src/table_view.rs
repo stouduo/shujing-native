@@ -374,7 +374,9 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                             }
                         }
                         if primary_released_now || middle_released_now {
-                            if gesture.is_none() {
+                            if gesture.is_none()
+                                && latest_pos.map(|lp| lp.y < 45.0).unwrap_or(false)
+                            {
                                 tab_dbg(format!(
                                     "release {latest_pos:?} NO-GESTURE(press 未登记或已被清)"
                                 ));
@@ -460,10 +462,13 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 {
                                     let rel_btn = if primary_released_now { 0u8 } else { 1u8 };
                                     let lp = latest_pos;
+                                    // ±20px 容差:标签条小幅布局变化(关标签/插入)期间
+                                    // 指针没动但标签挪了少许,按 id 判定不误伤邻标签
+                                    let hit_rect = tab_rect.expand2(egui::vec2(20.0, 10.0));
                                     let lp_ok = lp
                                         .map(|lp| {
-                                            tab_rect.contains(lp)
-                                                && tab_rect.contains(pp)
+                                            hit_rect.contains(lp)
+                                                && hit_rect.contains(pp)
                                                 && bg_layer(ui.ctx(), lp)
                                         })
                                         .unwrap_or(false);
@@ -548,13 +553,19 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                     });
                     if active_changed {
                         if let Some(rect) = active_rect {
-                            // 瞬跳而非默认动画(默认 0.1-0.3s 内标签条在滑,期间
-                            // 任何点击的松开都会落在错的 widget 上被 egui 静默取消)
-                            ui.scroll_to_rect_animation(
-                                rect,
-                                Some(egui::Align::Center),
-                                egui::style::ScrollAnimation::none(),
-                            );
+                            // 只在激活标签(部分)不可见时才滚入居中——原来每次激活都
+                            // 强制居中,快速连点时上一次激活的瞬跳会把下一个点击目标
+                            // 挪走(真机日志实锤:max_d=0 的死点击,松开落在标签外)
+                            let vp = ui.clip_rect();
+                            let out_of_view =
+                                rect.left() < vp.left() + 2.0 || rect.right() > vp.right() - 2.0;
+                            if out_of_view {
+                                ui.scroll_to_rect_animation(
+                                    rect,
+                                    Some(egui::Align::Center),
+                                    egui::style::ScrollAnimation::none(),
+                                );
+                            }
                         }
                     }
                 });
