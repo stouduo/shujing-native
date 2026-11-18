@@ -11,6 +11,7 @@ egui = "0.31"
 memmap2 = "0.9"
 egui_extras = { version = "0.31", default-features = false }
 tokio = { workspace = true }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rfd = "0.15"

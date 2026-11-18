@@ -940,6 +940,154 @@ fn render_structure_long_ddl() {
     });
 }
 
+
+/// 弹窗渲染巡检:优化分析(大执行计划 20 行)/列统计(12 行)/导入预览(12 列映射)/
+/// 新建表(长 SQL)——同类"内容多被压小/不可滚"问题的批量视觉自检
+#[test]
+fn render_modals_visual_sweep() {
+    // 1) 优化分析弹窗:MySQL 计划 8 列 x 20 行
+    let plan = shujing_core::ExecResult {
+        columns: vec![
+            "id".into(), "select_type".into(), "table".into(), "type".into(),
+            "key".into(), "rows".into(), "filtered".into(), "Extra".into(),
+        ],
+        rows: (0..20)
+            .map(|i| {
+                vec![
+                    Some(format!("{i}")),
+                    Some("SIMPLE".into()),
+                    Some(format!("big_table_{i}")),
+                    Some("ALL".into()),
+                    None,
+                    Some(format!("{}", 10000 + i * 137)),
+                    Some("100.00".into()),
+                    Some("Using where; Using temporary; Using filesort".into()),
+                ]
+            })
+            .collect(),
+        affected: 0,
+        truncated: false,
+        elapsed_ms: 42,
+    };
+    let mut q = test_query_tab();
+    q.sql = "SELECT * FROM big_table_0 WHERE a = 1 ORDER BY b".into();
+    q.optimize = Some(crate::app::OptimizeState {
+        running: false,
+        ran: true,
+        plan: Some(plan),
+        error: None,
+        frozen: 0,
+    });
+    let conns = test_conns();
+    let q = std::cell::RefCell::new(q);
+    render("modal_optimize", 1100.0, 760.0, true, move |ctx| {
+        let mut q = q.borrow_mut();
+        let _ = query::draw_query_view(&conns, ctx, "tq1", &mut q, &[], &[], false, &[], &Default::default(), None, false);
+    });
+
+    // 2) 列统计弹窗(12 行)
+    let mut app = test_app(vec![], 0);
+    let mut t = crate::app::TableTab::new("c1".into(), "users".into(), Some("dramato".into()));
+    t.loading = false;
+    t.col_stats = Some((
+        "status 列统计(当前页 500 行)".into(),
+        (0..12)
+            .map(|i| (format!("取值_{i}"), format!("{} 次 ({}%)", 40 - i * 3, 8 - i / 2)))
+            .collect(),
+    ));
+    app.tabs.push(Tab {
+        id: "t-stats".into(),
+        title: "users".into(),
+        kind: TabKind::Table(t),
+    });
+    app.active_tab = app.tabs.len() - 1;
+    let app = std::cell::RefCell::new(app);
+    render("modal_col_stats", 700.0, 640.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        // draw_app 简化路径不含弹窗,直接调绘制函数
+        crate::modals::draw_col_stats_modal(&mut b, ctx);
+    });
+
+    // 3) 导入预览弹窗(12 源列 -> 12 目标列映射)
+    let mut app = test_app(vec![], 0);
+    let headers: Vec<String> = (0..12).map(|i| format!("src_col_{i}")).collect();
+    let n = headers.len();
+    app.import = Some(crate::app::ImportState {
+        conn_id: "c1".into(),
+        database: Some("dramato".into()),
+        table: "users".into(),
+        path: "/tmp/big_export.csv".into(),
+        headers,
+        running: false,
+        col_map: (0..n).map(|i| Some(i)).collect(),
+        batch_errors: None,
+        target_cols: (0..n).map(|i| format!("target_col_{i}")).collect(),
+        parsing: false,
+    });
+    let app = std::cell::RefCell::new(app);
+    render("modal_import", 900.0, 720.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_import_modal(&mut b, ctx);
+    });
+
+    // 4) 新建表弹窗(长 SQL 模板)
+    let mut app = test_app(vec![], 0);
+    app.new_table = Some(crate::app::NewTableState {
+        conn_id: "c1".into(),
+        database: Some("dramato".into()),
+        name: String::new(),
+        sql: "CREATE TABLE `new_table` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;".into(),
+    });
+    let app = std::cell::RefCell::new(app);
+    render("modal_new_table", 700.0, 600.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_new_table_modal(&mut b, ctx);
+    });
+}
+
+fn test_query_tab() -> QueryTab {
+    QueryTab {
+        conn_id: "c1".into(),
+        database: None,
+        sql: String::new(),
+        history: vec![],
+        results: vec![],
+        active_set: 0,
+        running: false,
+        error: None,
+        optimize: None,
+        result_table: None,
+        result_db: None,
+        result_pk: vec![],
+        pk_checked: false,
+        q_changes: vec![],
+        q_changes_set: 0,
+        q_editing: None,
+        q_draft: String::new(),
+        ac: None,
+        q_frozen: 0,
+    }
+}
+
+fn test_conns() -> Vec<shujing_core::ConnInfo> {
+    vec![shujing_core::ConnInfo {
+        id: "c1".into(),
+        name: "dramato-dev".into(),
+        db_type: shujing_core::DbType::MySql,
+        host: Some("10.0.0.3".into()),
+        port: Some(3306),
+        user: Some("dev".into()),
+        password: None,
+        database: Some("dramato".into()),
+        file_path: None,
+        color: None,
+        read_only: false,
+    }]
+}
+
 #[test]
 fn render_designer_create() {
     let mut app = test_app(vec![], 0);

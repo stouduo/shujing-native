@@ -203,9 +203,11 @@ pub fn draw_designer_view(
                         .max_height(130.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let mut job = crate::sql_highlight::highlight(&sql);
-                            job.wrap.max_width = ui.available_width();
-                            let galley = ui.fonts(|f| f.layout_job(job));
+                            let galley = crate::sql_highlight::highlight_cached(
+                                ui.ctx(),
+                                &sql,
+                                ui.available_width(),
+                            );
                             let gsize = galley.size();
                             ui.painter().galley(ui.cursor().left_top(), galley, p.text2);
                             ui.allocate_space(gsize);

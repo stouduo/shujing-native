@@ -322,8 +322,12 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             .color(p.muted),
                     );
                     ui.add_space(8.0);
+                    // 上限按屏幕高度给足(12 组映射 ~380px 在 300 上限里被压小,
+                    // 细滚动条几乎不可见=体验上"截断";小窗仍有界)
                     egui::ScrollArea::vertical()
-                        .max_height(300.0)
+                        .max_height(
+                            (ui.ctx().screen_rect().height() * 0.52).clamp(200.0, 560.0),
+                        )
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             egui::Grid::new("import-map")

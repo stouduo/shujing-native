@@ -108,11 +108,18 @@ pub async fn import_table_file(
     info: ConnInfo,
     imp: crate::composite::CsvImport,
 ) -> Result<usize, String> {
-    let (_, rows) = if imp.path.to_lowercase().ends_with(".xlsx") {
-        parse_xlsx(&imp.path)?
-    } else {
-        crate::composite::parse_csv(&imp.path)?
-    };
+    // 解析是同步重 IO(整文件读入+全量切分,数百 MB 级):必须走 blocking 池,
+    // 否则占死仅有的 2 个 async worker 之一,期间所有查询/树刷新排队
+    let path = imp.path.clone();
+    let rows = tokio::task::spawn_blocking(move || -> Result<Vec<Vec<String>>, String> {
+        if path.to_lowercase().ends_with(".xlsx") {
+            parse_xlsx(&path).map(|(_, rows)| rows)
+        } else {
+            crate::composite::parse_csv(&path).map(|(_, rows)| rows)
+        }
+    })
+    .await
+    .map_err(|e| format!("解析任务失败: {e}"))??;
     crate::composite::import_rows(service, info, imp, rows).await
 }
 

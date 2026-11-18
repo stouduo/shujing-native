@@ -77,6 +77,43 @@ const KEYWORDS: &[&str] = &[
     "CROSS",
 ];
 
+/// 按(文本哈希, 换行宽度, 主题明暗)缓存 galley:大 DDL/长 SQL 每帧全量
+/// 重切词+重排版是滚动/输入掉帧的主因,内容未变直接复用(容量>32 清空)
+pub fn highlight_cached(
+    ctx: &egui::Context,
+    sql: &str,
+    wrap_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<(u64, u32, bool), Arc<egui::Galley>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let mut hasher = DefaultHasher::new();
+    sql.hash(&mut hasher);
+    let key = (
+        hasher.finish(),
+        wrap_width.to_bits(),
+        crate::theme::is_dark(),
+    );
+
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(g) = guard.get(&key) {
+        return g.clone();
+    }
+    let mut job = highlight(sql);
+    job.wrap.max_width = wrap_width;
+    let galley = ctx.fonts(|f| f.layout_job(job));
+    if guard.len() > 32 {
+        guard.clear();
+    }
+    guard.insert(key, galley.clone());
+    galley
+}
+
 /// 生成 SQL 高亮 LayoutJob(供 TextEdit::layouter 使用)
 pub fn highlight(sql: &str) -> LayoutJob {
     let mut job = LayoutJob::default();

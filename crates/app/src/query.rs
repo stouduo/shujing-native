@@ -273,9 +273,8 @@ pub fn draw_query_view(
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let mut layouter = |ui: &egui::Ui, sql: &str, wrap_width: f32| {
-                                let mut job = crate::sql_highlight::highlight(sql);
-                                job.wrap.max_width = wrap_width;
-                                ui.fonts(|f| f.layout_job(job))
+                                // 缓存版:输入停顿/滚动时不再每帧全量重排长 SQL
+                                crate::sql_highlight::highlight_cached(ui.ctx(), sql, wrap_width)
                             };
                             // 补全弹层打开时先消费 ↑↓/Tab/Enter/Esc,TextEdit 不再响应。
                             // 仅当编辑器持有焦点才吞:焦点在别处(如结果网格的单元格编辑器)
@@ -642,7 +641,15 @@ pub fn draw_optimize_modal(
                 });
                 ui.add_space(2.0);
                 ui.label(theme::strong("诊断建议", 12.0).color(p.text2));
-                for f in &findings {
+                // 建议列表有界滚动(按屏幕高度给足,小窗仍有界):原来无界,
+                // 计划行多时弹窗被撑得超出窗口、底部被硬裁(渲染巡检实测)
+                let scr_h = ui.ctx().screen_rect().height();
+                egui::ScrollArea::vertical()
+                    .id_salt("optimize-findings")
+                    .max_height((scr_h * 0.42).clamp(140.0, 320.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for f in &findings {
                     let (badge, col) = match f.level {
                         shujing_core::sql_advisor::Level::Danger => ("危险", p.red),
                         shujing_core::sql_advisor::Level::Warn => ("警告", ORANGE),
@@ -661,14 +668,15 @@ pub fn draw_optimize_modal(
                             b,
                             col,
                         );
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(&f.title).size(12.0).color(p.text));
-                            ui.label(
-                                RichText::new(&f.detail).size(11.0).color(p.muted),
-                            );
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(&f.title).size(12.0).color(p.text));
+                                ui.label(
+                                    RichText::new(&f.detail).size(11.0).color(p.muted),
+                                );
+                            });
                         });
+                    }
                     });
-                }
                 // 执行计划网格
                 if let Some(plan) = &state.plan {
                     if !plan.columns.is_empty() {
@@ -676,7 +684,7 @@ pub fn draw_optimize_modal(
                         ui.label(theme::strong("执行计划", 12.0).color(p.text2));
                         egui::ScrollArea::vertical()
                             .id_salt("optimize-plan-grid")
-                            .max_height(180.0)
+                            .max_height((scr_h * 0.3).clamp(120.0, 240.0))
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 // 冻结数经局部变量带出闭包后写回 OptimizeState

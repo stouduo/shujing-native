@@ -167,9 +167,11 @@ pub fn draw_structure_view(
                             .corner_radius(egui::CornerRadius::same(8))
                             .inner_margin(egui::Margin::same(12))
                             .show(ui, |ui| {
-                                let mut job = crate::sql_highlight::highlight(&data.ddl);
-                                job.wrap.max_width = ui.available_width();
-                                let galley = ui.fonts(|f| f.layout_job(job));
+                                let galley = crate::sql_highlight::highlight_cached(
+                                    ui.ctx(),
+                                    &data.ddl,
+                                    ui.available_width(),
+                                );
                                 let gsize = galley.size();
                                 ui.painter().galley(ui.cursor().left_top(), galley, p.text2);
                                 ui.allocate_space(gsize);
@@ -575,13 +577,13 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
                 });
                 return;
             };
-            let mut job = crate::sql_highlight::highlight(ddl);
-            job.wrap.max_width = ui.available_width();
+            let wrap_w = ui.available_width();
+            let ctx = ui.ctx().clone();
             egui::ScrollArea::vertical()
                 .id_salt(format!("objddl-{tab_id}"))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    let galley = ui.fonts(|f| f.layout_job(job));
+                    let galley = crate::sql_highlight::highlight_cached(&ctx, ddl, wrap_w);
                     let size = galley.size();
                     ui.painter().galley(ui.cursor().left_top(), galley, p.text2);
                     ui.allocate_space(size);

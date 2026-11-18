@@ -3797,6 +3797,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_kittest",
+ "futures-util",
  "memmap2",
  "objc2 0.6.5",
  "rfd",

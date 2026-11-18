@@ -2245,13 +2245,17 @@ impl ShujingApp {
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         crate::net::spawn(async move {
-            let result = service
+            // 写盘走 tokio::fs:数百 MB 的 SQL 导出不再阻塞仅有的 async worker
+            let result = match service
                 .export_database_sql(&conn_id, Some(db.clone()), with_data)
                 .await
-                .and_then(|(sql, _)| {
-                    std::fs::write(&path, sql).map_err(|e| format!("写入失败: {e}"))
-                })
-                .map(|_| path.display().to_string());
+            {
+                Ok((sql, _)) => tokio::fs::write(&path, sql)
+                    .await
+                    .map(|_| path.display().to_string())
+                    .map_err(|e| format!("写入失败: {e}")),
+                Err(e) => Err(e),
+            };
             let _ = tx.send(BgEvent::ExportDone { result });
         });
     }
@@ -2334,13 +2338,14 @@ impl ShujingApp {
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         crate::net::spawn(async move {
-            let result = service
-                .export_table_sql(&conn_id, database, &table, true)
-                .await
-                .and_then(|(sql, _)| {
-                    std::fs::write(&path, sql).map_err(|e| format!("写入失败: {e}"))
-                })
-                .map(|_| path.display().to_string());
+            // 写盘走 tokio::fs:数百 MB 的 SQL 导出不再阻塞仅有的 async worker
+            let result = match service.export_table_sql(&conn_id, database, &table, true).await {
+                Ok((sql, _)) => tokio::fs::write(&path, sql)
+                    .await
+                    .map(|_| path.display().to_string())
+                    .map_err(|e| format!("写入失败: {e}")),
+                Err(e) => Err(e),
+            };
             let _ = tx.send(BgEvent::ExportDone { result });
         });
     }
