@@ -638,6 +638,57 @@ pub fn field(
     resp
 }
 
+/// 多行表单输入框(Redis 新建 key 批量录入等):与 field() 同视觉,
+/// 真多行——此前批量录入走 singleline,每行一条的数据全挤在一行里
+pub fn form_field_multiline(
+    ui: &mut egui::Ui,
+    label: &str,
+    id_salt: &str,
+    text: &mut String,
+    width: f32,
+    rows: usize,
+) {
+    let p = c();
+    if !label.is_empty() {
+        ui.label(RichText::new(label).size(11.0).color(p.muted));
+        ui.add_space(4.0);
+    }
+    let line_h = 17.0;
+    let h = (rows.max(2) as f32 * line_h + 12.0).min(260.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(8), p.input_bg);
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + 10.0, rect.top() + 5.0),
+        egui::pos2(rect.right() - 10.0, rect.bottom() - 5.0),
+    );
+    let resp = ui
+        .allocate_new_ui(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::left_to_right(egui::Align::TOP)),
+            |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(text)
+                        .id(egui::Id::new(id_salt))
+                        .frame(false)
+                        .margin(egui::Margin::ZERO)
+                        .font(egui::FontId::monospace(12.0))
+                        .desired_width(inner.width())
+                        .desired_rows(rows),
+                )
+            },
+        )
+        .inner;
+    let border = if resp.has_focus() { p.accent } else { p.border };
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(8),
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
+}
+
 /// 表单输入框(带上置标签)
 pub fn form_field(
     ui: &mut egui::Ui,

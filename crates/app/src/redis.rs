@@ -919,7 +919,7 @@ fn draw_new_key_modal(
                 };
                 ui.label(RichText::new(hint).size(11.0).color(p.muted));
                 ui.add_space(2.0);
-                theme::form_field(ui, "", "rk-lines", &mut st.lines, 500.0, false);
+                theme::form_field_multiline(ui, "", "rk-lines", &mut st.lines, 500.0, 6);
                 let n = parse_pairs(st.kind, &st.lines).len();
                 ui.label(
                     RichText::new(format!("{n} 条记录"))

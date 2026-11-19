@@ -893,6 +893,84 @@ fn structure_long_ddl_scroll_to_bottom() {
 }
 
 /// 结构页长 DDL:全高展开由整页滚动(原内嵌 320px 小滚动区已删),渲染自检
+
+/// 弹窗渲染巡检第二轮:Redis 新建 key(多行预览)/Redis 扫描分析(20 条结果条形图)/
+/// 外观设置/快速打开——同"内容多被压小/截断"类问题的批量视觉自检
+#[test]
+fn render_modals_visual_sweep2() {
+    // 1) Redis 新建 key:hash 类型多行输入 + 计数
+    let mut app = test_app(vec![], 0);
+    app.open_redis("c1", 0);
+    if let TabKind::Redis(rt) = &mut app.tabs.last_mut().unwrap().kind {
+        rt.keys = vec!["user:1001".into()];
+        rt.selected_key = Some("user:1001".into());
+        rt.new_key = Some(crate::app::RedisNewKeyState {
+            name: "session:cart:9f2".into(),
+            kind: 1,
+            text: String::new(),
+            lines: (0..8)
+                .map(|i| format!("field_{i}=value_{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        });
+    }
+    let app = std::cell::RefCell::new(app);
+    render("modal_redis_newkey", 900.0, 700.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+
+    // 2) Redis 扫描分析:大 key 模式 20 条结果
+    let mut app = test_app(vec![], 0);
+    app.open_redis("c1", 0);
+    if let TabKind::Redis(rt) = &mut app.tabs.last_mut().unwrap().kind {
+        rt.analyze = Some(crate::app::RedisAnalyzeState {
+            mode: 0,
+            sample: 1000,
+            running: false,
+            ran: true,
+            stats: (0..20)
+                .map(|i| shujing_core::redis_ops::KeyStat {
+                    key: format!("big:cache:user:{i}:profile"),
+                    key_type: "hash".into(),
+                    mem: 900_000 - i * 40_000,
+                    len: 5000 - i * 200,
+                    freq: -1,
+                })
+                .collect(),
+            error: None,
+        });
+    }
+    let app = std::cell::RefCell::new(app);
+    render("modal_redis_analyze", 900.0, 760.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+
+    // 3) 外观设置
+    let mut app = test_app(vec![], 0);
+    app.settings_open = true;
+    let app = std::cell::RefCell::new(app);
+    render("modal_settings", 700.0, 560.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_settings_modal(&mut b, ctx);
+    });
+
+    // 4) 快速打开(输入过滤态)
+    let mut app = test_app(vec![], 0);
+    app.quick_open = Some(crate::app::QuickOpen {
+        query: "us".into(),
+        sel: 0,
+    });
+    let app = std::cell::RefCell::new(app);
+    render("modal_quick_open", 800.0, 620.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_quick_open(&mut b, ctx);
+    });
+}
+
 #[test]
 fn render_structure_long_ddl() {
     let cols: Vec<shujing_core::ColumnDef> = (0..30)
