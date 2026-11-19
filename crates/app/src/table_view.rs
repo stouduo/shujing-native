@@ -225,6 +225,11 @@ pub enum TabAction {
     },
     OpenSettings,
     PreviewParquet,
+    OpenSchemaDiff {
+        conn_id: String,
+        db: Option<String>,
+        table: String,
+    },
     ReloadDdl {
         tab_id: String,
     },
@@ -1038,6 +1043,14 @@ pub(crate) fn draw_table_view(
                             }
                             if ui.button("预览 Parquet 文件…").clicked() {
                                 toolbar_menu = Some(TabAction::PreviewParquet);
+                                ui.close_menu();
+                            }
+                            if ui.button("结构对比…").clicked() {
+                                actions.push(TabAction::OpenSchemaDiff {
+                                    conn_id: tab.conn_id.clone(),
+                                    db: tab.database.clone(),
+                                    table: tab.table.clone(),
+                                });
                                 ui.close_menu();
                             }
                             ui.separator();
@@ -3775,6 +3788,11 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             });
         }
         TabAction::PreviewParquet => app.preview_parquet_file(),
+        TabAction::OpenSchemaDiff {
+            conn_id,
+            db,
+            table,
+        } => app.open_schema_diff(&conn_id, db.as_deref(), &table),
         TabAction::ToggleTheme => {
             let dark = !theme::is_dark();
             app.set_theme_dark(ctx, dark);
@@ -4756,6 +4774,7 @@ impl eframe::App for ShujingApp {
             || self.settings_open
             || self.db_filter.is_some()
             || self.parquet_preview.is_some()
+            || self.schema_diff.is_some()
             || self
                 .tabs
                 .iter()
@@ -5028,6 +5047,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_db_filter_modal(self, ctx);
         crate::modals::draw_settings_modal(self, ctx);
         crate::modals::draw_parquet_modal(self, ctx);
+        crate::modals::draw_schema_diff_modal(self, ctx);
 
         if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {
             self.conn_modal = Some(ConnModal::new());

@@ -69,6 +69,10 @@ enum SessionTab {
 }
 
 pub enum BgEvent {
+    SchemaDiffDone {
+        state: SchemaDiffState,
+        result: Result<shujing_core::schema_diff::TableDiff, String>,
+    },
     ParquetPreviewDone {
         path: String,
         result: Result<shujing_core::parquet_preview::ParquetPreview, String>,
@@ -590,6 +594,20 @@ impl ConfirmState {
     }
 }
 
+/// 结构对比状态(源=右键表;目标=任一连接的任一表)
+#[derive(Clone)]
+pub struct SchemaDiffState {
+    pub src_conn: String,
+    pub src_db: Option<String>,
+    pub src_table: String,
+    pub dst_conn: String,
+    pub dst_db: String,
+    pub dst_table: String,
+    pub running: bool,
+    pub result: Option<shujing_core::schema_diff::TableDiff>,
+    pub error: Option<String>,
+}
+
 /// 全局数据搜索(⌘⇧F)
 pub struct GlobalSearchState {
     pub conn_id: String,
@@ -913,6 +931,8 @@ pub struct ShujingApp {
     pub settings_open: bool,
     /// Parquet 文件预览(路径,解析结果)
     pub parquet_preview: Option<(String, shujing_core::parquet_preview::ParquetPreview)>,
+    /// 结构对比(源表来自右键,目标可跨连接)
+    pub schema_diff: Option<SchemaDiffState>,
     /// 库筛选弹窗(每连接勾选显示哪些库)
     pub db_filter: Option<DbFilterState>,
     /// 侧栏底部主题切换请求(绘制层无 ctx,经 update 消费)
@@ -1003,6 +1023,7 @@ impl ShujingApp {
             snippets,
             settings_open: false,
             parquet_preview: None,
+            schema_diff: None,
             db_filter: None,
             theme_toggle_requested: false,
             session_dirty: false,
@@ -2304,6 +2325,44 @@ impl ShujingApp {
         });
     }
 
+    /// 打开结构对比弹窗(源=右键表;目标预填同一连接/库/表)
+    pub fn open_schema_diff(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
+        self.schema_diff = Some(SchemaDiffState {
+            src_conn: conn_id.to_string(),
+            src_db: db.map(str::to_string),
+            src_table: table.to_string(),
+            dst_conn: conn_id.to_string(),
+            dst_db: db.unwrap_or_default().to_string(),
+            dst_table: table.to_string(),
+            running: false,
+            result: None,
+            error: None,
+        });
+    }
+
+    /// 运行结构对比(异步)
+    pub fn run_schema_diff(&mut self) {
+        let Some(st) = self.schema_diff.as_ref() else { return };
+        let state = SchemaDiffState {
+            running: true,
+            result: None,
+            error: None,
+            ..st.clone()
+        };
+        self.schema_diff = Some(state.clone());
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = shujing_core::schema_diff::diff_tables(
+                &service,
+                (&state.src_conn, state.src_db.as_deref(), &state.src_table),
+                (&state.dst_conn, if state.dst_db.is_empty() { None } else { Some(state.dst_db.as_str()) }, &state.dst_table),
+            )
+            .await;
+            let _ = tx.send(BgEvent::SchemaDiffDone { state, result });
+        });
+    }
+
     /// Parquet 文件预览:选文件 → blocking 池解析前 200 行 → 弹窗展示
     pub fn preview_parquet_file(&mut self) {
         let Some(path) = rfd::FileDialog::new()
@@ -3343,6 +3402,19 @@ impl ShujingApp {
                         m.testing = false;
                         m.test_result = Some(result);
                     }
+                }
+                BgEvent::SchemaDiffDone { state, result } => {
+                    let (ok_res, err_res) = match result {
+                        Ok(d) => (Some(d), None),
+                        Err(e) => (None, Some(e)),
+                    };
+                    self.schema_diff = Some(SchemaDiffState {
+                        running: false,
+                        result: ok_res,
+                        error: err_res,
+                        ..state
+                    });
+                    continue;
                 }
                 BgEvent::ParquetPreviewDone { path, result } => {
                     match result {

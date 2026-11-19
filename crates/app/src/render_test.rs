@@ -154,6 +154,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         dirty_override: false,
         skip_edit_preview: false,
         parquet_preview: None,
+        schema_diff: None,
         shot: None,
         dark_mode: true,
         follow_system_theme: false,

@@ -12,6 +12,7 @@ pub mod redis_ops;
 pub mod conn_import;
 pub mod parquet_preview;
 pub mod schema;
+pub mod schema_diff;
 pub mod ssh;
 mod search;
 pub mod sql_advisor;
