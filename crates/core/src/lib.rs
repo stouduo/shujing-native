@@ -19,7 +19,7 @@ pub mod store;
 pub use search::SearchHit;
 pub use model::{
     AppState, ColumnDef, ConnInfo, ConnectResult, DbType, ExecResult, IndexDef, LiveConn,
-    SshConfig, TableMeta, TableStructure,
+    SshConfig, TableMeta, TableStructure, is_readonly_redis, is_readonly_sql,
 };
 
 use model::CancelState;
@@ -71,6 +71,19 @@ impl Service {
         conns.retain(|c| c.id != id);
         store::save_conns(&self.config_dir, &conns)?;
         Ok(conns)
+    }
+
+    /// 按 id 连接(从已保存配置查找;MCP/脚本场景)。已在线直接复用
+    pub async fn connect_by_id(&self, id: &str) -> Result<(), String> {
+        if self.state.live(id).is_some() {
+            return Ok(());
+        }
+        let info = self
+            .list_saved_connections()
+            .into_iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| format!("连接不存在: {id}"))?;
+        self.connect(info).await.map(|_| ())
     }
 
     pub async fn test_connection(info: ConnInfo) -> Result<ConnectResult, String> {

@@ -4718,6 +4718,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shujing-mcp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shujing-core",
+ "tokio",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

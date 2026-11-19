@@ -1,0 +1,15 @@
+[package]
+name = "shujing-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "数镜 MCP Server:AI 编码代理(Claude Code/Cursor 等)经 Model Context Protocol 查询数镜已配置的数据库"
+
+[dependencies]
+shujing-core = { path = "../core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "shujing-mcp"
+path = "src/main.rs"

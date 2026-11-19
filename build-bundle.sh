@@ -8,12 +8,14 @@ NAME="数镜"
 BUNDLE="/tmp/数镜.app"
 
 echo "==> release 构建"
-cargo build --release -p shujing-app
+cargo build --release -p shujing-app -p shujing-mcp
 
 echo "==> 组装 .app (v$VERSION)"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cp target/release/shujing-app "$BUNDLE/Contents/MacOS/shujing-native"
+# MCP Server 随包分发:.mcp.json 可直接指向 /Applications/数镜.app/Contents/MacOS/shujing-mcp
+cp target/release/shujing-mcp "$BUNDLE/Contents/MacOS/shujing-mcp"
 cp assets/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
 
 cat > "$BUNDLE/Contents/Info.plist" <<PLIST
