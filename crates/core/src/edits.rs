@@ -165,6 +165,7 @@ pub async fn apply_changes(
             affected
         }
         Backend::Redis(_) => return Err("Redis 请使用专门的命令通道".into()),
+        Backend::Mongo(_) => return Err("MongoDB 不支持 SQL 回写".into()),
     };
 
     Ok(ExecResult {

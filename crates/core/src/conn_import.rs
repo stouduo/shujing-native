@@ -10,6 +10,7 @@ fn conn_id(name: &str, db_type: &DbType) -> String {
         DbType::Postgres => "pg",
         DbType::Sqlite => "sqlite",
         DbType::Redis => "redis",
+        DbType::Mongo => "mongo",
     };
     // 稳定 id:导入重跑不会因时间戳不同而重复
     format!("imp-{t}-{}", sanitize(name))
@@ -47,6 +48,7 @@ fn dbeaver_provider_to_type(provider: &str) -> Option<DbType> {
         }
         "sqlite" => Some(DbType::Sqlite),
         "redis" => Some(DbType::Redis),
+        "mongodb" | "mongo" => Some(DbType::Mongo),
         _ => None,
     }
 }
@@ -204,6 +206,7 @@ fn ncx_type_to_db_type(ct: &str) -> Option<DbType> {
         "POSTGRESQL" | "PG" => Some(DbType::Postgres),
         "SQLITE" => Some(DbType::Sqlite),
         "REDIS" => Some(DbType::Redis),
+        "MONGODB" => Some(DbType::Mongo),
         _ => None,
     }
 }
@@ -311,7 +314,9 @@ mod tests {
           }
         }"#;
         let conns = import_connections(text).unwrap();
-        assert_eq!(conns.len(), 2);
+        // mongo-x 现已支持(Mongo 类型),3 条全导入
+        assert_eq!(conns.len(), 3);
+        assert!(conns.iter().any(|c| c.db_type == DbType::Mongo && c.name == "不支持"));
         let mysql = conns.iter().find(|c| c.name == "本地 MySQL").unwrap();
         assert_eq!(mysql.db_type, DbType::MySql);
         assert_eq!(mysql.host.as_deref(), Some("127.0.0.1"));

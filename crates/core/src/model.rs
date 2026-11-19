@@ -9,6 +9,8 @@ pub enum DbType {
     MySql,
     Postgres,
     Redis,
+    #[serde(rename = "mongodb")]
+    Mongo,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -416,6 +418,14 @@ pub enum Backend {
     MySql(MySqlPool),
     Pg(PgPool),
     Redis(RedisState),
+    Mongo(MongoState),
+}
+
+/// MongoDB 连接状态(驱动自带连接池与重连)
+pub struct MongoState {
+    pub client: mongodb::Client,
+    /// count_rows 等无库参数的调用从结构加载时记住的当前库
+    pub cur_db: tokio::sync::Mutex<Option<String>>,
 }
 
 /// Redis 连接状态:ConnectionManager 自动重连(MultiplexedConnection 的驱动任务出错即终止,不重连——

@@ -305,7 +305,7 @@ pub fn designer_sql(
             DbType::Sqlite => {
                 warnings.push(format!("SQLite 无法修改已有列「{}」,已跳过", c.name));
             }
-            DbType::Redis => {}
+            DbType::Redis | DbType::Mongo => {}
         }
     }
     if alters.is_empty() && warnings.is_empty() {

@@ -145,6 +145,7 @@ pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<V
             Ok(out)
         }
         Backend::Redis(_) => Ok(vec![]),
+        Backend::Mongo(st) => crate::mongo::list_databases(st).await,
     }
 }
 
@@ -619,6 +620,7 @@ pub async fn object_ddl(
         }
     };
     let sql = match (&info.db_type, kind) {
+        (crate::model::DbType::Mongo, _) => String::new(),
         (crate::model::DbType::Sqlite, _) => format!(
             "SELECT sql FROM sqlite_master WHERE name = {}",
             format!("'{}'", name.replace('\'', "''"))
@@ -689,6 +691,19 @@ impl Backend {
                     })
                     .collect()
             }),
+            Backend::Mongo(st) => {
+                let cur_db = st.cur_db.try_lock().ok().and_then(|g| g.clone());
+                let db = database
+                    .map(str::trim)
+                    .filter(|d| !d.is_empty())
+                    .map(str::to_string)
+                    .or(cur_db.filter(|d| !d.trim().is_empty()));
+                Ok(crate::mongo::list_collections(st, db.as_deref())
+                    .await?
+                    .into_iter()
+                    .map(|name| TableMeta { name, kind: "table".into(), owner: None })
+                    .collect())
+            }
         }
     }
 
@@ -745,6 +760,13 @@ async fn resolve_mysql_db(
                 struct_pg(&client, table).await
             }
             Backend::Redis(_) => Err("Redis 无表结构".into()),
+            Backend::Mongo(st) => {
+                let cur_db = st.cur_db.try_lock().ok().and_then(|g| g.clone());
+                let db = database
+                    .filter(|d| !d.trim().is_empty())
+                    .or(cur_db.as_deref());
+                crate::mongo::structure(st, db, table).await
+            }
         }
     }
 
@@ -760,6 +782,7 @@ async fn resolve_mysql_db(
                 count_pg(&client, table).await
             }
             Backend::Redis(_) => Err("Redis 无表计数".into()),
+            Backend::Mongo(st) => crate::mongo::backend_count(st, table).await,
         }
     }
 
@@ -780,6 +803,7 @@ async fn resolve_mysql_db(
                 fk_pg(&client).await
             }
             Backend::Redis(_) => Ok(vec![]),
+            Backend::Mongo(_) => Ok(vec![]),
         }
     }
 }

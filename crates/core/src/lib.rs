@@ -10,6 +10,7 @@ pub mod exec;
 mod model;
 pub mod redis_ops;
 pub mod conn_import;
+pub mod mongo;
 pub mod parquet_preview;
 pub mod schema;
 pub mod schema_diff;
@@ -76,6 +77,44 @@ impl Service {
         Ok(conns)
     }
 
+    /// MongoDB 集合计数(带库上下文)
+    pub async fn mongo_count(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+    ) -> Result<u64, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::count(st, database, collection).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
+    /// MongoDB 采样浏览:返回(列,行)展平网格
+    pub async fn mongo_sample(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        filter_json: Option<&str>,
+        limit: usize,
+        offset: u64,
+    ) -> Result<(Vec<String>, Vec<Vec<Option<String>>>), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::sample(st, database, collection, filter_json, limit, offset)
+                    .await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
     /// 按 id 连接(从已保存配置查找;MCP/脚本场景)。已在线直接复用
     pub async fn connect_by_id(&self, id: &str) -> Result<(), String> {
         if self.state.live(id).is_some() {
@@ -101,6 +140,7 @@ impl Service {
                 crate::model::DbType::MySql => 3306,
                 crate::model::DbType::Postgres => 5432,
                 crate::model::DbType::Redis => 6379,
+                crate::model::DbType::Mongo => 27017,
                 crate::model::DbType::Sqlite => 0,
             });
             let g = ssh::open_tunnel(&ssh_cfg, &target_host, target_port).await?;
@@ -167,6 +207,7 @@ impl Service {
             crate::model::DbType::MySql => 3306,
             crate::model::DbType::Postgres => 5432,
             crate::model::DbType::Redis => 6379,
+            crate::model::DbType::Mongo => 27017,
             crate::model::DbType::Sqlite => 0,
         });
         let guard = ssh::open_tunnel(ssh_cfg, &target_host, target_port).await?;
@@ -357,6 +398,16 @@ impl Service {
         let sql = sql.trim().to_string();
         if sql.is_empty() {
             return Err("SQL 为空".into());
+        }
+        {
+            let live = self.state.live(id);
+            if let Some(lc) = live {
+                if matches!(lc.lock().await.backend, crate::model::Backend::Mongo(_)) {
+                    return Err(
+                        "MongoDB 不支持 SQL(浏览集合用数据页;过滤输入 JSON 对象)".into(),
+                    );
+                }
+            }
         }
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let cancel_state = self.state.cancel(id).ok_or("连接未建立或已断开")?;

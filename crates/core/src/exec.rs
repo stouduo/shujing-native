@@ -432,6 +432,9 @@ impl Backend {
                 r
             }
             Backend::Redis(_) => Err("Redis 请使用专门的命令通道".into()),
+            Backend::Mongo(_) => {
+                Err("MongoDB 不支持 SQL 查询(浏览集合用数据页;过滤输入 JSON 对象)".into())
+            }
         }
     }
 

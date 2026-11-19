@@ -158,7 +158,61 @@ pub async fn connect(
                 applied: vec![None; 3],
                 running_pid: pg_pid.unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0))),
             }))
-        }    }
+        }
+        DbType::Mongo => {
+            let host = req(&info.host, "缺少 MongoDB 主机地址")?;
+            let port = info.port.unwrap_or(27017);
+            let mut url = match (&info.user, &info.password) {
+                (Some(u), Some(p)) => format!(
+                    "mongodb://{}:{}@{host}:{port}",
+                    urlencode(u),
+                    urlencode(p)
+                ),
+                _ => format!("mongodb://{host}:{port}"),
+            };
+            let auth_db = info
+                .database
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if let Some(d) = auth_db {
+                url.push('/');
+                url.push_str(d);
+            }
+            url.push_str("?serverSelectionTimeoutMS=8000");
+            let client = mongodb::Client::with_uri_str(&url)
+                .await
+                .map_err(|e| format!("MongoDB 连接失败: {e}"))?;
+            // 探活:8s 上限(与其他后端一致,避免 OS 级 TCP 超时)
+            tokio::time::timeout(
+                Duration::from_secs(8),
+                client
+                    .database("admin")
+                    .run_command(mongodb::bson::doc! { "ping": 1 }),
+            )
+            .await
+            .map_err(|_| "MongoDB 连接超时(8s)".to_string())?
+            .map_err(|e| format!("MongoDB 连接失败: {e}"))?;
+            Ok(Backend::Mongo(crate::model::MongoState {
+                client,
+                cur_db: tokio::sync::Mutex::new(auth_db.map(str::to_string)),
+            }))
+        }
+    }
+}
+
+/// URL userinfo 的 percent-encode(密码含 @/:/? 等会破坏连接串解析)
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 impl Backend {
@@ -292,6 +346,19 @@ impl Backend {
                     }
                 }
                 Ok("PostgreSQL".into())
+            }
+            Backend::Mongo(m) => {
+                let info = m
+                    .client
+                    .database("admin")
+                    .run_command(mongodb::bson::doc! { "buildInfo": 1 })
+                    .await
+                    .map_err(|e| format!("MongoDB: {e}"))?;
+                let ver = info
+                    .get_str("version")
+                    .map(|s| format!("MongoDB {s}"))
+                    .unwrap_or_else(|_| "MongoDB".into());
+                Ok(ver)
             }
         }
     }

@@ -2030,6 +2030,14 @@ impl ShujingApp {
             Some(t) => (mysql_quote(&self.conns, &t.conn_id), t.conn_id.clone()),
             None => return,
         };
+        let is_mongo = self
+            .conns
+            .iter()
+            .any(|c| c.id == conn_id && c.db_type == shujing_core::DbType::Mongo);
+        if is_mongo {
+            self.load_rows_mongo(&tab_id);
+            return;
+        }
         let Some(tab) = self.table_tab_mut(&tab_id) else {
             return;
         };
@@ -2122,6 +2130,78 @@ impl ShujingApp {
                     .and_then(|v| v.as_deref())
                     .and_then(|s| s.parse::<u64>().ok())
             });
+            let _ = tx.send(BgEvent::CountLoaded { tab_id, seq, total });
+        });
+    }
+
+    /// Mongo 数据页加载:find(filter) 采样 + count(filter),无 SQL
+    fn load_rows_mongo(&mut self, tab_id: &str) {
+        let tab_id = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let Some(tab) = self.table_tab_mut(&tab_id) else { return };
+        let conn_id = tab.conn_id.clone();
+        let database = tab.database.clone();
+        let table = tab.table.clone();
+        let (limit, offset) = (tab.page_size, (tab.page - 1) * tab.page_size);
+        // 过滤:active_filter 须是 JSON 对象(Mongo 查询语法);SQL 片段拒绝
+        let filter: Option<String> = tab.active_filter.as_ref().and_then(|q| {
+            let t = q.trim();
+            if t.starts_with('{') && serde_json::from_str::<serde_json::Value>(t).is_ok() {
+                Some(t.to_string())
+            } else {
+                None
+            }
+        });
+        let has_applied_sql = tab.applied_where.is_some();
+        tab.load_seq = tab.load_seq.wrapping_add(1);
+        let seq = tab.load_seq;
+        tab.loading = true;
+        tab.changes.clear();
+        tab.orig_pks.clear();
+        tab.editing = None;
+        tab.multi_sel.clear();
+        tab.sel_range = None;
+        tab.drag_sel = None;
+        tab.drag_row = None;
+        net::spawn(async move {
+            if has_applied_sql {
+                let _ = tx.send(BgEvent::RowsLoaded {
+                    tab_id: tab_id.clone(),
+                    seq,
+                    result: Err(
+                        "Mongo 仅支持 JSON 过滤:在筛选框输入如 {\"age\": {\"$gt\": 18}}"
+                            .into(),
+                    ),
+                });
+                return;
+            }
+            let result = service
+                .mongo_sample(
+                    &conn_id,
+                    database.as_deref(),
+                    &table,
+                    filter.as_deref(),
+                    limit,
+                    offset as u64,
+                )
+                .await
+                .map(|(columns, rows)| shujing_core::ExecResult {
+                    columns,
+                    rows,
+                    affected: 0,
+                    truncated: false,
+                    elapsed_ms: 0,
+                });
+            let _ = tx.send(BgEvent::RowsLoaded {
+                tab_id: tab_id.clone(),
+                seq,
+                result,
+            });
+            let total = service
+                .mongo_count(&conn_id, database.as_deref(), &table)
+                .await
+                .ok();
             let _ = tx.send(BgEvent::CountLoaded { tab_id, seq, total });
         });
     }
