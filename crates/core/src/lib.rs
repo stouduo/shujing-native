@@ -1,6 +1,7 @@
 //! 数镜原生版核心服务:自 dbclient/src-tauri 迁移的连接池/SQL 执行/编辑回写/结构查询。
 //! 纯 Rust 库,无 UI 框架依赖;egui 应用进程内直调(无 IPC)。
 
+pub mod ai;
 pub mod backend;
 pub mod composite;
 pub mod designer;

@@ -147,6 +147,17 @@ pub fn draw_query_view(
                             }
                         }
                     }
+                    if !is_redis {
+                        let ai = theme::button(ui, "AI", theme::BtnKind::Secondary);
+                        let ai_clicked = ai.clicked();
+                        ai.on_hover_text("AI 助手:生成 SQL / 解释 / 优化建议(设置里配 API)");
+                        if ai_clicked {
+                            actions.push(TabAction::OpenAiAssist {
+                                tab_id: tab_id.to_string(),
+                                mode: 0,
+                            });
+                        }
+                    }
                     if !is_redis
                         && theme::button(ui, "格式化", theme::BtnKind::Secondary)
                             .on_hover_text("美化 SQL(关键字大写+换行缩进)")

@@ -225,6 +225,10 @@ pub enum TabAction {
     },
     OpenSettings,
     PreviewParquet,
+    OpenAiAssist {
+        tab_id: String,
+        mode: u8,
+    },
     OpenSchemaDiff {
         conn_id: String,
         db: Option<String>,
@@ -3788,6 +3792,7 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             });
         }
         TabAction::PreviewParquet => app.preview_parquet_file(),
+        TabAction::OpenAiAssist { tab_id, mode } => app.open_ai_assist(&tab_id, mode),
         TabAction::OpenSchemaDiff {
             conn_id,
             db,
@@ -4777,6 +4782,7 @@ impl eframe::App for ShujingApp {
             || self.db_filter.is_some()
             || self.parquet_preview.is_some()
             || self.schema_diff.is_some()
+            || self.ai_assist.is_some()
             || self
                 .tabs
                 .iter()
@@ -5050,6 +5056,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_settings_modal(self, ctx);
         crate::modals::draw_parquet_modal(self, ctx);
         crate::modals::draw_schema_diff_modal(self, ctx);
+        crate::modals::draw_ai_modal(self, ctx);
 
         if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {
             self.conn_modal = Some(ConnModal::new());

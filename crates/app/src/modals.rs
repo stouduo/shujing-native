@@ -1104,6 +1104,175 @@ pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 }
 /// 外观设置弹窗(强调色)
+/// AI 助手弹窗:生成/解释/优化三模式,历史记录展示,结果可插入编辑器
+pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.ai_assist.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut run = false;
+    let mut insert_sql: Option<String> = None;
+    let modal = egui::Modal::new(egui::Id::new("ai-assist"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(640.0);
+            let Some(st) = app.ai_assist.as_mut() else { return };
+            theme::modal_title(ui, "AI SQL 助手");
+            // 模式分段(运行中锁定)
+            ui.horizontal(|ui| {
+                for (m, label) in [(0u8, "生成 SQL"), (1, "解释"), (2, "优化建议")] {
+                    if theme::button(
+                        ui,
+                        label,
+                        if st.mode == m {
+                            theme::BtnKind::Primary
+                        } else {
+                            theme::BtnKind::Secondary
+                        },
+                    )
+                    .clicked()
+                        && !st.running
+                    {
+                        st.mode = m;
+                        st.history.clear();
+                        st.error = None;
+                        if m != 0 {
+                            st.input = app
+                                .tabs
+                                .iter()
+                                .find(|t| t.id == st.tab_id)
+                                .and_then(|t| match &t.kind {
+                                    crate::app::TabKind::Query(q) => {
+                                        Some(q.sql.trim().to_string())
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
+                        }
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if app.ai_config.api_key.is_empty() {
+                        ui.label(
+                            RichText::new("未配置 API Key(设置 → AI)")
+                                .size(10.5)
+                                .color(DIFF_ORANGE),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(&app.ai_config.model).size(10.5).color(p.muted),
+                        );
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            let hint = match st.mode {
+                0 => "描述需求,如:查最近 7 天下单超过 3 次的用户",
+                1 => "要解释的 SQL(已带出编辑器内容)",
+                _ => "要优化的 SQL(已带出编辑器内容)",
+            };
+            theme::form_field_multiline(ui, hint, "ai-input", &mut st.input, 620.0, 4);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if theme::button(
+                    ui,
+                    if st.running { "请求中…" } else { "发送" },
+                    theme::BtnKind::Primary,
+                )
+                .clicked()
+                    && !st.running
+                {
+                    run = true;
+                }
+                if let Some(err) = &st.error {
+                    ui.label(
+                        RichText::new(icons::clip(err, 80)).size(11.0).color(p.red),
+                    );
+                }
+            });
+            // 历史结果(最新在前)
+            for (i, (title, content)) in st.history.iter().enumerate().rev() {
+                ui.add_space(6.0);
+                ui.label(RichText::new(title).size(11.0).color(p.muted));
+                egui::Frame::new()
+                    .fill(p.input_bg)
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt(format!("ai-out-{i}"))
+                            .max_height(ui.ctx().screen_rect().height() * 0.3)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let is_sql = title == "生成 SQL";
+                                let text = if is_sql {
+                                    // 展示剥出的纯 SQL
+                                    shujing_core::ai::extract_sql(content).clone()
+                                } else {
+                                    content.clone()
+                                };
+                                let mut job = if is_sql {
+                                    crate::sql_highlight::highlight(&text)
+                                } else {
+                                    let mut j = egui::text::LayoutJob::default();
+                                    j.append(
+                                        &text,
+                                        0.0,
+                                        egui::TextFormat::simple(
+                                            egui::FontId::proportional(12.0),
+                                            p.text2,
+                                        ),
+                                    );
+                                    j
+                                };
+                                job.wrap.max_width = ui.available_width();
+                                let galley = ui.fonts(|f| f.layout_job(job));
+                                let sz = galley.size();
+                                ui.painter().galley(ui.cursor().left_top(), galley, p.text2);
+                                ui.allocate_space(sz);
+                            });
+                    });
+                if title == "生成 SQL" {
+                    ui.horizontal(|ui| {
+                        if theme::button(ui, "插入编辑器", theme::BtnKind::Secondary).clicked() {
+                            insert_sql =
+                                Some(shujing_core::ai::extract_sql(content));
+                        }
+                        if theme::button(ui, "复制", theme::BtnKind::Secondary).clicked() {
+                            ui.ctx()
+                                .copy_text(shujing_core::ai::extract_sql(content));
+                        }
+                    });
+                }
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, "关闭", theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if run {
+        app.run_ai_assist();
+    }
+    if let Some(sql) = insert_sql {
+        // 插入当前查询标签编辑器(替换全文;用户仍可撤销/编辑)
+        if let Some(st) = app.ai_assist.as_ref() {
+            let tid = st.tab_id.clone();
+            if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == tid) {
+                if let crate::app::TabKind::Query(q) = &mut tab.kind {
+                    q.sql = sql;
+                    q.results.clear();
+                }
+            }
+        }
+    }
+    if close || modal.should_close() {
+        app.ai_assist = None;
+    }
+}
+
 /// 结构对比弹窗(源表右键进入):目标三选 + 运行 + 差异清单 + 对齐 ALTER 预览
 pub fn draw_schema_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.schema_diff.is_none() {
@@ -1420,6 +1589,18 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     .color(p.text2),
                 );
             });
+            // AI 助手
+            ui.add_space(8.0);
+            ui.label(theme::strong("AI 助手", 12.5).color(p.text2));
+            ui.label(
+                RichText::new("OpenAI 兼容端点;Key 只存本机 settings.json")
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            ui.add_space(4.0);
+            theme::form_field(ui, "Base URL", "ai-base", &mut app.ai_config.base_url, 320.0, false);
+            theme::form_field(ui, "API Key", "ai-key", &mut app.ai_config.api_key, 320.0, true);
+            theme::form_field(ui, "模型", "ai-model", &mut app.ai_config.model, 320.0, false);
             theme::modal_footer(ui, |ui| {
                 if theme::button(ui, "完成", theme::BtnKind::Primary).clicked() {
                     close = true;
@@ -1428,6 +1609,8 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         });
     if close || modal.should_close() {
         app.settings_open = false;
+        // 关闭即保存(含 AI 配置)
+        app.save_theme_settings();
     }
 }
 /// 库筛选弹窗:勾选该连接在侧栏显示哪些库(持久化 db_filters.json)

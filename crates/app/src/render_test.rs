@@ -155,6 +155,8 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         skip_edit_preview: false,
         parquet_preview: None,
         schema_diff: None,
+        ai_config: Default::default(),
+        ai_assist: None,
         shot: None,
         dark_mode: true,
         follow_system_theme: false,

@@ -69,6 +69,11 @@ enum SessionTab {
 }
 
 pub enum BgEvent {
+    AiDone {
+        tab_id: String,
+        mode: u8,
+        result: Result<String, String>,
+    },
     SchemaDiffDone {
         state: SchemaDiffState,
         result: Result<shujing_core::schema_diff::TableDiff, String>,
@@ -594,6 +599,18 @@ impl ConfirmState {
     }
 }
 
+/// AI 助手弹窗(挂查询标签;模式=生成/解释/优化)
+pub struct AiAssistState {
+    pub tab_id: String,
+    /// 0 生成 / 1 解释 / 2 优化
+    pub mode: u8,
+    pub input: String,
+    pub running: bool,
+    /// (标题, 内容)历史,最新在后
+    pub history: Vec<(String, String)>,
+    pub error: Option<String>,
+}
+
 /// 结构对比状态(源=右键表;目标=任一连接的任一表)
 #[derive(Clone)]
 pub struct SchemaDiffState {
@@ -931,6 +948,10 @@ pub struct ShujingApp {
     pub settings_open: bool,
     /// Parquet 文件预览(路径,解析结果)
     pub parquet_preview: Option<(String, shujing_core::parquet_preview::ParquetPreview)>,
+    /// AI 助手配置(base_url/key/model,settings.json)
+    pub ai_config: shujing_core::ai::AiConfig,
+    /// AI 助手弹窗(挂查询标签)
+    pub ai_assist: Option<AiAssistState>,
     /// 结构对比(源表来自右键,目标可跨连接)
     pub schema_diff: Option<SchemaDiffState>,
     /// 库筛选弹窗(每连接勾选显示哪些库)
@@ -986,8 +1007,14 @@ impl ShujingApp {
             dark = crate::system_prefers_dark();
         }
         let accent = settings
+            .as_ref()
             .and_then(|v| v.get("accent").and_then(|a| a.as_u64()))
             .unwrap_or(0) as usize;
+        let settings_ai = settings
+            .as_ref()
+            .and_then(|v| v.get("ai"))
+            .cloned()
+            .and_then(|v| serde_json::from_value::<shujing_core::ai::AiConfig>(v).ok());
         crate::theme::set_accent(accent);
         crate::theme::set_dark(dark);
         crate::theme::apply(&cc.egui_ctx);
@@ -1023,6 +1050,8 @@ impl ShujingApp {
             snippets,
             settings_open: false,
             parquet_preview: None,
+            ai_config: settings_ai.unwrap_or_default(),
+            ai_assist: None,
             schema_diff: None,
             db_filter: None,
             theme_toggle_requested: false,
@@ -1301,6 +1330,7 @@ impl ShujingApp {
             "dark": self.dark_mode,
             "accent": crate::theme::accent_idx(),
             "followSystem": self.follow_system_theme,
+            "ai": &self.ai_config,
         });
         let _ = std::fs::write(path, json.to_string());
     }
@@ -2405,6 +2435,88 @@ impl ShujingApp {
         });
     }
 
+    /// 打开 AI 助手(mode:0 生成/1 解释/2 优化)
+    pub fn open_ai_assist(&mut self, tab_id: &str, mode: u8) {
+        let init_input = if mode == 0 {
+            String::new()
+        } else {
+            self.table_of_query(tab_id).unwrap_or_default()
+        };
+        self.ai_assist = Some(AiAssistState {
+            tab_id: tab_id.to_string(),
+            mode,
+            input: init_input,
+            running: false,
+            history: Vec::new(),
+            error: None,
+        });
+    }
+
+    /// 查询标签当前 SQL(解释/优化的默认对象)
+    fn table_of_query(&self, tab_id: &str) -> Option<String> {
+        self.tabs.iter().find(|t| t.id == tab_id).and_then(|t| match &t.kind {
+            TabKind::Query(q) => Some(q.sql.trim().to_string()),
+            _ => None,
+        })
+    }
+
+    /// 运行 AI 请求(组装库结构上下文后调 core)
+    pub fn run_ai_assist(&mut self) {
+        let Some(st) = self.ai_assist.as_ref() else { return };
+        if st.running || st.input.trim().is_empty() {
+            return;
+        }
+        let Some(tab) = self.tabs.iter().find(|t| t.id == st.tab_id) else { return };
+        let TabKind::Query(q) = &tab.kind else { return };
+        let conn_id = q.conn_id.clone();
+        let (dialect, conn_db) = self
+            .conns
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| (format!("{:?}", c.db_type), c.database.clone()))
+            .unwrap_or(("MySQL".into(), None));
+        let cfg = self.ai_config.clone();
+        let mode = st.mode;
+        let input = st.input.trim().to_string();
+        // 库结构上下文:侧栏已加载的表名(轻量;不逐表拉列——太慢)
+        let tables: Vec<String> = self
+            .trees
+            .get(&conn_id)
+            .map(|t| {
+                t.tables_by_db
+                    .get(conn_db.as_deref().unwrap_or(""))
+                    .map(|ts| {
+                        ts.iter()
+                            .filter(|m| m.kind == "table")
+                            .map(|m| m.name.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        let schema_ctx = if tables.is_empty() {
+            "(表列表未加载,请先在侧栏展开库)".to_string()
+        } else {
+            format!("表: {}", tables.join(", "))
+        };
+        let tid = st.tab_id.clone();
+        drop(st);
+        self.ai_assist.as_mut().unwrap().running = true;
+        let tx = self.event_tx.clone();
+        net::spawn(async move {
+            let result = match mode {
+                0 => shujing_core::ai::generate_sql(&cfg, &dialect, &schema_ctx, &input).await,
+                1 => shujing_core::ai::explain_sql(&cfg, &dialect, &schema_ctx, &input).await,
+                _ => shujing_core::ai::optimize_sql(&cfg, &dialect, &schema_ctx, &input).await,
+            };
+            let _ = tx.send(BgEvent::AiDone {
+                tab_id: tid,
+                mode,
+                result,
+            });
+        });
+    }
+
     /// 打开结构对比弹窗(源=右键表;目标预填同一连接/库/表)
     pub fn open_schema_diff(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
         self.schema_diff = Some(SchemaDiffState {
@@ -3482,6 +3594,32 @@ impl ShujingApp {
                         m.testing = false;
                         m.test_result = Some(result);
                     }
+                }
+                BgEvent::AiDone {
+                    tab_id: _,
+                    mode,
+                    result,
+                } => {
+                    if let Some(st) = self.ai_assist.as_mut() {
+                        st.running = false;
+                        match result {
+                            Ok(text) => {
+                                let title = match mode {
+                                    0 => "生成 SQL".into(),
+                                    1 => "解释".into(),
+                                    _ => "优化建议".into(),
+                                };
+                                st.history.push((title, text));
+                                st.error = None;
+                                // 生成模式:输入清空方便连续提问
+                                if mode == 0 {
+                                    st.input.clear();
+                                }
+                            }
+                            Err(e) => st.error = Some(e),
+                        }
+                    }
+                    continue;
                 }
                 BgEvent::SchemaDiffDone { state, result } => {
                     let (ok_res, err_res) = match result {
