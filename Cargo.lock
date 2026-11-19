@@ -3805,6 +3805,7 @@ dependencies = [
  "serde_json",
  "shujing-core",
  "tokio",
+ "ui-kit",
 ]
 
 [[package]]
@@ -4359,6 +4360,14 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ui-kit"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui_kittest",
 ]
 
 [[package]]

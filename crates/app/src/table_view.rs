@@ -283,12 +283,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             // 标签溢出时给一条可见的细横向滚动条:只有滚轮的话,鼠标用户很难发现
             // 末尾的“全部标签/＋”。悬浮细条不占标签高度。
-            ui.spacing_mut().scroll.floating = true;
-            ui.spacing_mut().scroll.floating_width = 5.0;
-            ui.spacing_mut().scroll.bar_width = 6.0;
-            ui.spacing_mut().scroll.dormant_handle_opacity = 0.5;
-            ui.spacing_mut().scroll.dormant_background_opacity = 0.0;
-            ui.spacing_mut().scroll.active_handle_opacity = 0.85;
+            ui_kit::scroll::floating_thin_scroll(ui);
             // 单向滚动区合并滚轮的 y 分量到 x(默认 false 时横向区无视纯 y 滚轮);
             // native 直改 offset 的路径零动画,配合上面的 smooth=raw 覆写=一步到位
             ui.style_mut().always_scroll_the_only_direction = true;
@@ -4553,14 +4548,7 @@ impl eframe::App for ShujingApp {
         // 侧栏树/标签栏同病,标签栏 v0.12.4 已实测 11 帧漂移)。每帧把 smooth 覆写为
         // raw(当帧真实滚轮量):鼠标滚轮一步到位;触控板小步进 raw≈smooth 手感不变。
         // 主键按住期间一律清零(按压中内容绝不能动);⌘/Ctrl+滚轮是缩放,不喂滚动。
-        let _ = ctx.input_mut(|i| {
-            let zooming = i.modifiers.ctrl || i.modifiers.mac_cmd || i.modifiers.command;
-            if i.pointer.primary_down() || zooming {
-                i.smooth_scroll_delta = egui::Vec2::ZERO;
-            } else {
-                i.smooth_scroll_delta = i.raw_scroll_delta;
-            }
-        });
+        ui_kit::scroll::feed_raw_wheel(ctx);
         // 窗口标题与原型一致
         let title = "数镜".to_string();
         let cur = ctx.input(|i| i.viewport().title.clone());

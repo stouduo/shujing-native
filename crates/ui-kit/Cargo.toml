@@ -1,0 +1,11 @@
+[package]
+name = "ui-kit"
+version = "0.1.0"
+edition = "2021"
+description = "iOS 风格深浅双主题 egui 组件库(从数镜沉淀:控件/图标/滚动纪律)"
+
+[dependencies]
+egui = "0.31"
+
+[dev-dependencies]
+egui_kittest = { version = "0.31.0", features = ["wgpu", "snapshot"] }
