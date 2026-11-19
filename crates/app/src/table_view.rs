@@ -4330,6 +4330,87 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                 }
             }
 
+            // SSH 隧道(本地文件库无意义,不显示)
+            if m.db_type != shujing_core::DbType::Sqlite {
+                ui.add_space(6.0);
+                let (sec, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 26.0),
+                    Sense::click(),
+                );
+                let on = m.ssh_enabled;
+                if ui
+                    .interact(sec, egui::Id::new("conn-ssh-toggle"), Sense::click())
+                    .clicked()
+                {
+                    m.ssh_enabled = !m.ssh_enabled;
+                }
+                ui.painter().text(
+                    egui::pos2(sec.left() + 2.0, sec.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    if on { "▾ SSH 隧道" } else { "▸ SSH 隧道(可选)" },
+                    egui::FontId::proportional(11.5),
+                    if on { p.text } else { p.muted },
+                );
+                if on {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            theme::form_field(
+                                ui,
+                                "跳板机主机",
+                                "conn-ssh-host",
+                                &mut m.ssh_host,
+                                314.0,
+                                false,
+                            );
+                        });
+                        ui.add_space(4.0);
+                        ui.vertical(|ui| {
+                            theme::form_field(
+                                ui,
+                                "端口",
+                                "conn-ssh-port",
+                                &mut m.ssh_port,
+                                122.0,
+                                false,
+                            );
+                        });
+                    });
+                    theme::form_field(ui, "用户", "conn-ssh-user", &mut m.ssh_user, 440.0, false);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            theme::form_field(
+                                ui,
+                                if m.ssh_key_path.is_empty() {
+                                    "密码"
+                                } else {
+                                    "密码(私钥口令)"
+                                },
+                                "conn-ssh-pwd",
+                                &mut m.ssh_password,
+                                212.0,
+                                true,
+                            );
+                        });
+                        ui.add_space(4.0);
+                        ui.vertical(|ui| {
+                            theme::form_field(
+                                ui,
+                                "私钥路径(可选,优先)",
+                                "conn-ssh-key",
+                                &mut m.ssh_key_path,
+                                224.0,
+                                false,
+                            );
+                        });
+                    });
+                    ui.label(
+                        RichText::new("开启后,上方主机/端口视为从跳板机可达的数据库地址")
+                            .size(10.5)
+                            .color(p.muted),
+                    );
+                }
+            }
+
             // 标识色
             ui.label(RichText::new("标识色").size(11.0).color(p.muted));
             ui.add_space(4.0);
@@ -4533,6 +4614,13 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
             })
         }),
         read_only: m.read_only,
+        ssh: m.ssh_enabled.then(|| shujing_core::SshConfig {
+            host: m.ssh_host.trim().to_string(),
+            port: m.ssh_port.trim().parse().unwrap_or(22),
+            user: m.ssh_user.trim().to_string(),
+            password: (!m.ssh_password.is_empty()).then(|| m.ssh_password.clone()),
+            key_path: (!m.ssh_key_path.is_empty()).then(|| m.ssh_key_path.trim().to_string()),
+        }),
     }
 }
 

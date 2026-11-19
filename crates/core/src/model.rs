@@ -29,6 +29,27 @@ pub struct ConnInfo {
     /// 只读模式:后端强制只放行查询语句
     #[serde(default)]
     pub read_only: bool,
+    /// SSH 隧道:开启后 host/port 指的是"从 SSH 服务器可达"的数据库地址
+    #[serde(default)]
+    pub ssh: Option<SshConfig>,
+}
+
+fn ssh_port_default() -> u16 {
+    22
+}
+
+/// SSH 隧道配置(密码/私钥二选一,私钥优先;password 在私钥模式下作口令)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SshConfig {
+    pub host: String,
+    #[serde(default = "ssh_port_default")]
+    pub port: u16,
+    pub user: String,
+    #[serde(default)]
+    pub password: Option<String>,
+    /// 私钥文件路径(~ 展开由调用方处理)
+    #[serde(default)]
+    pub key_path: Option<String>,
 }
 
 /// Redis 只读连接的读命令白名单(此前黑名单漏 EVAL/Lua、GETDEL、*STORE 等大量写命令)
@@ -659,6 +680,37 @@ mod readonly_bypass_tests {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+mod ssh_tests {
+    use super::*;
+
+    #[test]
+    fn ssh_config_serde_compat() {
+        // 旧 connections.json 没有 ssh 字段:反序列化必须成功且为 None
+        let old = r#"{"id":"c1","name":"x","dbType":"mysql","host":"h","port":3306,"user":"u","password":null,"database":null,"filePath":null,"color":null,"readOnly":false}"#;
+        let info: ConnInfo = serde_json::from_str(old).unwrap();
+        assert!(info.ssh.is_none(), "旧配置无 ssh 字段应为 None");
+        // 往返
+        let info2 = ConnInfo {
+            ssh: Some(SshConfig {
+                host: "bastion".into(),
+                port: 22,
+                user: "ops".into(),
+                password: Some("pw".into()),
+                key_path: Some("~/.ssh/id_ed25519".into()),
+            }),
+            ..info
+        };
+        let json = serde_json::to_string(&info2).unwrap();
+        assert!(json.contains("\"ssh\""));
+        let back: ConnInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ssh, info2.ssh);
+        // 端口缺省 22
+        let p2: SshConfig = serde_json::from_str(r#"{"host":"b","user":"u"}"#).unwrap();
+        assert_eq!(p2.port, 22);
+    }
+}
+
 mod use_db_tests {
     use super::extract_use_db;
 

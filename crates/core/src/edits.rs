@@ -201,6 +201,7 @@ mod tx_tests {
             file_path: Some(path.into()),
             color: None,
             read_only: false,
+            ssh: None,
         };
         let b = crate::backend::connect(&info, None).await.unwrap();
         (b, info)

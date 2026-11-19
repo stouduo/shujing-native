@@ -768,6 +768,14 @@ pub struct ConnModal {
     pub read_only: bool,
     /// 标识色板索引
     pub color_idx: Option<u8>,
+    /// SSH 隧道开关
+    pub ssh_enabled: bool,
+    pub ssh_host: String,
+    pub ssh_port: String,
+    pub ssh_user: String,
+    pub ssh_password: String,
+    /// 私钥路径(填写后优先于密码;password 此时作私钥口令)
+    pub ssh_key_path: String,
 }
 
 impl ConnModal {
@@ -786,6 +794,12 @@ impl ConnModal {
             test_result: None,
             read_only: false,
             color_idx: None,
+            ssh_enabled: false,
+            ssh_host: String::new(),
+            ssh_port: String::new(),
+            ssh_user: String::new(),
+            ssh_password: String::new(),
+            ssh_key_path: String::new(),
         }
     }
 
@@ -804,6 +818,24 @@ impl ConnModal {
             testing: false,
             test_result: None,
             read_only: c.read_only,
+            ssh_enabled: c.ssh.is_some(),
+            ssh_host: c.ssh.as_ref().map(|x| x.host.clone()).unwrap_or_default(),
+            ssh_port: c
+                .ssh
+                .as_ref()
+                .map(|x| x.port.to_string())
+                .unwrap_or_default(),
+            ssh_user: c.ssh.as_ref().map(|x| x.user.clone()).unwrap_or_default(),
+            ssh_password: c
+                .ssh
+                .as_ref()
+                .and_then(|x| x.password.clone())
+                .unwrap_or_default(),
+            ssh_key_path: c
+                .ssh
+                .as_ref()
+                .and_then(|x| x.key_path.clone())
+                .unwrap_or_default(),
             color_idx: c.color.as_ref().and_then(|hex| {
                 let rgb = u32::from_str_radix(hex.trim_start_matches('#'), 16).ok();
                 rgb.and_then(|v| {
@@ -2912,6 +2944,7 @@ impl ShujingApp {
             file_path: Some(db),
             color: None,
             read_only: false,
+            ssh: None,
         };
         // 让压测/演示入口也出现在侧栏(否则只有标签页,看不到连接树)
         if !self.conns.iter().any(|c| c.id == info.id) {

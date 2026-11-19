@@ -10,6 +10,7 @@ pub mod exec;
 mod model;
 pub mod redis_ops;
 pub mod schema;
+pub mod ssh;
 mod search;
 pub mod sql_advisor;
 pub mod sql_format;
@@ -18,7 +19,7 @@ pub mod store;
 pub use search::SearchHit;
 pub use model::{
     AppState, ColumnDef, ConnInfo, ConnectResult, DbType, ExecResult, IndexDef, LiveConn,
-    TableMeta, TableStructure,
+    SshConfig, TableMeta, TableStructure,
 };
 
 use model::CancelState;
@@ -28,6 +29,8 @@ use std::path::PathBuf;
 pub struct Service {
     pub state: AppState,
     pub config_dir: PathBuf,
+    /// SSH 隧道(按连接 id):同一连接重连且配置未变时复用;断开/改配置即关
+    tunnels: std::sync::Mutex<std::collections::HashMap<String, ssh::TunnelGuard>>,
 }
 
 impl Service {
@@ -35,6 +38,7 @@ impl Service {
         Self {
             state: AppState::default(),
             config_dir: config_dir.into(),
+            tunnels: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -48,13 +52,21 @@ impl Service {
         conns.retain(|c| c.id != info.id);
         conns.push(info.clone());
         store::save_conns(&self.config_dir, &conns)?;
-        // 若该连接已在线且配置变了,断开旧连接让用户重连
+        // 若该连接已在线且配置变了,断开旧连接让用户重连(隧道一并作废)
         self.state.remove(&info.id);
+        self.tunnels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&info.id);
         Ok(conns)
     }
 
     pub fn delete_connection(&self, id: &str) -> Result<Vec<ConnInfo>, String> {
         self.state.remove(id);
+        self.tunnels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
         let mut conns = store::load_conns(&self.config_dir);
         conns.retain(|c| c.id != id);
         store::save_conns(&self.config_dir, &conns)?;
@@ -62,17 +74,42 @@ impl Service {
     }
 
     pub async fn test_connection(info: ConnInfo) -> Result<ConnectResult, String> {
-        let mut backend = backend::connect(&info, None).await?;
+        let mut endpoint = info.clone();
+        let _tunnel;
+        if let Some(ssh_cfg) = info.ssh.clone() {
+            let target_host = info
+                .host
+                .clone()
+                .unwrap_or_else(|| "127.0.0.1".to_string());
+            let target_port = info.port.unwrap_or(match info.db_type {
+                crate::model::DbType::MySql => 3306,
+                crate::model::DbType::Postgres => 5432,
+                crate::model::DbType::Redis => 6379,
+                crate::model::DbType::Sqlite => 0,
+            });
+            let g = ssh::open_tunnel(&ssh_cfg, &target_host, target_port).await?;
+            endpoint.host = Some("127.0.0.1".into());
+            endpoint.port = Some(g.local_port);
+            _tunnel = Some(g); // 测试期间保活,函数返回即关闭
+        }
+        let mut backend = backend::connect(&endpoint, None).await?;
         let version = backend.server_info().await?;
         Ok(ConnectResult { version })
     }
 
     pub async fn connect(&self, info: ConnInfo) -> Result<ConnectResult, String> {
+        let mut endpoint = info.clone();
+        if let Some(ssh_cfg) = info.ssh.clone() {
+            let port = self.ensure_tunnel(&info.id, &ssh_cfg, &info).await?;
+            // DB 驱动一律指向本地隧道口;info.host/port 语义是"从跳板机可达的库地址"
+            endpoint.host = Some("127.0.0.1".into());
+            endpoint.port = Some(port);
+        }
         let cancel = std::sync::Arc::new(CancelState::new(
-            &info,
+            &endpoint,
             std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         ));
-        let mut backend = backend::connect(&info, Some(cancel.pg_pid.clone())).await?;
+        let mut backend = backend::connect(&endpoint, Some(cancel.pg_pid.clone())).await?;
         // 重复连接同一 id(如改配置重连)时保留会话库记忆
         let prev = match self.state.live(&info.id) {
             Some(old) => old.lock().await.backend.session_db().map(str::to_string),
@@ -80,13 +117,58 @@ impl Service {
         };
         backend.set_session_db(prev.as_deref());
         let version = backend.server_info().await?;
-        self.state.insert(LiveConn { info, backend }, cancel);
+        self.state.insert(LiveConn { info: endpoint, backend }, cancel);
         Ok(ConnectResult { version })
     }
 
+    /// 确保该连接的隧道可用:同配置且存活→复用;否则(重)建。返回本地端口
+    async fn ensure_tunnel(
+        &self,
+        id: &str,
+        ssh_cfg: &crate::model::SshConfig,
+        info: &ConnInfo,
+    ) -> Result<u16, String> {
+        {
+            let tunnels = self.tunnels.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(g) = tunnels.get(id) {
+                if g.matches(ssh_cfg) && g.alive() {
+                    return Ok(g.local_port);
+                }
+            }
+        }
+        // 旧的失效/配置变了:先移除(Drop 关旧会话)再建新
+        let old = self
+            .tunnels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+        drop(old);
+        let target_host = info
+            .host
+            .clone()
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+        let target_port = info.port.unwrap_or(match info.db_type {
+            crate::model::DbType::MySql => 3306,
+            crate::model::DbType::Postgres => 5432,
+            crate::model::DbType::Redis => 6379,
+            crate::model::DbType::Sqlite => 0,
+        });
+        let guard = ssh::open_tunnel(ssh_cfg, &target_host, target_port).await?;
+        let port = guard.local_port;
+        self.tunnels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), guard);
+        Ok(port)
+    }
+
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
-        // 直接移出连接表,引用清零后 TCP 连接随之关闭
+        // 直接移出连接表,引用清零后 TCP 连接随之关闭;隧道一并关闭
         self.state.remove(id);
+        self.tunnels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
         Ok(())
     }
 
@@ -691,6 +773,7 @@ mod tests {
             file_path: Some(path.into()),
             color: None,
             read_only: false,
+            ssh: None,
         }
     }
 

@@ -55,6 +55,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         file_path: None,
         color: None,
         read_only: false,
+        ssh: None,
     };
     let conn2 = shujing_core::ConnInfo {
         id: "c2".into(),
@@ -68,6 +69,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         file_path: Some("~/data/test.db".into()),
         color: None,
         read_only: false,
+        ssh: None,
     };
     let tables: Vec<shujing_core::TableMeta> = [
         "ads_report_youni",
@@ -627,6 +629,7 @@ fn render_query_view() {
         file_path: None,
         color: None,
         read_only: false,
+        ssh: None,
     }];
     let cell = std::cell::RefCell::new(Some(q));
     let dbs = vec![
@@ -689,6 +692,7 @@ fn render_query_view_narrow_with_db() {
         file_path: None,
         color: None,
         read_only: false,
+        ssh: None,
     }];
     let cell = std::cell::RefCell::new(Some(q));
     let dbs = vec!["dramato".to_string(), "shop".to_string()];
@@ -1163,6 +1167,7 @@ fn test_conns() -> Vec<shujing_core::ConnInfo> {
         file_path: None,
         color: None,
         read_only: false,
+        ssh: None,
     }]
 }
 
@@ -1849,6 +1854,7 @@ fn render_query_autocomplete() {
         file_path: None,
         color: None,
         read_only: false,
+        ssh: None,
     }];
     let cell = std::cell::RefCell::new(Some(q));
     let tables = vec![
@@ -2094,6 +2100,7 @@ fn query_grid_frozen_columns_pin() {
         file_path: None,
         color: None,
         read_only: false,
+        ssh: None,
     }];
     let cell = std::cell::RefCell::new(Some(q));
     let setup_done = std::cell::Cell::new(false);
