@@ -224,6 +224,7 @@ pub enum TabAction {
         toast: String,
     },
     OpenSettings,
+    PreviewParquet,
     ReloadDdl {
         tab_id: String,
     },
@@ -1033,6 +1034,10 @@ pub(crate) fn draw_table_view(
                                 actions.push(TabAction::ExportSql {
                                     tab_id: tab_id_s.clone(),
                                 });
+                                ui.close_menu();
+                            }
+                            if ui.button("预览 Parquet 文件…").clicked() {
+                                toolbar_menu = Some(TabAction::PreviewParquet);
                                 ui.close_menu();
                             }
                             ui.separator();
@@ -3579,7 +3584,7 @@ pub(crate) fn run_delete_rows(app: &mut ShujingApp, tab_id: &str, gen: u64, ris:
     }
 }
 
-fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabAction) {
+pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabAction) {
     // 未保存修改防护:会重载数据的动作先拦截
     let tab_id_for_gate = match &action {
         TabAction::Reload { tab_id }
@@ -3720,6 +3725,43 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 }
                 return;
             }
+            // 保存前 SQL 预览:展示将执行的语句,确认后才落库(一次性直通避免二次弹)
+            if !app.skip_edit_preview {
+                let conn_info = app
+                    .conns
+                    .iter()
+                    .find(|c| c.id == conn_id)
+                    .cloned();
+                let stmts = conn_info.and_then(|ci| {
+                    shujing_core::edits::build_change_stmts(
+                        &ci,
+                        &table,
+                        database.as_deref(),
+                        &updates,
+                        &[],
+                        &[],
+                    )
+                    .ok()
+                });
+                if let Some(stmts) = stmts {
+                    app.confirm = Some(crate::app::ConfirmState {
+                        title: "保存前 SQL 预览".into(),
+                        message: format!(
+                            "将执行以下 {} 条语句(单事务,失败整体回滚):",
+                            stmts.len()
+                        ),
+                        expect: None,
+                        input: String::new(),
+                        conn_id: conn_id.clone(),
+                        sql: String::new(),
+                        database: database.clone(),
+                        preview_sql: Some(stmts.join(";\n") + ";"),
+                        action: Some(format!("save-changes:{tab_id}")),
+                    });
+                    return;
+                }
+            }
+            app.skip_edit_preview = false;
             let tx = app.event_tx.clone();
             let service = app.service.clone();
             net::spawn(async move {
@@ -3732,6 +3774,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 });
             });
         }
+        TabAction::PreviewParquet => app.preview_parquet_file(),
         TabAction::ToggleTheme => {
             let dark = !theme::is_dark();
             app.set_theme_dark(ctx, dark);
@@ -4171,6 +4214,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 conn_id: String::new(),
                 sql: String::new(),
                 database: None,
+                preview_sql: None,
                 action: Some(format!(
                     "delete-rows:{}:{}:{}",
                     tab_id,
@@ -4197,6 +4241,7 @@ fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, action: TabActi
                 conn_id: String::new(),
                 sql: String::new(),
                 database: None,
+                preview_sql: None,
                 action: Some(format!("delete-rows:{}:{}:{}", tab_id, t.rows_gen, ri)),
             });
         }
@@ -4710,6 +4755,7 @@ impl eframe::App for ShujingApp {
             || self.global_search.is_some()
             || self.settings_open
             || self.db_filter.is_some()
+            || self.parquet_preview.is_some()
             || self
                 .tabs
                 .iter()
@@ -4981,6 +5027,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_col_stats_modal(self, ctx);
         crate::modals::draw_db_filter_modal(self, ctx);
         crate::modals::draw_settings_modal(self, ctx);
+        crate::modals::draw_parquet_modal(self, ctx);
 
         if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {
             self.conn_modal = Some(ConnModal::new());

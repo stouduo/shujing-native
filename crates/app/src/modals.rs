@@ -1025,6 +1025,20 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 if !tid.is_empty() && !ris.is_empty() {
                     crate::table_view::run_delete_rows(app, tid, gen, &ris);
                 }
+            } else if let Some(tid) = action
+                .as_deref()
+                .and_then(|a| a.strip_prefix("save-changes:"))
+            {
+                app.confirm = None;
+                // SQL 预览已确认:直通执行本次保存(不再二次弹预览)
+                app.skip_edit_preview = true;
+                crate::table_view::execute_tab_action(
+                    app,
+                    ctx,
+                    crate::table_view::TabAction::SaveChanges {
+                        tab_id: tid.to_string(),
+                    },
+                );
             } else if let Some(conn_id) = action
                 .as_deref()
                 .and_then(|a| a.strip_prefix("disconnect-conn:"))
@@ -1113,6 +1127,70 @@ pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
 }
 
 /// 外观设置弹窗(强调色)
+/// Parquet 文件预览(· · ·菜单入口):网格展示前 200 行
+pub fn draw_parquet_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.parquet_preview.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let (path, preview) = app.parquet_preview.as_ref().unwrap();
+    let file_name = path.rsplit('/').next().unwrap_or(&path).to_string();
+    let modal = egui::Modal::new(egui::Id::new("parquet-preview"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(780.0);
+            theme::modal_title(ui, &format!("Parquet 预览 · {}", file_name));
+            ui.label(
+                RichText::new(format!(
+                    "{} 行 × {} 列 · {} 个行组 · {} · 预览前 {} 行",
+                    icons::thousands(preview.total_rows.max(0) as u64),
+                    preview.columns.len(),
+                    preview.row_groups,
+                    icons::thousands(preview.file_size as u64),
+                    preview.rows.len()
+                ))
+                .size(11.5)
+                .color(p.muted),
+            );
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical()
+                .id_salt("parquet-grid")
+                .max_height(ui.ctx().screen_rect().height() * 0.6)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let mut frozen = 0usize;
+                    crate::grid::result_rows(
+                        ui,
+                        "parquet-preview-grid",
+                        &preview.columns,
+                        &preview.rows,
+                        &mut frozen,
+                    );
+                });
+            if preview.truncated {
+                ui.label(
+                    RichText::new(format!(
+                        "共 {} 行,仅预览前 {} 行",
+                        icons::thousands(preview.total_rows.max(0) as u64),
+                        preview.rows.len()
+                    ))
+                    .size(11.0)
+                    .color(p.muted),
+                );
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, "关闭", theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close || modal.should_close() {
+        app.parquet_preview = None;
+    }
+}
+
 pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if !app.settings_open {
         return;

@@ -69,6 +69,10 @@ enum SessionTab {
 }
 
 pub enum BgEvent {
+    ParquetPreviewDone {
+        path: String,
+        result: Result<shujing_core::parquet_preview::ParquetPreview, String>,
+    },
     ConnectDone {
         conn_id: String,
         result: Result<String, String>,
@@ -570,6 +574,8 @@ pub struct ConfirmState {
     pub database: Option<String>,
     /// 非 SQL 动作(如 delete-conn:<id>):确认后交给 app 处理而不执行 sql
     pub action: Option<String>,
+    /// 保存前 SQL 预览:弹窗里以等宽滚动区展示将执行的语句,确认后才落库
+    pub preview_sql: Option<String>,
 }
 
 impl ConfirmState {
@@ -873,6 +879,8 @@ pub struct ShujingApp {
     pub pending: Option<PendingAction>,
     /// 确认丢弃后放行一次
     pub dirty_override: bool,
+    /// 保存前预览的一次性直通(确认弹窗回执后直接执行,不再二次弹预览)
+    pub skip_edit_preview: bool,
     /// 深色主题(持久化到 settings.json)
     pub dark_mode: bool,
     /// 跟随系统外观(手动切换主题会自动解除)
@@ -903,6 +911,8 @@ pub struct ShujingApp {
     /// 会话持久化
     pub snippets: std::sync::Arc<Vec<String>>,
     pub settings_open: bool,
+    /// Parquet 文件预览(路径,解析结果)
+    pub parquet_preview: Option<(String, shujing_core::parquet_preview::ParquetPreview)>,
     /// 库筛选弹窗(每连接勾选显示哪些库)
     pub db_filter: Option<DbFilterState>,
     /// 侧栏底部主题切换请求(绘制层无 ctx,经 update 消费)
@@ -980,6 +990,7 @@ impl ShujingApp {
             table_filter: String::new(),
             pending: None,
             dirty_override: false,
+            skip_edit_preview: false,
             quick_open: None,
             stats: None,
             import: None,
@@ -991,6 +1002,7 @@ impl ShujingApp {
             confirm: None,
             snippets,
             settings_open: false,
+            parquet_preview: None,
             db_filter: None,
             theme_toggle_requested: false,
             session_dirty: false,
@@ -2292,6 +2304,75 @@ impl ShujingApp {
         });
     }
 
+    /// Parquet 文件预览:选文件 → blocking 池解析前 200 行 → 弹窗展示
+    pub fn preview_parquet_file(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Parquet", &["parquet"])
+            .pick_file()
+        else {
+            return;
+        };
+        let path_s = path.display().to_string();
+        let tx = self.event_tx.clone();
+        let p = path.clone();
+        net::spawn_blocking(move || {
+            let result = shujing_core::parquet_preview::preview(&p, 200);
+            let _ = tx.send(BgEvent::ParquetPreviewDone {
+                path: path_s,
+                result,
+            });
+        });
+    }
+
+    /// 导入连接配置(DBeaver DataSources.json / Navicat .ncx)
+    pub fn import_connections_file(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("连接导出文件", &["json", "ncx"])
+            .pick_file()
+        else {
+            return;
+        };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            self.toast_error(format!("读取失败: {}", path.display()));
+            return;
+        };
+        let imported = match shujing_core::conn_import::import_connections(&content) {
+            Ok(v) => v,
+            Err(e) => {
+                self.toast_error(e);
+                return;
+            }
+        };
+        let existing = self.service.list_saved_connections();
+        let (added, skipped) =
+            shujing_core::conn_import::merge_into(&existing, imported.clone());
+        let mut new_conns: Vec<shujing_core::ConnInfo> = Vec::new();
+        for c in &imported {
+            let dup = existing
+                .iter()
+                .any(|e| e.db_type == c.db_type && e.name == c.name);
+            if !dup {
+                new_conns.push(c.clone());
+            }
+        }
+        for c in new_conns {
+            if let Err(e) = self.service.save_connection(c) {
+                self.toast_error(format!("保存导入连接失败: {e}"));
+                return;
+            }
+        }
+        // 侧栏连接列表重载
+        self.conns = self.service.list_saved_connections();
+        if added > 0 {
+            self.toast_error(format!(
+                "已导入 {added} 条连接(密码无法迁移,请重新输入);跳过 {skipped} 条重复"
+            ));
+        } else {
+            self.toast_error(format!("没有新增连接(跳过 {skipped} 条重复)"));
+        }
+        let _ = skipped; // 上文已用
+    }
+
     /// 导入 SQL 文件:选文件 → 逐语句执行 → 刷新树
     pub fn import_sql_file(&mut self, conn_id: &str) {
         let Some(path) = rfd::FileDialog::new()
@@ -2401,6 +2482,7 @@ impl ShujingApp {
             sql,
             database: db.map(str::to_string),
             action: None,
+            preview_sql: None,
         });
     }
 
@@ -3261,6 +3343,15 @@ impl ShujingApp {
                         m.testing = false;
                         m.test_result = Some(result);
                     }
+                }
+                BgEvent::ParquetPreviewDone { path, result } => {
+                    match result {
+                        Ok(preview) => {
+                            self.parquet_preview = Some((path, preview));
+                        }
+                        Err(e) => self.toast_error(format!("Parquet 预览失败: {e}")),
+                    }
+                    continue;
                 }
                 BgEvent::ExportDone { result } => match result {
                     Ok(path) => self.toast_error(format!("已导出: {path}")),

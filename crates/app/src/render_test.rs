@@ -152,6 +152,8 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         table_filter: String::new(),
         pending: None,
         dirty_override: false,
+        skip_edit_preview: false,
+        parquet_preview: None,
         shot: None,
         dark_mode: true,
         follow_system_theme: false,

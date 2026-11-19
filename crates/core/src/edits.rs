@@ -54,21 +54,17 @@ fn where_of(pk: &[(String, String)], mysql: bool) -> Result<String, String> {
         .join(" AND "))
 }
 
-pub async fn apply_changes(
-    backend: &mut Backend,
+/// 生成全部回写语句(纯函数:保存前预览与实际执行共用同一段构建逻辑)
+pub fn build_change_stmts(
     info: &ConnInfo,
     table: &str,
     database: Option<&str>,
     updates: &[CellUpdate],
     deletes: &[Vec<(String, String)>],
     inserts: &[Vec<(String, String)>],
-) -> Result<ExecResult, String> {
-    let started = Instant::now();
+) -> Result<Vec<String>, String> {
     let mysql = info.db_type == crate::model::DbType::MySql;
     let table = qualified_table(table, database, mysql);
-
-    // 先收集全部语句,再按后端包在单事务里执行:
-    // 中途失败整体回滚,不会留下"前 k 条已落库"的半保存状态
     let mut stmts: Vec<String> = Vec::new();
     for u in updates {
         if u.sets.is_empty() {
@@ -101,10 +97,23 @@ pub async fn apply_changes(
         let vals = ins.iter().map(|(_, v)| literal(v, mysql)).collect::<Vec<_>>().join(", ");
         stmts.push(format!("INSERT INTO {} ({}) VALUES ({})", table, cols, vals));
     }
-
     if stmts.is_empty() {
         return Err("没有待保存的更改".into());
     }
+    Ok(stmts)
+}
+
+pub async fn apply_changes(
+    backend: &mut Backend,
+    info: &ConnInfo,
+    table: &str,
+    database: Option<&str>,
+    updates: &[CellUpdate],
+    deletes: &[Vec<(String, String)>],
+    inserts: &[Vec<(String, String)>],
+) -> Result<ExecResult, String> {
+    let started = Instant::now();
+    let stmts = build_change_stmts(info, table, database, updates, deletes, inserts)?;
 
     let affected: u64 = match backend {
         Backend::Sqlite(conn) => {
@@ -184,6 +193,39 @@ mod tests {
 }
 
 #[cfg(test)]
+/// 保存前 SQL 预览与实际执行共用构建逻辑(纯函数):语句内容/顺序/引注一致性
+#[test]
+fn build_change_stmts_shapes() {
+    use crate::model::{ConnInfo, DbType};
+    let info = ConnInfo {
+        id: "t".into(),
+        name: "t".into(),
+        db_type: DbType::MySql,
+        host: None,
+        port: None,
+        user: None,
+        password: None,
+        database: Some("db".into()),
+        file_path: None,
+        color: None,
+        read_only: false,
+        ssh: None,
+    };
+    let updates = vec![crate::edits::CellUpdate {
+        pk: vec![("id".into(), "1".into())],
+        sets: vec![("name".into(), Some("张三".into())), ("age".into(), None)],
+    }];
+    let stmts =
+        build_change_stmts(&info, "users", Some("db"), &updates, &[], &[]).unwrap();
+    assert_eq!(stmts.len(), 1);
+    assert_eq!(
+        stmts[0],
+        "UPDATE `db`.`users` SET `name` = '张三', `age` = NULL WHERE `id` = '1'"
+    );
+    // 空集 = 错误(与执行端语义一致)
+    assert!(build_change_stmts(&info, "users", None, &[], &[], &[]).is_err());
+}
+
 mod tx_tests {
     use super::*;
     use crate::model::ConnInfo;

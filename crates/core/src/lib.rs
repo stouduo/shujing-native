@@ -9,6 +9,8 @@ pub mod excel;
 pub mod exec;
 mod model;
 pub mod redis_ops;
+pub mod conn_import;
+pub mod parquet_preview;
 pub mod schema;
 pub mod ssh;
 mod search;

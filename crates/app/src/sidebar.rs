@@ -91,9 +91,31 @@ impl ShujingApp {
                         6.0,
                         if resp.hovered() { p.text } else { p.accent },
                     );
-                    resp.clone().on_hover_text("新建连接");
+                    resp.clone()
+                        .on_hover_text("新建连接(右键:导入 DBeaver/Navicat 连接)");
                     if resp.clicked() {
                         self.conn_modal = Some(ConnModal::new());
+                    }
+                    resp.context_menu(|ui| {
+                        if ui.button("导入连接(DBeaver/Navicat)…").clicked() {
+                            ui.ctx()
+                                .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-import-conns"), true));
+                            ui.close_menu();
+                        }
+                    });
+                    if ui
+                        .ctx()
+                        .memory(|m| {
+                            m.data
+                                .get_temp::<bool>(egui::Id::new("sidebar-import-conns"))
+                                .unwrap_or(false)
+                        })
+                    {
+                        ui.ctx().memory_mut(|m| {
+                            m.data
+                                .remove_temp::<bool>(egui::Id::new("sidebar-import-conns"))
+                        });
+                        self.import_connections_file();
                     }
                 });
             },

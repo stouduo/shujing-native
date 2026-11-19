@@ -12,6 +12,7 @@ tokio-postgres = { workspace = true }
 mysql_async = { workspace = true }
 rusqlite = { workspace = true }
 russh = { workspace = true }
+parquet = { workspace = true }
 redis = { workspace = true }
 rust_xlsxwriter = { workspace = true }
 calamine = { workspace = true }
