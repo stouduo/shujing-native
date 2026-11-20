@@ -63,7 +63,10 @@ pub fn build_change_stmts(
     deletes: &[Vec<(String, String)>],
     inserts: &[Vec<(String, String)>],
 ) -> Result<Vec<String>, String> {
-    let mysql = info.db_type == crate::model::DbType::MySql;
+    let mysql = matches!(
+        info.db_type,
+        crate::model::DbType::MySql | crate::model::DbType::ClickHouse
+    );
     let table = qualified_table(table, database, mysql);
     let mut stmts: Vec<String> = Vec::new();
     for u in updates {
@@ -99,6 +102,21 @@ pub fn build_change_stmts(
     }
     if stmts.is_empty() {
         return Err("没有待保存的更改".into());
+    }
+    // ClickHouse:UPDATE/DELETE 是 mutation,必须走 ALTER TABLE 语法
+    if info.db_type == crate::model::DbType::ClickHouse {
+        stmts = stmts
+            .into_iter()
+            .map(|s| {
+                if let Some(rest) = s.strip_prefix("UPDATE ") {
+                    format!("ALTER TABLE {rest}")
+                } else if let Some(rest) = s.strip_prefix("DELETE FROM ") {
+                    format!("ALTER TABLE {} DELETE WHERE {}", table, rest.split_once(" WHERE ").map(|(_, w)| w.to_string()).unwrap_or_default())
+                } else {
+                    s
+                }
+            })
+            .collect();
     }
     Ok(stmts)
 }
@@ -193,6 +211,14 @@ pub async fn apply_changes(
             }
             client.simple_query("COMMIT TRAN").await.map_err(|e| e.to_string())?;
             affected
+        }
+        Backend::ClickHouse(st) => {
+            // ClickHouse 无事务:逐条执行,任一条失败即中止(语句已过半不回滚)
+            for sql in &stmts {
+                crate::clickhouse::query(st, sql, None, 1).await.map_err(|e| e.to_string())?;
+            }
+            // mutation 异步生效,affected 不可得
+            0u64
         }
     };
 

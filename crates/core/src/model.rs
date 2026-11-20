@@ -13,6 +13,8 @@ pub enum DbType {
     Mongo,
     #[serde(rename = "sqlserver")]
     Mssql,
+    #[serde(rename = "clickhouse")]
+    ClickHouse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -422,6 +424,16 @@ pub enum Backend {
     Redis(RedisState),
     Mongo(MongoState),
     Mssql(MssqlState),
+    ClickHouse(ClickHouseState),
+}
+
+/// ClickHouse 连接:HTTP 接口(8123;reqwest 自带连接池)
+pub struct ClickHouseState {
+    /// 形如 http://host:8123(host 栏粘 http(s):// 开头时整体作 base)
+    pub base: String,
+    /// (user, password);匿名时 None
+    pub auth: Option<(String, String)>,
+    pub http: reqwest::Client,
 }
 
 /// SQL Server 连接(具体流类型太长,别名收敛)

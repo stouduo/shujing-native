@@ -439,6 +439,10 @@ impl Backend {
                 let r = crate::mssql::query(st, sql, max).await?;
                 Ok(vec![r])
             }
+            Backend::ClickHouse(st) => {
+                let r = crate::clickhouse::query(st, sql, None, max).await?;
+                Ok(vec![r])
+            }
         }
     }
 

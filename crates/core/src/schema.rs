@@ -146,6 +146,7 @@ pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<V
         }
         Backend::Redis(_) => Ok(vec![]),
         Backend::Mongo(st) => crate::mongo::list_databases(st).await,
+        Backend::ClickHouse(st) => crate::clickhouse::list_databases(st).await,
         Backend::Mssql(st) => {
             let mut c = Backend::mssql_client(st).await?;
             let rows = c
@@ -636,7 +637,9 @@ pub async fn object_ddl(
         }
     };
     let sql = match (&info.db_type, kind) {
-        (crate::model::DbType::Mongo, _) | (crate::model::DbType::Mssql, _) => String::new(),
+        (crate::model::DbType::Mongo, _)
+        | (crate::model::DbType::Mssql, _)
+        | (crate::model::DbType::ClickHouse, _) => String::new(),
         (crate::model::DbType::Sqlite, _) => format!(
             "SELECT sql FROM sqlite_master WHERE name = {}",
             format!("'{}'", name.replace('\'', "''"))
@@ -721,6 +724,13 @@ impl Backend {
                     .collect())
             }
 
+            Backend::ClickHouse(st) => {
+                let db = database
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "未指定数据库".to_string())?;
+                crate::clickhouse::list_tables(st, db).await
+            }
             Backend::Mssql(st) => {
                 let db = database
                     .map(str::trim)
@@ -811,6 +821,7 @@ async fn resolve_mysql_db(
                 crate::mongo::structure(st, db, table).await
             }
             Backend::Mssql(st) => crate::mssql::structure(st, database, table).await,
+            Backend::ClickHouse(st) => crate::clickhouse::structure(st, database, table).await,
         }
     }
 
@@ -828,6 +839,7 @@ async fn resolve_mysql_db(
             Backend::Redis(_) => Err("Redis 无表计数".into()),
             Backend::Mongo(st) => crate::mongo::backend_count(st, table).await,
             Backend::Mssql(st) => crate::mssql::count(st, table).await,
+            Backend::ClickHouse(st) => crate::clickhouse::count(st, None, table).await,
         }
     }
 
@@ -850,6 +862,7 @@ async fn resolve_mysql_db(
             Backend::Redis(_) => Ok(vec![]),
             Backend::Mongo(_) => Ok(vec![]),
             Backend::Mssql(_) => Ok(vec![]),
+            Backend::ClickHouse(_) => Ok(vec![]),
         }
     }
 }

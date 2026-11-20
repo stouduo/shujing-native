@@ -213,6 +213,44 @@ pub async fn connect(
                 next: std::sync::atomic::AtomicUsize::new(0),
             }))
         }
+        DbType::ClickHouse => {
+            let host = req(&info.host, "缺少 ClickHouse 主机地址")?;
+            let port = info.port.unwrap_or(8123);
+            // host 栏粘 http(s):// 开头 = 整串当 base(HTTPS/自建代理直填)
+            let base = if host.starts_with("http://") || host.starts_with("https://") {
+                host.to_string()
+            } else {
+                format!("http://{host}:{port}")
+            };
+            let user = info
+                .user
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("default")
+                .to_string();
+            let pass = info.password.clone().unwrap_or_default();
+            // default 用户可匿名;其余带鉴权头(CH 专用头比 Basic 兼容面更宽)
+            let auth = if user != "default" || !pass.is_empty() {
+                Some((user, pass))
+            } else {
+                None
+            };
+            let http = reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .map_err(|e| format!("HTTP 客户端构建失败: {e}"))?;
+            let mut st = crate::model::ClickHouseState { base, auth, http };
+            // 探活
+            crate::clickhouse::query(&st, "SELECT 1", None, 1)
+                .await
+                .map_err(|e| format!("连接 ClickHouse 失败: {e}"))?;
+            // 会话默认库挂 URL 参数,后续查询不用带库限定
+            if let Some(d) = info.database.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                st.base = crate::clickhouse::with_database_param(&st.base, d);
+            }
+            Ok(Backend::ClickHouse(st))
+        }
         DbType::Mongo => {
             let host = req(&info.host, "缺少 MongoDB 主机地址")?;
             // 主机栏直接粘完整连接串(含 Atlas 的 mongodb+srv://)即 URL 模式
@@ -466,6 +504,16 @@ impl Backend {
                     .map(|s| s.split(" on ").next().unwrap_or(s).to_string())
                     .unwrap_or_else(|| "SQL Server".into());
                 Ok(ver)
+            }
+            Backend::ClickHouse(st) => {
+                let r = crate::clickhouse::query(st, "SELECT version()", None, 1).await?;
+                let ver = r
+                    .rows
+                    .first()
+                    .and_then(|r| r.first())
+                    .and_then(|c| c.clone())
+                    .unwrap_or_default();
+                Ok(format!("ClickHouse {ver}"))
             }
         }
     }

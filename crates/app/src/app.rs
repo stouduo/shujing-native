@@ -5034,7 +5034,12 @@ pub fn mysql_quote(conns: &[ConnInfo], conn_id: &str) -> bool {
     conns
         .iter()
         .find(|c| c.id == conn_id)
-        .map(|c| c.db_type == shujing_core::DbType::MySql)
+        .map(|c| {
+            matches!(
+                c.db_type,
+                shujing_core::DbType::MySql | shujing_core::DbType::ClickHouse
+            )
+        })
         .unwrap_or(false)
 }
 

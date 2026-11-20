@@ -3,6 +3,7 @@
 
 pub mod ai;
 pub mod backend;
+pub mod clickhouse;
 pub mod composite;
 pub mod designer;
 pub mod edits;
@@ -330,6 +331,7 @@ impl Service {
                 crate::model::DbType::Redis => 6379,
                 crate::model::DbType::Mongo => 27017,
                 crate::model::DbType::Mssql => 1433,
+                crate::model::DbType::ClickHouse => 8123,
                 crate::model::DbType::Sqlite => 0,
             });
             let g = ssh::open_tunnel(&ssh_cfg, &target_host, target_port).await?;
@@ -398,6 +400,7 @@ impl Service {
             crate::model::DbType::Redis => 6379,
             crate::model::DbType::Mongo => 27017,
             crate::model::DbType::Mssql => 1433,
+            crate::model::DbType::ClickHouse => 8123,
             crate::model::DbType::Sqlite => 0,
         });
         let guard = ssh::open_tunnel(ssh_cfg, &target_host, target_port).await?;
