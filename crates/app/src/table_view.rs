@@ -4710,6 +4710,7 @@ fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width:
         (shujing_core::DbType::Postgres, "PostgreSQL"),
         (shujing_core::DbType::Redis, "Redis"),
         (shujing_core::DbType::Mongo, "MongoDB"),
+        (shujing_core::DbType::Mssql, "SQLServer"),
     ];
     let seg_w = (width - 6.0) / opts.len() as f32;
     for (i, (t, label)) in opts.iter().enumerate() {
@@ -4760,6 +4761,7 @@ fn default_port(t: shujing_core::DbType) -> &'static str {
         shujing_core::DbType::Postgres => "5432",
         shujing_core::DbType::Redis => "6379",
         shujing_core::DbType::Mongo => "27017",
+        shujing_core::DbType::Mssql => "1433",
         shujing_core::DbType::Sqlite => "",
     }
 }

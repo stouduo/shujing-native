@@ -306,6 +306,21 @@ pub fn designer_sql(
                 warnings.push(format!("SQLite 无法修改已有列「{}」,已跳过", c.name));
             }
             DbType::Redis | DbType::Mongo => {}
+            DbType::Mssql => {
+                // T-SQL:ALTER COLUMN 语法(SQL Server 不支持 MODIFY)
+                alters.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} {};",
+                    qt,
+                    quote_ident(db_type, &c.name),
+                    type_of(db_type, c)
+                ));
+                let nn = if c.nullable { "NULL" } else { "NOT NULL" };
+                alters.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} {nn};",
+                    qt,
+                    quote_ident(db_type, &c.name)
+                ));
+            }
         }
     }
     if alters.is_empty() && warnings.is_empty() {

@@ -187,11 +187,22 @@ impl ShujingApp {
         // 底部栏:版本号 + 黑白主题切换
         ui.add_space(3.0);
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                    .size(10.5)
-                    .color(p.muted),
-            );
+            // 版本号;有新版时变为可点链接(打开 Release 页)
+            let upd = self.update_available.clone();
+            if let Some((tag, url)) = upd {
+                let btn = ui.button(RichText::new(format!("⬆ {tag}")).size(10.5));
+                let clicked = btn.clicked();
+                btn.on_hover_text("有新版本,点击打开下载页");
+                if clicked {
+                    let _ = ui.ctx().open_url(egui::output::OpenUrl::new_tab(url));
+                }
+            } else {
+                ui.label(
+                    RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                        .size(10.5)
+                        .color(p.muted),
+                );
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let (rect, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
                 let glyph = if theme::is_dark() { "☀" } else { "☾" };

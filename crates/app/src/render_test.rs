@@ -163,6 +163,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         conn_crypto: None,
         pending_crypto_path: None,
         redis_batch_del: None,
+        update_available: None,
         shot: None,
         dark_mode: true,
         follow_system_theme: false,

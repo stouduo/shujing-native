@@ -11,6 +11,8 @@ pub enum DbType {
     Redis,
     #[serde(rename = "mongodb")]
     Mongo,
+    #[serde(rename = "sqlserver")]
+    Mssql,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -419,6 +421,18 @@ pub enum Backend {
     Pg(PgPool),
     Redis(RedisState),
     Mongo(MongoState),
+    Mssql(MssqlState),
+}
+
+/// SQL Server 连接(具体流类型太长,别名收敛)
+pub type MssqlClient = tiberius::Client<
+    tokio_util::compat::Compat<tokio::net::TcpStream>,
+>;
+
+/// SQL Server:连接池(3 条会话轮发,同 PG 模式)
+pub struct MssqlState {
+    pub clients: Vec<tokio::sync::Mutex<MssqlClient>>,
+    pub next: std::sync::atomic::AtomicUsize,
 }
 
 /// MongoDB 连接状态(驱动自带连接池与重连)

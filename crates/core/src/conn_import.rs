@@ -11,6 +11,7 @@ fn conn_id(name: &str, db_type: &DbType) -> String {
         DbType::Sqlite => "sqlite",
         DbType::Redis => "redis",
         DbType::Mongo => "mongo",
+        DbType::Mssql => "mssql",
     };
     // 稳定 id:导入重跑不会因时间戳不同而重复
     format!("imp-{t}-{}", sanitize(name))
@@ -49,6 +50,7 @@ fn dbeaver_provider_to_type(provider: &str) -> Option<DbType> {
         "sqlite" => Some(DbType::Sqlite),
         "redis" => Some(DbType::Redis),
         "mongodb" | "mongo" => Some(DbType::Mongo),
+        "mssql" | "sqlserver" => Some(DbType::Mssql),
         _ => None,
     }
 }
@@ -207,6 +209,7 @@ fn ncx_type_to_db_type(ct: &str) -> Option<DbType> {
         "SQLITE" => Some(DbType::Sqlite),
         "REDIS" => Some(DbType::Redis),
         "MONGODB" => Some(DbType::Mongo),
+        "MSSQL" => Some(DbType::Mssql),
         _ => None,
     }
 }

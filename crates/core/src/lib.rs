@@ -13,6 +13,7 @@ pub mod redis_ops;
 pub mod config_crypto;
 pub mod conn_import;
 pub mod mongo;
+pub mod mssql;
 pub mod parquet_preview;
 pub mod schema;
 pub mod data_diff;
@@ -252,6 +253,7 @@ impl Service {
                 crate::model::DbType::Postgres => 5432,
                 crate::model::DbType::Redis => 6379,
                 crate::model::DbType::Mongo => 27017,
+                crate::model::DbType::Mssql => 1433,
                 crate::model::DbType::Sqlite => 0,
             });
             let g = ssh::open_tunnel(&ssh_cfg, &target_host, target_port).await?;
@@ -319,6 +321,7 @@ impl Service {
             crate::model::DbType::Postgres => 5432,
             crate::model::DbType::Redis => 6379,
             crate::model::DbType::Mongo => 27017,
+            crate::model::DbType::Mssql => 1433,
             crate::model::DbType::Sqlite => 0,
         });
         let guard = ssh::open_tunnel(ssh_cfg, &target_host, target_port).await?;

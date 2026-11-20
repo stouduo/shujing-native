@@ -166,6 +166,34 @@ pub async fn apply_changes(
         }
         Backend::Redis(_) => return Err("Redis 请使用专门的命令通道".into()),
         Backend::Mongo(_) => return Err("MongoDB 不支持 SQL 回写".into()),
+        Backend::Mssql(st) => {
+            // 与 PG 同构:BEGIN/逐条/COMMIT(simple_query 支持多语句包)
+            let mut client = Backend::mssql_client(st).await?;
+            client
+                .simple_query("BEGIN TRAN")
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut affected = 0u64;
+            for sql in &stmts {
+                // QueryStream 借用 &mut client:同一作用域内消费完再下一次调用
+                let exec = async {
+                    let stream = client.simple_query(sql).await;
+                    let mut stream = match stream {
+                        Ok(v) => v,
+                        Err(e) => return Err(e.to_string()),
+                    };
+                    // 消费首个结果集即可(DDL/写语句无后续集)
+                    let _ = stream.into_first_result().await;
+                    Ok::<(), String>(())
+                };
+                if let Err(e) = exec.await {
+                    let _ = client.simple_query("ROLLBACK TRAN").await;
+                    return Err(e);
+                }
+            }
+            client.simple_query("COMMIT TRAN").await.map_err(|e| e.to_string())?;
+            affected
+        }
     };
 
     Ok(ExecResult {

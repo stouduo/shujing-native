@@ -159,6 +159,60 @@ pub async fn connect(
                 running_pid: pg_pid.unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0))),
             }))
         }
+        DbType::Mssql => {
+            let host = req(&info.host, "缺少 SQL Server 主机地址")?;
+            let port = info.port.unwrap_or(1433);
+            let user = req(&info.user, "缺少用户名")?;
+            let pass = info.password.as_deref().unwrap_or("");
+            let db = info.database.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            let mut clients = Vec::new();
+            let mut last_err: Option<String> = None;
+            for _ in 0..3 {
+                let tcp = match tokio::time::timeout(
+                    Duration::from_secs(8),
+                    tokio::net::TcpStream::connect((host, port)),
+                )
+                .await
+                {
+                    Ok(Ok(t)) => t,
+                    Ok(Err(e)) => {
+                        last_err = Some(format!("TCP 连接失败: {e}"));
+                        break;
+                    }
+                    Err(_) => {
+                        last_err = Some("连接 SQL Server 超时(8s)".into());
+                        break;
+                    }
+                };
+                tcp.set_nodelay(true).ok();
+                let mut config = tiberius::Config::new();
+                config.host(host);
+                config.port(port);
+                config.authentication(tiberius::AuthMethod::sql_server(user, pass));
+                if let Some(d) = db {
+                    config.database(d);
+                }
+                config.encryption(tiberius::EncryptionLevel::NotSupported);
+                use tokio_util::compat::TokioAsyncWriteCompatExt;
+                match tiberius::Client::connect(config, tcp.compat_write()).await {
+                    Ok(c) => clients.push(tokio::sync::Mutex::new(c)),
+                    Err(e) => {
+                        last_err = Some(format!("SQL Server 认证/握手失败: {e}"));
+                        break;
+                    }
+                }
+            }
+            if clients.is_empty() {
+                return Err(format!(
+                    "连接 SQL Server 失败: {}",
+                    last_err.unwrap_or_default()
+                ));
+            }
+            Ok(Backend::Mssql(crate::model::MssqlState {
+                clients,
+                next: std::sync::atomic::AtomicUsize::new(0),
+            }))
+        }
         DbType::Mongo => {
             let host = req(&info.host, "缺少 MongoDB 主机地址")?;
             // 主机栏直接粘完整连接串(含 Atlas 的 mongodb+srv://)即 URL 模式
@@ -299,6 +353,18 @@ impl Backend {
         Ok(client)
     }
 
+    /// SQL Server:轮发取一条会话
+    pub(crate) async fn mssql_client(
+        st: &mut crate::model::MssqlState,
+    ) -> Result<tokio::sync::MutexGuard<'_, crate::model::MssqlClient>, String> {
+        if st.clients.is_empty() {
+            return Err("SQL Server 连接池为空".into());
+        }
+        let n = st.next.fetch_add(1, Ordering::Relaxed) % st.clients.len();
+        let idx = n.min(st.clients.len().saturating_sub(1));
+        Ok(st.clients[idx].lock().await)
+    }
+
     /// 会话库上下文读取(MySQL/PG)
     pub fn session_db(&self) -> Option<&str> {
         match self {
@@ -383,6 +449,22 @@ impl Backend {
                     .get_str("version")
                     .map(|s| format!("MongoDB {s}"))
                     .unwrap_or_else(|_| "MongoDB".into());
+                Ok(ver)
+            }
+            Backend::Mssql(st) => {
+                let mut client = Backend::mssql_client(st).await?;
+                let rows = client
+                    .simple_query("SELECT @@VERSION")
+                    .await
+                    .map_err(|e| format!("SQL Server: {e}"))?
+                    .into_first_result()
+                    .await
+                    .map_err(|e| format!("SQL Server: {e}"))?;
+                let ver = rows
+                    .first()
+                    .and_then(|r| r.get::<&str, _>(0))
+                    .map(|s| s.split(" on ").next().unwrap_or(s).to_string())
+                    .unwrap_or_else(|| "SQL Server".into());
                 Ok(ver)
             }
         }

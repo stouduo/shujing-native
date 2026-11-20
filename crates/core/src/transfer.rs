@@ -42,6 +42,9 @@ pub async fn transfer_table(
     if src_info.db_type == DbType::Mongo {
         return Err("Mongo 文档迁移暂不支持(集合结构无法用 SQL 表达)".into());
     }
+    if src_info.db_type == DbType::Mssql {
+        return Err("SQL Server 传输暂不支持(建议导出 SQL + 导入)".into());
+    }
     service.connect_by_id(sc).await?;
     service.connect_by_id(dc).await?;
 

@@ -2075,6 +2075,16 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             theme::form_field(ui, "Base URL", "ai-base", &mut app.ai_config.base_url, 320.0, false);
             theme::form_field(ui, "API Key", "ai-key", &mut app.ai_config.api_key, 320.0, true);
             theme::form_field(ui, "模型", "ai-model", &mut app.ai_config.model, 320.0, false);
+            // 界面语言(框架先行:已迁移文案走英文,未迁移的仍显示中文)
+            ui.add_space(6.0);
+            ui.label(RichText::new("界面语言 / Language").size(11.0).color(p.muted));
+            let mut en = ui_kit::i18n::is_english();
+            let mut en_mut = en;
+            if theme::checkbox(ui, &mut en_mut, "English (partial)").changed() {
+                en = en_mut;
+                ui_kit::i18n::set_english(en);
+                let _ = en;
+            }
             theme::modal_footer(ui, |ui| {
                 if theme::button(ui, "完成", theme::BtnKind::Primary).clicked() {
                     close = true;

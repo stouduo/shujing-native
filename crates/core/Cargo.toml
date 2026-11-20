@@ -13,11 +13,14 @@ mysql_async = { workspace = true }
 rusqlite = { workspace = true }
 russh = { workspace = true }
 mongodb = { workspace = true }
+tiberius = { workspace = true }
+tokio-util = { workspace = true }
 aes-gcm = { workspace = true }
 pbkdf2 = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
 base64 = { workspace = true }
+chrono = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true }
 parquet = { workspace = true }

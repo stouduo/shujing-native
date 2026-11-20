@@ -10,6 +10,7 @@
 //!
 //! 字体需宿主应用自行安装(中文字体/等宽字体等),本库只消费 FontId 族名。
 
+pub mod i18n;
 pub mod icons;
 pub mod scroll;
 pub mod theme;

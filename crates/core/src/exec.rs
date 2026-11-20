@@ -435,6 +435,10 @@ impl Backend {
             Backend::Mongo(_) => {
                 Err("MongoDB 不支持 SQL 查询(浏览集合用数据页;过滤输入 JSON 对象)".into())
             }
+            Backend::Mssql(st) => {
+                let r = crate::mssql::query(st, sql, max).await?;
+                Ok(vec![r])
+            }
         }
     }
 

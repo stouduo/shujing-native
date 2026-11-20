@@ -146,6 +146,22 @@ pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<V
         }
         Backend::Redis(_) => Ok(vec![]),
         Backend::Mongo(st) => crate::mongo::list_databases(st).await,
+        Backend::Mssql(st) => {
+            let mut c = Backend::mssql_client(st).await?;
+            let rows = c
+                .simple_query(
+                    "SELECT name FROM sys.databases WHERE name NOT IN ('master','tempdb','model','msdb') ORDER BY name",
+                )
+                .await
+                .map_err(|e| format!("SQL Server: {e}"))?
+                .into_first_result()
+                .await
+                .map_err(|e| format!("SQL Server: {e}"))?;
+            Ok(rows
+                .iter()
+                .filter_map(|r| r.get::<&str, _>(0).map(str::to_string))
+                .collect())
+        }
     }
 }
 
@@ -620,7 +636,7 @@ pub async fn object_ddl(
         }
     };
     let sql = match (&info.db_type, kind) {
-        (crate::model::DbType::Mongo, _) => String::new(),
+        (crate::model::DbType::Mongo, _) | (crate::model::DbType::Mssql, _) => String::new(),
         (crate::model::DbType::Sqlite, _) => format!(
             "SELECT sql FROM sqlite_master WHERE name = {}",
             format!("'{}'", name.replace('\'', "''"))
@@ -704,6 +720,33 @@ impl Backend {
                     .map(|name| TableMeta { name, kind: "table".into(), owner: None })
                     .collect())
             }
+
+            Backend::Mssql(st) => {
+                let db = database
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "未指定数据库".to_string())?;
+                let mut c = Backend::mssql_client(st).await?;
+                let sql = format!(
+                    "SELECT name, CASE WHEN type='U' THEN 'table' ELSE 'view' END AS kind FROM {}.sys.objects WHERE type IN ('U','V') ORDER BY name",
+                    crate::edits::quote(db, false)
+                );
+                let rows = c
+                    .simple_query(&sql)
+                    .await
+                    .map_err(|e| format!("SQL Server: {e}"))?
+                    .into_first_result()
+                    .await
+                    .map_err(|e| format!("SQL Server: {e}"))?;
+                Ok(rows
+                    .iter()
+                    .map(|r| TableMeta {
+                        name: r.get::<&str, _>(0).unwrap_or_default().to_string(),
+                        kind: r.get::<&str, _>(1).unwrap_or("table").to_string(),
+                        owner: None,
+                    })
+                    .collect())
+            }
         }
     }
 
@@ -767,6 +810,7 @@ async fn resolve_mysql_db(
                     .or(cur_db.as_deref());
                 crate::mongo::structure(st, db, table).await
             }
+            Backend::Mssql(st) => crate::mssql::structure(st, database, table).await,
         }
     }
 
@@ -783,6 +827,7 @@ async fn resolve_mysql_db(
             }
             Backend::Redis(_) => Err("Redis 无表计数".into()),
             Backend::Mongo(st) => crate::mongo::backend_count(st, table).await,
+            Backend::Mssql(st) => crate::mssql::count(st, table).await,
         }
     }
 
@@ -804,6 +849,8 @@ async fn resolve_mysql_db(
             }
             Backend::Redis(_) => Ok(vec![]),
             Backend::Mongo(_) => Ok(vec![]),
+            Backend::Mssql(_) => Ok(vec![]),
         }
     }
 }
+

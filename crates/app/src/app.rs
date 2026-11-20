@@ -69,6 +69,7 @@ enum SessionTab {
 }
 
 pub enum BgEvent {
+    UpdateAvailable { tag: String, url: String },
     RedisBatchDone {
         is_delete: bool,
         count: Option<u64>,
@@ -1037,6 +1038,8 @@ pub struct ShujingApp {
     pub data_diff: Option<DataDiffState>,
     /// 连接备份口令弹窗
     pub conn_crypto: Option<ConnCryptoState>,
+    /// 有新版本时的提示(版本号+下载链接)
+    pub update_available: Option<(String, String)>,
     /// 待写盘路径(口令确认后用)
     pub pending_crypto_path: Option<String>,
     /// Redis 批量删除弹窗
@@ -1104,6 +1107,13 @@ impl ShujingApp {
             .and_then(|v| v.get("ai"))
             .cloned()
             .and_then(|v| serde_json::from_value::<shujing_core::ai::AiConfig>(v).ok());
+        if settings
+            .as_ref()
+            .and_then(|v| v.get("english").and_then(|f| f.as_bool()))
+            .unwrap_or(false)
+        {
+            ui_kit::i18n::set_english(true);
+        }
         crate::theme::set_accent(accent);
         crate::theme::set_dark(dark);
         crate::theme::apply(&cc.egui_ctx);
@@ -1145,6 +1155,7 @@ impl ShujingApp {
             transfer: None,
             data_diff: None,
             conn_crypto: None,
+            update_available: None,
             pending_crypto_path: None,
             redis_batch_del: None,
             schema_diff: None,
@@ -1426,6 +1437,7 @@ impl ShujingApp {
             "accent": crate::theme::accent_idx(),
             "followSystem": self.follow_system_theme,
             "ai": &self.ai_config,
+            "english": ui_kit::i18n::is_english(),
         });
         let _ = std::fs::write(path, json.to_string());
     }
@@ -4059,6 +4071,10 @@ impl ShujingApp {
                         m.testing = false;
                         m.test_result = Some(result);
                     }
+                }
+                BgEvent::UpdateAvailable { tag, url } => {
+                    self.update_available = Some((tag, url));
+                    continue;
                 }
                 BgEvent::RedisBatchDone {
                     is_delete,
