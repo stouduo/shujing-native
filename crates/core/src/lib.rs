@@ -340,7 +340,7 @@ impl Service {
             endpoint.port = Some(g.local_port);
             _tunnel = Some(g); // 测试期间保活,函数返回即关闭
         }
-        let mut backend = backend::connect(&endpoint, None).await?;
+        let mut backend = backend::connect(&endpoint, None, None).await?;
         let version = backend.server_info().await?;
         Ok(ConnectResult { version })
     }
@@ -357,7 +357,9 @@ impl Service {
             &endpoint,
             std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         ));
-        let mut backend = backend::connect(&endpoint, Some(cancel.pg_pid.clone())).await?;
+        let mut backend =
+            backend::connect(&endpoint, Some(cancel.pg_pid.clone()), Some(cancel.gen.clone()))
+                .await?;
         // 重复连接同一 id(如改配置重连)时保留会话库记忆
         let prev = match self.state.live(&info.id) {
             Some(old) => old.lock().await.backend.session_db().map(str::to_string),
@@ -637,7 +639,11 @@ impl Service {
                 }
                 let info = guard.info.clone();
                 let session_db = guard.backend.session_db().map(str::to_string);
-                let mut nb = backend::connect(&info, Some(cancel_state.pg_pid.clone()))
+                let mut nb = backend::connect(
+                    &info,
+                    Some(cancel_state.pg_pid.clone()),
+                    Some(cancel_state.gen.clone()),
+                )
                     .await
                     .map_err(|e2| format!("连接已断开,自动重连失败: {e2}(原错误: {e})"))?;
                 nb.set_session_db(session_db.as_deref());
@@ -666,6 +672,9 @@ impl Service {
                 if cid == 0 {
                     return Err("没有正在运行的查询".into());
                 }
+                // 代数戳:开控制连接的往返期间查询可能已结束、同会话新查询可能已开跑;
+                // KILL 前核对,代数变了就放弃(宁可漏杀不可误杀)
+                let gen_seen = entry.gen.load(std::sync::atomic::Ordering::Relaxed);
                 let opts = mysql_async::OptsBuilder::default()
                     .ip_or_hostname(host.as_deref().unwrap_or("127.0.0.1"))
                     .tcp_port(port.unwrap_or(3306))
@@ -674,6 +683,9 @@ impl Service {
                 let mut conn = mysql_async::Conn::new(opts)
                     .await
                     .map_err(|e| format!("取消失败(控制连接): {e}"))?;
+                if entry.gen.load(std::sync::atomic::Ordering::Relaxed) != gen_seen {
+                    return Err("查询已结束,取消已跳过(避免误伤新查询)".into());
+                }
                 mysql_async::prelude::Queryable::query_drop(
                     &mut conn,
                     format!("KILL QUERY {cid}"),
@@ -687,6 +699,7 @@ impl Service {
                 if pid == 0 {
                     return Err("没有正在运行的查询".into());
                 }
+                let gen_seen = entry.gen.load(std::sync::atomic::Ordering::Relaxed);
                 let cfg = format!(
                     "host={} port={} user={} password={} dbname={} connect_timeout=8",
                     backend::pg_quote(host.as_deref().unwrap_or("127.0.0.1")),
@@ -701,6 +714,9 @@ impl Service {
                 tokio::spawn(async move {
                     let _ = connection.await;
                 });
+                if entry.gen.load(std::sync::atomic::Ordering::Relaxed) != gen_seen {
+                    return Err("查询已结束,取消已跳过(避免误伤新查询)".into());
+                }
                 client
                     .simple_query(&format!("SELECT pg_cancel_backend({pid})"))
                     .await
@@ -1052,7 +1068,7 @@ mod tests {
     async fn sqlite_full_flow() {
         let path = tmp_db("flow");
         let info = sqlite_info(&path);
-        let mut b = backend::connect(&info, None).await.unwrap();
+        let mut b = backend::connect(&info, None, None).await.unwrap();
 
         b.run_sql("CREATE TABLE t1 (id INTEGER PRIMARY KEY, name TEXT, age INT)", 100, None)
             .await
@@ -1140,7 +1156,7 @@ mod tests {
     async fn sqlite_multi_statement_fallback() {
         let path = tmp_db("multi");
         let info = sqlite_info(&path);
-        let mut b = backend::connect(&info, None).await.unwrap();
+        let mut b = backend::connect(&info, None, None).await.unwrap();
         let rs = b
             .run_sql(
                 "CREATE TABLE m (x INT);\nINSERT INTO m VALUES (1);\nINSERT INTO m VALUES (2);\nSELECT * FROM m;\nSELECT x + 1 AS nx FROM m WHERE x = 2;",
@@ -1165,7 +1181,7 @@ mod tests {
     async fn sqlite_foreign_keys() {
         let path = tmp_db("fk");
         let info = sqlite_info(&path);
-        let mut b = backend::connect(&info, None).await.unwrap();
+        let mut b = backend::connect(&info, None, None).await.unwrap();
         b.run_sql(
             "CREATE TABLE a (id INTEGER PRIMARY KEY);\
              CREATE TABLE b (id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id));",
@@ -1187,7 +1203,7 @@ mod tests {
     async fn sqlite_trigger_and_ddl() {
         let path = tmp_db("trg");
         let info = sqlite_info(&path);
-        let mut b = backend::connect(&info, None).await.unwrap();
+        let mut b = backend::connect(&info, None, None).await.unwrap();
         b.run_sql(
             "CREATE TABLE t (id INTEGER PRIMARY KEY, n INT);\
              CREATE TRIGGER trg_t AFTER INSERT ON t BEGIN UPDATE t SET n = n + 1 WHERE id = NEW.id; END;",
@@ -1209,7 +1225,7 @@ mod tests {
     async fn sqlite_readonly_guard() {
         let path = tmp_db("ro");
         let mut info = sqlite_info(&path);
-        let mut b = backend::connect(&info, None).await.unwrap();
+        let mut b = backend::connect(&info, None, None).await.unwrap();
         b.run_sql("CREATE TABLE r (x INT); INSERT INTO r VALUES (1);", 10, None).await.unwrap();
 
         info.read_only = true;
@@ -1225,7 +1241,7 @@ mod tests {
     async fn sqlite_global_search() {
         let path = tmp_db("search");
         let info = sqlite_info(&path);
-        let mut b = backend::connect(&info, None).await.unwrap();
+        let mut b = backend::connect(&info, None, None).await.unwrap();
         b.run_sql(
             "CREATE TABLE s1 (id INTEGER PRIMARY KEY, name TEXT);             CREATE TABLE s2 (id INTEGER PRIMARY KEY, note TEXT);             INSERT INTO s1 (name) VALUES ('alpha'), ('Beta'), ('gamma');             INSERT INTO s2 (note) VALUES ('ALPHA note'), ('other');",
             20,

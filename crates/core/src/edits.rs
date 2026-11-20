@@ -300,7 +300,7 @@ mod tx_tests {
             read_only: false,
             ssh: None,
         };
-        let b = crate::backend::connect(&info, None).await.unwrap();
+        let b = crate::backend::connect(&info, None, None).await.unwrap();
         (b, info)
     }
 

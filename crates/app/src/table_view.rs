@@ -4901,10 +4901,10 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                     let _ = ui.allocate_space(egui::vec2(22.0, 22.0));
                     let resp = ui.interact(sw, egui::Id::new(("conn-color", i)), Sense::click());
                     let selected = cur == i as u8;
-                    let fill = if *name == "无" { p.elevated } else { *c };
+                    let fill = if *c == Color32::TRANSPARENT { p.elevated } else { *c };
                     ui.painter()
                         .rect_filled(sw, egui::CornerRadius::same(11), fill);
-                    if *name == "无" {
+                    if *c == Color32::TRANSPARENT {
                         ui.painter().rect_stroke(
                             sw,
                             egui::CornerRadius::same(11),
@@ -4920,7 +4920,11 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                             egui::StrokeKind::Inside,
                         );
                     }
-                    resp.clone().on_hover_text(*name);
+                    resp.clone().on_hover_text(if *c == Color32::TRANSPARENT {
+                        ui_kit::t!("None", "无")
+                    } else {
+                        name
+                    });
                     if resp.clicked() {
                         m.color_idx = Some(i as u8);
                     }
@@ -5096,7 +5100,8 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
         file_path: (!m.file_path.is_empty()).then(|| m.file_path.clone()),
         color: m.color_idx.and_then(|i| {
             CONN_COLORS.get(i as usize).and_then(|(name, c)| {
-                (*name != "无").then(|| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()))
+                (*c != Color32::TRANSPARENT)
+                    .then(|| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()))
             })
         }),
         read_only: m.read_only,

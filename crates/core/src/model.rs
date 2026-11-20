@@ -473,6 +473,8 @@ pub struct PgPool {
     pub(crate) applied: Vec<Option<String>>,
     /// 最近 checkout 会话的 backend pid(取消用)
     pub(crate) running_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// 查询代数戳(与 CancelState.gen 同源 Arc)
+    pub(crate) gen: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// MySQL 连接池 + 会话库上下文(每次取连接自动 USE 恢复)
@@ -481,6 +483,8 @@ pub struct MySqlPool {
     pub(crate) session_db: Option<String>,
     /// 最近一次取用连接的会话 ID(KILL QUERY 用)
     pub(crate) running_id: std::sync::atomic::AtomicU64,
+    /// 查询代数戳(与 CancelState.gen 同源 Arc)
+    pub(crate) gen: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// 从 USE / SET search_path 语句提取库名
@@ -551,6 +555,8 @@ pub struct CancelState {
     pub mysql_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// PG 当前会话的 backend pid
     pub pg_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// 查询代数戳:每次开始查询递增;取消侧核对代数防止旧 KILL 误伤新查询
+    pub gen: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl CancelState {
@@ -564,6 +570,7 @@ impl CancelState {
             database: info.database.clone(),
             mysql_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pg_pid,
+            gen: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 }

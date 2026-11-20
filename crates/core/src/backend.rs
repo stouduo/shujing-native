@@ -14,6 +14,7 @@ pub(crate) fn pg_quote(v: &str) -> String {
 pub async fn connect(
     info: &ConnInfo,
     pg_pid: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
+    gen: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<Backend, String> {
     match info.db_type {
         DbType::Sqlite => {
@@ -71,6 +72,9 @@ pub async fn connect(
                 pool,
                 session_db: None,
                 running_id: std::sync::atomic::AtomicU64::new(0),
+                gen: gen.unwrap_or_else(|| {
+                    std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0))
+                }),
             }))
         }
         DbType::Redis => {
@@ -157,6 +161,9 @@ pub async fn connect(
                 session_db: None,
                 applied: vec![None; 3],
                 running_pid: pg_pid.unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0))),
+                gen: gen.unwrap_or_else(|| {
+                    std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0))
+                }),
             }))
         }
         DbType::Mssql => {
@@ -364,6 +371,8 @@ impl Backend {
         }
         let n = mp.next.fetch_add(1, Ordering::Relaxed) % mp.clients.len();
         let client = mp.clients[n].clone();
+        // 代数戳递增:本次 checkout 视为一次新活动,旧取消作废
+        mp.gen.fetch_add(1, Ordering::Relaxed);
         // 回填会话 pid:取消查询(pg_cancel_backend)依赖它,不填则取消永远报"无运行中查询"
         if let Ok(rows) = client.simple_query("SELECT pg_backend_pid").await {
             if let Some(tokio_postgres::SimpleQueryMessage::Row(r)) = rows.first() {

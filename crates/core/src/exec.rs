@@ -404,7 +404,9 @@ impl Backend {
             Backend::MySql(mp) => {
                 // 统一走 mysql_conn:自动恢复会话库上下文
                 let mut conn = Backend::mysql_conn(mp).await?;
-                // 记录会话 ID 供取消(查询结束时清零)
+                // 记录会话 ID 供取消(查询结束时清零);代数戳同步递增,
+                // 取消侧开好控制连接后核对代数,旧 KILL 不误伤新查询
+                mp.gen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if let Some(rid) = running_id {
                     rid.store(conn.id() as u64, std::sync::atomic::Ordering::Relaxed);
                 }

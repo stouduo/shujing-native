@@ -1,6 +1,7 @@
 //! 数镜原生版界面:状态 + 异步事件消费 + 数据加载。
 
 use crate::net;
+use egui::Color32;
 use shujing_core::{ConnInfo, Service};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1013,7 +1014,10 @@ impl ConnModal {
                     crate::table_view::CONN_COLORS
                         .iter()
                         .position(|(name, c)| {
-                            *name != "无" && c.r() == r && c.g() == g && c.b() == b
+                            *c != Color32::TRANSPARENT
+                                && c.r() == r
+                                && c.g() == g
+                                && c.b() == b
                         })
                         .map(|i| i as u8)
                 })
