@@ -280,6 +280,19 @@ pub enum TabAction {
         tab_id: String,
         key: String,
     },
+    /// Kafka:读取选中 topic 消息
+    KafkaLoadMsgs {
+        tab_id: String,
+    },
+    /// Kafka:发送消息
+    KafkaSend {
+        tab_id: String,
+        topic: String,
+    },
+    /// Kafka:拉取消费组
+    KafkaLoadGroups {
+        tab_id: String,
+    },
     OpenAiAssist {
         tab_id: String,
         mode: u8,
@@ -451,6 +464,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Structure(_) => 2,
                                 TabKind::Designer(_) => 3,
                                 TabKind::Redis(_) => 4,
+                                TabKind::Kafka(_) => 7,
                                 TabKind::Er(_) => 5,
                                 TabKind::Ddl(_) => 6,
                             };
@@ -4108,6 +4122,9 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
         TabAction::RedisStreamGroups { tab_id, key } => {
             app.redis_stream_groups(&tab_id, &key)
         }
+        TabAction::KafkaLoadMsgs { tab_id: _ } => app.kafka_load_msgs(),
+        TabAction::KafkaSend { tab_id: _, topic: _ } => app.kafka_send(),
+        TabAction::KafkaLoadGroups { tab_id: _ } => app.kafka_load_groups(),
         TabAction::MongoEditDoc { tab_id } => app.open_mongo_edit(&tab_id),
         TabAction::MongoDeleteDoc { tab_id } => {
             // 删除需确认:复用 ConfirmState(action mongo-del),expect=文档 _id
@@ -5090,6 +5107,7 @@ fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width:
         (shujing_core::DbType::Mongo, "MongoDB"),
         (shujing_core::DbType::Mssql, "SQLServer"),
         (shujing_core::DbType::ClickHouse, "ClickHouse"),
+        (shujing_core::DbType::Kafka, "Kafka"),
     ];
     let seg_w = (width - 6.0) / opts.len() as f32;
     for (i, (t, label)) in opts.iter().enumerate() {
@@ -5142,6 +5160,7 @@ fn default_port(t: shujing_core::DbType) -> &'static str {
         shujing_core::DbType::Mongo => "27017",
         shujing_core::DbType::Mssql => "1433",
         shujing_core::DbType::ClickHouse => "8123",
+        shujing_core::DbType::Kafka => "9092",
         shujing_core::DbType::Sqlite => "",
     }
 }
@@ -5543,6 +5562,7 @@ impl eframe::App for ShujingApp {
                     crate::redis::draw_redis_view(ctx, &tab_id, rt, read_only)
                 }
                 TabKind::Er(e) => crate::er::draw_er_view(ctx, &tab_id, e),
+                TabKind::Kafka(k) => crate::kafka::draw_kafka_view(ctx, &tab_id, k),
                 TabKind::Ddl(d) => structure::draw_ddl_view(ctx, &tab_id, d),
             };
             for a in actions {

@@ -231,6 +231,10 @@ pub async fn apply_changes(
             // mutation 异步生效,affected 不可得
             0u64
         }
+        Backend::Kafka(_) => {
+            let _e: String = "Kafka 不支持 SQL 回写".into();
+            0u64
+        }
     };
 
     Ok(ExecResult {

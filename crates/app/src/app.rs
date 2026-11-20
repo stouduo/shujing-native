@@ -87,6 +87,22 @@ pub enum BgEvent {
         op: u8, // 0 插入 1 替换 3 批量导入
         result: Result<String, String>,
     },
+    KafkaTopicsLoaded {
+        conn_id: String,
+        result: Result<Vec<shujing_core::kafka::TopicInfo>, String>,
+    },
+    KafkaMsgsLoaded {
+        tab_id: String,
+        result: Result<Vec<shujing_core::kafka::StreamMsg>, String>,
+    },
+    KafkaSendDone {
+        tab_id: String,
+        result: Result<(i32, i64), String>,
+    },
+    KafkaGroupsLoaded {
+        tab_id: String,
+        result: Result<Vec<shujing_core::kafka::GroupInfo>, String>,
+    },
     RedisStreamAddDone {
         tab_id: String,
         key: String,
@@ -707,6 +723,43 @@ pub struct MongoDocState {
     pub error: Option<String>,
 }
 
+/// Kafka 控制台标签(topic 浏览/消息读取/发送/消费组)
+pub struct KafkaTab {
+    pub conn_id: String,
+    pub topics: Vec<String>,
+    pub selected: Option<String>,
+    pub msgs: Vec<shujing_core::kafka::StreamMsg>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub send_key: String,
+    pub send_payload: String,
+    pub sending: bool,
+    pub groups: Option<Vec<shujing_core::kafka::GroupInfo>>,
+    pub groups_open: bool,
+    pub frozen: usize,
+}
+
+impl KafkaTab {
+    /// 生成用于 tabs 的独立实例(状态字段复制;消息列表从零拉取)
+    pub fn clone_shell(&self, new_id: &str) -> KafkaTab {
+        let _ = new_id;
+        KafkaTab {
+            conn_id: self.conn_id.clone(),
+            topics: self.topics.clone(),
+            selected: self.selected.clone(),
+            msgs: Vec::new(),
+            loading: false,
+            error: None,
+            send_key: String::new(),
+            send_payload: String::new(),
+            sending: false,
+            groups: None,
+            groups_open: false,
+            frozen: 0,
+        }
+    }
+}
+
 /// Mongo 索引管理弹窗(列表 + 内嵌创建表单)
 pub struct MongoIndexState {
     pub conn_id: String,
@@ -905,6 +958,8 @@ pub enum TabKind {
     Designer(DesignerTab),
     Redis(RedisTab),
     Er(ErTab),
+    /// Kafka 控制台(不参与会话恢复:重启后从侧栏重开)
+    Kafka(KafkaTab),
     Ddl(DdlTab),
 }
 
@@ -1105,6 +1160,7 @@ pub struct ShujingApp {
     /// Mongo 文档编辑弹窗
     pub mongo_doc: Option<MongoDocState>,
     pub mongo_indexes: Option<MongoIndexState>,
+    pub kafka_tab: Option<KafkaTab>,
     /// 查询结果存为新表:命名弹窗(tab_id, 表名草稿)
     pub save_result_modal: Option<(String, String)>,
     pub mongo_import: Option<MongoImportState>,
@@ -1229,6 +1285,7 @@ impl ShujingApp {
             ai_assist: None,
             mongo_doc: None,
             mongo_indexes: None,
+            kafka_tab: None,
             save_result_modal: None,
             mongo_import: None,
             transfer: None,
@@ -1727,6 +1784,132 @@ impl ShujingApp {
         });
     }
 
+    /// 打开 Kafka 控制台(拉 topic 列表)
+    pub fn open_kafka(&mut self, conn_id: &str) {
+        // 已开则聚焦
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.kind, TabKind::Kafka(k) if k.conn_id == conn_id))
+        {
+            self.active_tab = i;
+            return;
+        }
+        let id = format!("k{}", rand_suffix());
+        self.kafka_tab = Some(KafkaTab {
+            conn_id: conn_id.to_string(),
+            topics: Vec::new(),
+            selected: None,
+            msgs: Vec::new(),
+            loading: false,
+            error: None,
+            send_key: String::new(),
+            send_payload: String::new(),
+            sending: false,
+            groups: None,
+            groups_open: false,
+            frozen: 0,
+        });
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let cid = conn_id.to_string();
+        net::spawn(async move {
+            let result = service.kafka_list_topics(&cid).await;
+            let _ = tx.send(BgEvent::KafkaTopicsLoaded { conn_id: cid, result });
+        });
+        self.tabs.push(Tab {
+            id: id.clone(),
+            title: ui_kit::t!("Kafka", "Kafka 控制台").to_string(),
+            kind: TabKind::Kafka(
+                self.kafka_tab
+                    .as_ref()
+                    .expect("kafka_tab 未初始化")
+                    .clone_shell(&id),
+            ),
+        });
+        self.active_tab = self.tabs.len() - 1;
+    }
+
+    /// Kafka:从头读取选中 topic 的 200 条消息
+    pub fn kafka_load_msgs(&mut self) {
+        let Some(k) = self.kafka_tab.as_ref() else {
+            return;
+        };
+        if k.loading {
+            return;
+        }
+        let Some(topic) = k.selected.clone() else {
+            return;
+        };
+        let conn_id = k.conn_id.clone();
+        let tab_id = self
+            .tabs
+            .iter()
+            .find(|t| matches!(&t.kind, TabKind::Kafka(_)))
+            .map(|t| t.id.clone())
+            .unwrap_or_default();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.kafka_tab.as_mut().unwrap().loading = true;
+        net::spawn(async move {
+            let result = service.kafka_consume_recent(&conn_id, &topic, 200, 5).await;
+            let _ = tx.send(BgEvent::KafkaMsgsLoaded { tab_id, result });
+        });
+    }
+
+    /// Kafka:发送一条消息(当前选中 topic)
+    pub fn kafka_send(&mut self) {
+        let Some(k) = self.kafka_tab.as_ref() else {
+            return;
+        };
+        if k.sending {
+            return;
+        }
+        let Some(topic) = k.selected.clone() else {
+            return;
+        };
+        if k.send_payload.trim().is_empty() {
+            self.toast_error(ui_kit::t!("Payload is empty", "消息体为空").to_string());
+            return;
+        }
+        let conn_id = k.conn_id.clone();
+        let key = k.send_key.trim().to_string();
+        let payload = k.send_payload.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.kafka_tab.as_mut().unwrap().sending = true;
+        net::spawn(async move {
+            let result = service
+                .kafka_produce(&conn_id, &topic, (!key.is_empty()).then_some(key.as_str()), &payload)
+                .await;
+            let _ = tx.send(BgEvent::KafkaSendDone {
+                tab_id: String::new(),
+                result,
+            });
+        });
+    }
+
+    /// Kafka:拉取消费组列表
+    pub fn kafka_load_groups(&mut self) {
+        let Some(k) = self.kafka_tab.as_ref() else {
+            return;
+        };
+        if k.loading {
+            return;
+        }
+        let conn_id = k.conn_id.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.kafka_tab.as_mut().unwrap().loading = true;
+        net::spawn(async move {
+            let result = service.kafka_groups(&conn_id).await;
+            let _ = tx.send(BgEvent::KafkaGroupsLoaded {
+                tab_id: String::new(),
+                result,
+            });
+        });
+    }
+
     /// Redis:拉取 stream 消费者组
     pub fn redis_stream_groups(&mut self, tab_id: &str, key: &str) {
         let Some(rt) = self.redis_tab_mut(tab_id) else {
@@ -1791,6 +1974,7 @@ impl ShujingApp {
     pub fn active_tab_info(&self) -> Option<(&str, &str, Option<&str>)> {
         let t = self.tabs.get(self.active_tab)?;
         Some(match &t.kind {
+            TabKind::Kafka(k) => (k.conn_id.as_str(), "", None),
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Structure(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Query(_)
@@ -2309,6 +2493,7 @@ impl ShujingApp {
                 TabKind::Redis(r) => r.conn_id.clone(),
                 TabKind::Er(e) => e.conn_id.clone(),
                 TabKind::Ddl(d) => d.conn_id.clone(),
+                TabKind::Kafka(k) => k.conn_id.clone(),
             })
         });
         let inherit_db = self.tabs.get(self.active_tab).and_then(|t| match &t.kind {
@@ -2319,6 +2504,7 @@ impl ShujingApp {
             TabKind::Redis(_) => None,
             TabKind::Er(e) => e.database.clone(),
             TabKind::Ddl(d) => d.database.clone(),
+            TabKind::Kafka(_) => None,
         });
         // 指定了连接(侧栏右键"新建查询")时,取侧栏展开的库;
         // 仅限无默认库的 MySQL 连接——有默认库的连接保持 None 走默认,
@@ -2425,6 +2611,7 @@ impl ShujingApp {
                 TabKind::Redis(r) => r.conn_id == conn_id,
                 TabKind::Er(e) => e.conn_id == conn_id,
                 TabKind::Ddl(d) => d.conn_id == conn_id,
+                TabKind::Kafka(k) => k.conn_id == conn_id,
             };
             if belongs {
                 if i < self.active_tab {
@@ -3863,6 +4050,8 @@ impl ShujingApp {
                     conn: e.conn_id.clone(),
                     database: e.database.clone(),
                 }),
+                // Kafka 控制台不入会话(重启后从侧栏重开)
+                TabKind::Kafka(_) => {}
                 TabKind::Ddl(d) => tabs.push(SessionTab::Ddl {
                     conn: d.conn_id.clone(),
                     database: d.database.clone(),
@@ -4639,6 +4828,98 @@ impl ShujingApp {
                         error: err_res,
                         ..state
                     });
+                    continue;
+                }
+                BgEvent::KafkaTopicsLoaded { conn_id, result } => {
+                    match result {
+                        Ok(topics) => {
+                            let names: Vec<String> =
+                                topics.into_iter().map(|t| t.name).collect();
+                            if let Some(k) = self.kafka_tab.as_mut() {
+                                if k.conn_id == conn_id {
+                                    k.selected = names.first().cloned();
+                                }
+                                k.topics = names;
+                                k.loading = false;
+                            }
+                            // topics 到位后自动读首个 topic
+                            self.kafka_load_msgs();
+                        }
+                        Err(e) => {
+                            self.toast_error(e.clone());
+                            if let Some(k) = self.kafka_tab.as_mut() {
+                                k.loading = false;
+                                k.error = Some(e);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                BgEvent::KafkaMsgsLoaded { result, .. } => {
+                    if let Some(k) = self.kafka_tab.as_mut() {
+                        k.loading = false;
+                        match result {
+                            Ok(msgs) => {
+                                k.error = None;
+                                k.msgs = msgs;
+                            }
+                            Err(e) => k.error = Some(e),
+                        }
+                    }
+                    continue;
+                }
+                BgEvent::KafkaSendDone { result, .. } => {
+                    let (conn_id, topic) = match self.kafka_tab.as_ref() {
+                        Some(k) => (k.conn_id.clone(), k.selected.clone().unwrap_or_default()),
+                        None => (String::new(), String::new()),
+                    };
+                    let tab_id = self
+                        .tabs
+                        .iter()
+                        .find(|t| matches!(&t.kind, TabKind::Kafka(_)))
+                        .map(|t| t.id.clone())
+                        .unwrap_or_default();
+                    if let Some(k) = self.kafka_tab.as_mut() {
+                        k.sending = false;
+                        match &result {
+                            Ok((p, o)) => {
+                                self.toast_error(format!(
+                                    "{} · p{} o{}",
+                                    ui_kit::t!("Sent", "已发送"),
+                                    p,
+                                    o
+                                ));
+                                // 发送后自动刷新消息列表
+                                if !tab_id.is_empty() && !topic.is_empty() {
+                                    let tx2 = self.event_tx.clone();
+                                    let svc2 = self.service.clone();
+                                    let cid2 = conn_id.clone();
+                                    net::spawn(async move {
+                                        let r2 =
+                                            svc2.kafka_consume_recent(&cid2, &topic, 200, 5)
+                                                .await;
+                                        let _ = tx2.send(BgEvent::KafkaMsgsLoaded {
+                                            tab_id,
+                                            result: r2,
+                                        });
+                                    });
+                                }
+                            }
+                            Err(e) => self.toast_error(e.clone()),
+                        }
+                    }
+                    continue;
+                }
+                BgEvent::KafkaGroupsLoaded { result, .. } => {
+                    if let Some(k) = self.kafka_tab.as_mut() {
+                        match result {
+                            Ok(g) => {
+                                k.groups = Some(g);
+                                k.groups_open = true;
+                            }
+                            Err(e) => self.toast_error(e),
+                        }
+                    }
                     continue;
                 }
                 BgEvent::RedisStreamAddDone { tab_id, key, result } => {

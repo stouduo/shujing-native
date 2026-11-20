@@ -29,6 +29,17 @@ pub async fn connect(
     gen: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<Backend, String> {
     match info.db_type {
+        DbType::Kafka => {
+            let host = req(&info.host, "缺少 Kafka bootstrap 地址")?;
+            let port = info.port.unwrap_or(9092);
+            let addr = if host.contains(':') {
+                host.to_string()
+            } else {
+                format!("{host}:{port}")
+            };
+            let st = crate::kafka::connect(&addr).await?;
+            Ok(Backend::Kafka(st))
+        }
         DbType::Sqlite => {
             let path = req(&info.file_path, "缺少 SQLite 数据库文件路径")?;
             // 路径必须已存在:Connection::open 默认带 CREATE,打错的路径会静默
@@ -538,6 +549,10 @@ impl Backend {
                     .and_then(|c| c.clone())
                     .unwrap_or_default();
                 Ok(format!("ClickHouse {ver}"))
+            }
+            Backend::Kafka(st) => {
+                let topics = crate::kafka::list_topics(st).await?;
+                Ok(format!("Kafka · {} topics", topics.len()))
             }
         }
     }

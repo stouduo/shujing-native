@@ -15,6 +15,8 @@ pub enum DbType {
     Mssql,
     #[serde(rename = "clickhouse")]
     ClickHouse,
+    #[serde(rename = "kafka")]
+    Kafka,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -425,6 +427,7 @@ pub enum Backend {
     Mongo(MongoState),
     Mssql(MssqlState),
     ClickHouse(ClickHouseState),
+    Kafka(crate::kafka::KafkaState),
 }
 
 /// ClickHouse 连接:HTTP 接口(8123;reqwest 自带连接池)

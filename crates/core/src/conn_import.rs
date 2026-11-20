@@ -13,6 +13,7 @@ fn conn_id(name: &str, db_type: &DbType) -> String {
         DbType::Mongo => "mongo",
         DbType::Mssql => "mssql",
         DbType::ClickHouse => "clickhouse",
+        DbType::Kafka => "kafka",
     };
     // 稳定 id:导入重跑不会因时间戳不同而重复
     format!("imp-{t}-{}", sanitize(name))
@@ -53,6 +54,7 @@ fn dbeaver_provider_to_type(provider: &str) -> Option<DbType> {
         "mongodb" | "mongo" => Some(DbType::Mongo),
         "mssql" | "sqlserver" => Some(DbType::Mssql),
         "clickhouse" => Some(DbType::ClickHouse),
+        "kafka" => Some(DbType::Kafka),
         _ => None,
     }
 }
@@ -213,6 +215,7 @@ fn ncx_type_to_db_type(ct: &str) -> Option<DbType> {
         "MONGODB" => Some(DbType::Mongo),
         "MSSQL" => Some(DbType::Mssql),
         "CLICKHOUSE" => Some(DbType::ClickHouse),
+        "KAFKA" => Some(DbType::Kafka),
         _ => None,
     }
 }

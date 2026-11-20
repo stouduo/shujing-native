@@ -147,6 +147,7 @@ pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<V
         Backend::Redis(_) => Ok(vec![]),
         Backend::Mongo(st) => crate::mongo::list_databases(st).await,
         Backend::ClickHouse(st) => crate::clickhouse::list_databases(st).await,
+        Backend::Kafka(_) => Ok(vec![]),
         Backend::Mssql(st) => {
             let mut c = Backend::mssql_client(st).await?;
             let rows = c
@@ -639,7 +640,8 @@ pub async fn object_ddl(
     let sql = match (&info.db_type, kind) {
         (crate::model::DbType::Mongo, _)
         | (crate::model::DbType::Mssql, _)
-        | (crate::model::DbType::ClickHouse, _) => String::new(),
+        | (crate::model::DbType::ClickHouse, _)
+        | (crate::model::DbType::Kafka, _) => String::new(),
         (crate::model::DbType::Sqlite, _) => format!(
             "SELECT sql FROM sqlite_master WHERE name = {}",
             format!("'{}'", name.replace('\'', "''"))
@@ -730,6 +732,16 @@ impl Backend {
                     .filter(|s| !s.is_empty())
                     .ok_or_else(|| "未指定数据库".to_string())?;
                 crate::clickhouse::list_tables(st, db).await
+            }
+            Backend::Kafka(st) => {
+                // 单个伪条目:点击打开 Kafka 控制台(topic 浏览在 tab 内,树过滤 kind=="table"
+                // 不认识 kafka-console 前缀会滤掉——sidebar 三处过滤条件同步放行)
+                let topics = crate::kafka::list_topics(st).await?;
+                Ok(vec![crate::model::TableMeta {
+                    name: format!("Topics ({})", topics.len()),
+                    kind: format!("kafka-console:{}", topics.len()),
+                    owner: None,
+                }])
             }
             Backend::Mssql(st) => {
                 let db = database
@@ -822,6 +834,7 @@ async fn resolve_mysql_db(
             }
             Backend::Mssql(st) => crate::mssql::structure(st, database, table).await,
             Backend::ClickHouse(st) => crate::clickhouse::structure(st, database, table).await,
+            Backend::Kafka(_) => Err("Kafka 无表结构".into()),
         }
     }
 
@@ -840,6 +853,7 @@ async fn resolve_mysql_db(
             Backend::Mongo(st) => crate::mongo::backend_count(st, table).await,
             Backend::Mssql(st) => crate::mssql::count(st, table).await,
             Backend::ClickHouse(st) => crate::clickhouse::count(st, None, table).await,
+            Backend::Kafka(_) => Err("Kafka 计数请打开消息浏览".into()),
         }
     }
 
@@ -863,6 +877,7 @@ async fn resolve_mysql_db(
             Backend::Mongo(_) => Ok(vec![]),
             Backend::Mssql(_) => Ok(vec![]),
             Backend::ClickHouse(_) => Ok(vec![]),
+            Backend::Kafka(_) => Ok(vec![]),
         }
     }
 }

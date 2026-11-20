@@ -161,6 +161,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         mongo_indexes: None,
         mongo_import: None,
         save_result_modal: None,
+        kafka_tab: None,
         transfer: None,
         data_diff: None,
         conn_crypto: None,
@@ -431,6 +432,9 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         }
         TabKind::Er(e) => {
             let _ = crate::er::draw_er_view(ctx, &tab_id, e);
+        }
+        TabKind::Kafka(k) => {
+            let _ = crate::kafka::draw_kafka_view(ctx, &tab_id, k);
         }
         TabKind::Ddl(d) => {
             let _ = crate::structure::draw_ddl_view(ctx, &tab_id, d);

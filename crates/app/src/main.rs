@@ -5,6 +5,7 @@ mod designer;
 mod er;
 mod grid;
 mod icons;
+mod kafka;
 mod modals;
 mod net;
 mod query;

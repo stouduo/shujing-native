@@ -445,6 +445,7 @@ impl Backend {
                 let r = crate::clickhouse::query(st, sql, None, max).await?;
                 Ok(vec![r])
             }
+            Backend::Kafka(_) => Err("Kafka 无 SQL(消息浏览用数据页)".into()),
         }
     }
 

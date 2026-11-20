@@ -5,6 +5,7 @@ pub mod ai;
 pub mod backend;
 pub mod clickhouse;
 pub mod composite;
+pub mod kafka;
 pub mod designer;
 pub mod edits;
 pub mod excel;
@@ -235,6 +236,68 @@ impl Service {
                 crate::redis_ops::delete_by_pattern(&mut guard.backend, db, pattern).await
             }
             _ => Err("非 Redis 连接".into()),
+        }
+    }
+
+    /// Kafka:topic 列表
+    pub async fn kafka_list_topics(&self, id: &str) -> Result<Vec<crate::kafka::TopicInfo>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Kafka(st) => crate::kafka::list_topics(st).await,
+            _ => Err("非 Kafka 连接".into()),
+        }
+    }
+
+    /// Kafka:从头浏览消息
+    pub async fn kafka_consume_recent(
+        &self,
+        id: &str,
+        topic: &str,
+        count: usize,
+        timeout_secs: u64,
+    ) -> Result<Vec<crate::kafka::StreamMsg>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Kafka(st) => {
+                crate::kafka::consume_recent(&st.addr, topic, count, timeout_secs).await
+            }
+            _ => Err("非 Kafka 连接".into()),
+        }
+    }
+
+    /// Kafka:生产消息
+    pub async fn kafka_produce(
+        &self,
+        id: &str,
+        topic: &str,
+        key: Option<&str>,
+        payload: &str,
+    ) -> Result<(i32, i64), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        if guard.info.read_only {
+            return Err("只读连接不允许发送".into());
+        }
+        match &mut guard.backend {
+            crate::model::Backend::Kafka(st) => {
+                crate::kafka::produce(st, topic, key, payload).await
+            }
+            _ => Err("非 Kafka 连接".into()),
+        }
+    }
+
+    /// Kafka:消费组列表
+    pub async fn kafka_groups(
+        &self,
+        id: &str,
+    ) -> Result<Vec<crate::kafka::GroupInfo>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Kafka(st) => crate::kafka::list_groups(st).await,
+            _ => Err("非 Kafka 连接".into()),
         }
     }
 
@@ -574,6 +637,7 @@ impl Service {
                 crate::model::DbType::Mongo => 27017,
                 crate::model::DbType::Mssql => 1433,
                 crate::model::DbType::ClickHouse => 8123,
+                crate::model::DbType::Kafka => 9092,
                 crate::model::DbType::Sqlite => 0,
             });
             let g = ssh::open_tunnel(&ssh_cfg, &target_host, target_port).await?;
@@ -645,6 +709,7 @@ impl Service {
             crate::model::DbType::Mongo => 27017,
             crate::model::DbType::Mssql => 1433,
             crate::model::DbType::ClickHouse => 8123,
+            crate::model::DbType::Kafka => 9092,
             crate::model::DbType::Sqlite => 0,
         });
         let guard = ssh::open_tunnel(ssh_cfg, &target_host, target_port).await?;
