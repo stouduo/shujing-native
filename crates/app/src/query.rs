@@ -290,8 +290,93 @@ pub fn draw_query_view(
             let editor_h = if has_results {
                 (ui.available_height() * 0.32).clamp(110.0, 260.0)
             } else {
-                (ui.available_height() - 4.0).max(180.0)
+                // 预留底部实时诊断条 20px(16 条高 + 4 间距),否则被挤出可视区
+                (ui.available_height() - 20.0).max(180.0)
             };
+            // 实时诊断条(恒定占位 16px,有无问题不跳布局):本地静态检查,
+            // 文本哈希缓存,同一文本不重算;Redis 命令页不适用。
+            // 位置必须在卡片上方:Frame::show 吃满剩余矩形(0.31 坑),放卡片下方会被挤出面板底
+            if !is_redis {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                q.sql.hash(&mut h);
+                let hash = h.finish();
+                let stale = q
+                    .lint_cache
+                    .as_ref()
+                    .map(|(k, _)| *k != hash)
+                    .unwrap_or(true);
+                if stale {
+                    q.lint_cache = Some((hash, shujing_core::sql_lint::lint(&q.sql)));
+                }
+                let findings = q
+                    .lint_cache
+                    .as_ref()
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default();
+                ui.allocate_ui(egui::vec2(ui.available_width(), 16.0), |ui| {
+                    if findings.is_empty() {
+                        // 无问题:只占位不画字
+                        let _ = ui.label(RichText::new("").size(10.5));
+                    } else {
+                        let ft = |f: &shujing_core::sql_lint::Finding| -> String {
+                            let msg = match f.kind {
+                                shujing_core::sql_lint::LintKind::UpdateNoWhere => ui_kit::t!(
+                                    "UPDATE without WHERE — affects the whole table",
+                                    "UPDATE 语句没有 WHERE,会改动全表"
+                                )
+                                .to_string(),
+                                shujing_core::sql_lint::LintKind::DeleteNoWhere => ui_kit::t!(
+                                    "DELETE without WHERE — removes all rows",
+                                    "DELETE 语句没有 WHERE,会清空全表"
+                                )
+                                .to_string(),
+                                shujing_core::sql_lint::LintKind::UnclosedQuote => {
+                                    ui_kit::t!("Unclosed single quote", "单引号不闭合").to_string()
+                                }
+                                shujing_core::sql_lint::LintKind::UnbalancedParens => {
+                                    ui_kit::t!("Unbalanced parentheses", "括号不配对").to_string()
+                                }
+                            };
+                            if f.line > 0 {
+                                if ui_kit::i18n::is_english() {
+                                    format!("Line {}: {}", f.line, msg)
+                                } else {
+                                    format!("第 {} 行:{}", f.line, msg)
+                                }
+                            } else {
+                                msg
+                            }
+                        };
+                        let first = ft(&findings[0]);
+                        let label = if findings.len() == 1 {
+                            first
+                        } else {
+                            format!("{} (+{})", first, findings.len() - 1)
+                        };
+                        let danger = findings.iter().any(|f| {
+                            matches!(
+                                f.kind,
+                                shujing_core::sql_lint::LintKind::UpdateNoWhere
+                                    | shujing_core::sql_lint::LintKind::DeleteNoWhere
+                            )
+                        });
+                        const LINT_ORANGE: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
+                        let resp = ui.label(
+                            RichText::new(format!("● {}", icons::clip(&label, 120)))
+                                .size(10.5)
+                                .color(if danger { p.red } else { LINT_ORANGE }),
+                        );
+                        let tip = findings
+                            .iter()
+                            .map(|f| ft(f))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        resp.on_hover_text(tip);
+                    }
+                });
+            }
+
             // 编辑器属于内容层:用背景色而不是卡片色,避免整块内容区变成灰色
             egui::Frame::new()
                 .fill(p.bg)
@@ -368,7 +453,7 @@ pub fn draw_query_view(
                         });
                 });
 
-            // ⌘/:选中行注释切换(弹窗打开时不响应,防穿透后台执行)
+// ⌘/:选中行注释切换(弹窗打开时不响应,防穿透后台执行)
             if !is_redis
                 && !modal_open
                 && ui.input(|i| i.key_pressed(egui::Key::Slash) && i.modifiers.command)

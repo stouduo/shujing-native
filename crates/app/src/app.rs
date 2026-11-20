@@ -546,6 +546,8 @@ pub struct QueryTab {
     pub ac: Option<AcState>,
     /// 结果网格冻结的前 N 列(0=不冻结)
     pub q_frozen: usize,
+    /// 实时诊断缓存:(sql 哈希, findings)
+    pub lint_cache: Option<(u64, Vec<shujing_core::sql_lint::Finding>)>,
 }
 
 /// 优化分析弹窗状态
@@ -2157,6 +2159,7 @@ impl ShujingApp {
                 q_draft: String::new(),
                 ac: None,
                 q_frozen: 0,
+                lint_cache: None,
             }),
         });
         self.active_tab = self.tabs.len() - 1;
@@ -3762,6 +3765,7 @@ impl ShujingApp {
                             q_draft: String::new(),
                             ac: None,
                             q_frozen: 0,
+                            lint_cache: None,
                         }),
                     });
                 }

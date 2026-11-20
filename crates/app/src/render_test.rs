@@ -686,6 +686,7 @@ fn render_query_view() {
         q_draft: String::new(),
         ac: None,
         q_frozen: 0,
+        lint_cache: None,
     };
     let rows: Vec<Vec<Option<String>>> = (0..24)
         .map(|i| {
@@ -777,6 +778,7 @@ fn render_query_view_narrow_with_db() {
         q_draft: String::new(),
         ac: None,
         q_frozen: 0,
+        lint_cache: None,
     };
     let conns = vec![shujing_core::ConnInfo {
         id: "c1".into(),
@@ -1166,6 +1168,24 @@ fn render_modals_visual_sweep() {
         let mut q = q.borrow_mut();
         let _ = query::draw_query_view(&conns, ctx, "tq1", &mut q, &[], &[], false, &[], &Default::default(), None, false);
     });
+    // 1b) 实时诊断条:UPDATE 无 WHERE + 括号不配对 → 红/橙提示(恒定占位不跳布局)
+    let mut q = test_query_tab();
+    q.sql = "UPDATE t SET a=1;\nSELECT (1 FROM b".into();
+    let conns = test_conns();
+    let q = std::cell::RefCell::new(q);
+    render("query_lint_bar", 900.0, 620.0, true, move |ctx| {
+        let mut q = q.borrow_mut();
+        let _ = query::draw_query_view(&conns, ctx, "tq1b", &mut q, &[], &[], false, &[], &Default::default(), None, false);
+    });
+    // 1c) 干净 SQL:诊断条只占位无文字
+    let mut q = test_query_tab();
+    q.sql = "SELECT id, name FROM users WHERE id = 1".into();
+    let conns = test_conns();
+    let q = std::cell::RefCell::new(q);
+    render("query_lint_clean", 900.0, 620.0, true, move |ctx| {
+        let mut q = q.borrow_mut();
+        let _ = query::draw_query_view(&conns, ctx, "tq1c", &mut q, &[], &[], false, &[], &Default::default(), None, false);
+    });
 
     // 2) 列统计弹窗(12 行)
     let mut app = test_app(vec![], 0);
@@ -1251,6 +1271,7 @@ fn test_query_tab() -> QueryTab {
         q_draft: String::new(),
         ac: None,
         q_frozen: 0,
+        lint_cache: None,
     }
 }
 
@@ -1621,6 +1642,7 @@ fn session_save_restore_roundtrip() {
         q_draft: String::new(),
         ac: None,
         q_frozen: 0,
+        lint_cache: None,
     };
     q.sql = "SELECT id FROM backend_role_privilege".into();
     app.tabs.push(Tab {
@@ -1941,6 +1963,7 @@ fn render_query_autocomplete() {
             forced: false,
         }),
         q_frozen: 0,
+        lint_cache: None,
     };
     let conns = vec![shujing_core::ConnInfo {
         id: "c1".into(),
@@ -2178,6 +2201,7 @@ fn query_grid_frozen_columns_pin() {
         q_draft: String::new(),
         ac: None,
         q_frozen: 1,
+        lint_cache: None,
     };
     q.results = vec![shujing_core::ExecResult {
         columns: (0..6).map(|i| format!("col_{i}")).collect(),

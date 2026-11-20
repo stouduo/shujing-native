@@ -24,6 +24,7 @@ pub mod ssh;
 mod search;
 pub mod sql_advisor;
 pub mod sql_format;
+pub mod sql_lint;
 pub mod store;
 
 pub use search::SearchHit;
