@@ -67,7 +67,12 @@ pub fn build_change_stmts(
         info.db_type,
         crate::model::DbType::MySql | crate::model::DbType::ClickHouse
     );
-    let table = qualified_table(table, database, mysql);
+    // PG 的「库」= 连接级(dbname),SQL 不允许跨库引用("e2e_a"."users" 直接报
+    // relation does not exist)——database 限定只对 MySQL/ClickHouse 生效
+    let table = match info.db_type {
+        crate::model::DbType::Postgres => qualified_table(table, None, false),
+        _ => qualified_table(table, database, mysql),
+    };
     let mut stmts: Vec<String> = Vec::new();
     for u in updates {
         if u.sets.is_empty() {
@@ -161,8 +166,11 @@ pub async fn apply_changes(
             affected
         }
         Backend::Pg(mp) => {
-            let client = Backend::pg_client(mp).await.map_err(|e| e.to_string())?;
-            client.batch_execute("BEGIN").await.map_err(|e| e.to_string())?;
+            let client = Backend::pg_client(mp).await?;
+            client
+                .batch_execute("BEGIN")
+                .await
+                .map_err(crate::backend::pg_err)?;
             let mut affected = 0u64;
             for sql in &stmts {
                 match client.simple_query(sql).await {
@@ -175,11 +183,14 @@ pub async fn apply_changes(
                     }
                     Err(e) => {
                         let _ = client.batch_execute("ROLLBACK").await;
-                        return Err(e.to_string());
+                        return Err(crate::backend::pg_err(e));
                     }
                 }
             }
-            client.batch_execute("COMMIT").await.map_err(|e| e.to_string())?;
+            client
+                .batch_execute("COMMIT")
+                .await
+                .map_err(crate::backend::pg_err)?;
             affected
         }
         Backend::Redis(_) => return Err("Redis 请使用专门的命令通道".into()),
@@ -244,6 +255,46 @@ mod tests {
         assert_eq!(qualified_table("users", Some(""), true), "`users`");
         // 非 MySQL 双引号
         assert_eq!(qualified_table("users", Some("pub"), false), "\"pub\".\"users\"");
+    }
+
+    #[test]
+    fn pg_write_ignores_database_qualifier() {
+        // E2E 实测回归:PG 带 database 的单元格回写曾拼出 "e2e_a"."users"
+        // 直接报 relation does not exist(库在 PG 是连接级,不可跨库引用)
+        let info = ConnInfo {
+            id: "c".into(),
+            name: "c".into(),
+            db_type: crate::model::DbType::Postgres,
+            host: None,
+            port: None,
+            user: None,
+            password: None,
+            database: Some("e2e_a".into()),
+            file_path: None,
+            color: None,
+            read_only: false,
+            ssh: None,
+        };
+        let stmts = build_change_stmts(
+            &info,
+            "users",
+            Some("e2e_a"),
+            &[CellUpdate {
+                pk: vec![("id".into(), "2".into())],
+                sets: vec![("age".into(), Some("35".into()))],
+            }],
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert!(
+            stmts.iter().all(|s| !s.contains("\"e2e_a\"")),
+            "{stmts:?}"
+        );
+        assert_eq!(
+            stmts[0],
+            "UPDATE \"users\" SET \"age\" = '35' WHERE \"id\" = '2'"
+        );
     }
 }
 

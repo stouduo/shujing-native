@@ -2,6 +2,18 @@ use crate::model::{es, Backend, ConnInfo, DbType, PgPool};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+/// tokio_postgres::Error 的 Display 只有「db error」,细节在 source(DbError)里
+pub(crate) fn pg_err(e: tokio_postgres::Error) -> String {
+    let mut out = e.to_string();
+    let mut src = std::error::Error::source(&e);
+    while let Some(x) = src {
+        out.push_str(": ");
+        out.push_str(&x.to_string());
+        src = x.source();
+    }
+    out
+}
+
 fn req<'a>(v: &'a Option<String>, msg: &str) -> Result<&'a str, String> {
     v.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| msg.to_string())
 }
@@ -374,13 +386,16 @@ impl Backend {
         // 代数戳递增:本次 checkout 视为一次新活动,旧取消作废
         mp.gen.fetch_add(1, Ordering::Relaxed);
         // 回填会话 pid:取消查询(pg_cancel_backend)依赖它,不填则取消永远报"无运行中查询"
-        if let Ok(rows) = client.simple_query("SELECT pg_backend_pid").await {
-            if let Some(tokio_postgres::SimpleQueryMessage::Row(r)) = rows.first() {
-                if let Some(pid) = r.get(0) {
-                    if let Ok(p) = pid.parse::<u32>() {
-                        mp.running_pid.store(p, Ordering::Relaxed);
-                    }
-                }
+        // 函数调用必须有括号:pg_backend_pid 裸名被解析成列;消息序列首个是
+        // RowDescription 而非 Row(rows.first() 永远拿错)——逐条找 Row。
+        // 此回填曾两处皆错,PG 取消一直报「没有正在运行的查询」(E2E 实测抓到)
+        if let Ok(rows) = client.simple_query("SELECT pg_backend_pid()").await {
+            let pid_str = rows.iter().find_map(|m| match m {
+                tokio_postgres::SimpleQueryMessage::Row(r) => r.get(0),
+                _ => None,
+            });
+            if let Some(p) = pid_str.and_then(|v| v.parse::<u32>().ok()) {
+                mp.running_pid.store(p, Ordering::Relaxed);
             }
         }
         let want = mp.session_db.clone();

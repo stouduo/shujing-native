@@ -332,7 +332,7 @@ async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Resul
             }
         }
     }
-    let messages = client.simple_query(sql).await.map_err(es)?;
+    let messages = client.simple_query(sql).await.map_err(crate::backend::pg_err)?;
     let mut results: Vec<ExecResult> = Vec::new();
     let mut columns: Vec<String> = vec![];
     let mut rows: Vec<Vec<Option<String>>> = Vec::new();
