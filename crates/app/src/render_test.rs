@@ -551,6 +551,7 @@ fn render_structure_view() {
         table: "backend_role_privilege".into(),
         database: Some("dramato".into()),
         data: None,
+        fks: vec![],
         loading: false,
         error: None,
     };
@@ -862,6 +863,7 @@ fn structure_long_ddl_scroll_to_bottom() {
                     indexes: vec![],
                     ddl,
                 }),
+                fks: vec![],
                 loading: false,
                 error: None,
             }),
@@ -1020,6 +1022,7 @@ fn render_structure_long_ddl() {
                     indexes: vec![],
                     ddl,
                 }),
+                fks: vec![],
                 loading: false,
                 error: None,
             }),

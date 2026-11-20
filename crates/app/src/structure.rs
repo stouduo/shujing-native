@@ -121,6 +121,40 @@ pub fn draw_structure_view(
                     draw_indexes(ui, data);
                     ui.add_space(20.0);
 
+                    // 外键(本表作为子表引用他表;失败/无 FK 则不显示区)
+                    if !s.fks.is_empty() {
+                        section_title(ui, "外键", s.fks.len());
+                        ui.add_space(8.0);
+                        egui::Grid::new(format!("fk-grid-{tab_id}"))
+                            .num_columns(3)
+                            .spacing([12.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("列").size(11.0).color(theme::c().muted));
+                                ui.label(RichText::new("引用表").size(11.0).color(theme::c().muted));
+                                ui.label(RichText::new("引用列").size(11.0).color(theme::c().muted));
+                                ui.end_row();
+                                for f in &s.fks {
+                                    ui.label(
+                                        RichText::new(&f.column)
+                                            .font(theme::mono(12.0))
+                                            .color(theme::c().accent),
+                                    );
+                                    ui.label(
+                                        RichText::new(&f.ref_table)
+                                            .font(theme::mono(12.0))
+                                            .color(theme::c().text),
+                                    );
+                                    ui.label(
+                                        RichText::new(&f.ref_column)
+                                            .font(theme::mono(12.0))
+                                            .color(theme::c().text2),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+                        ui.add_space(20.0);
+                    }
+
                     let ddl_open = ui.ctx().memory(|m| {
                         m.data
                             .get_temp::<bool>(egui::Id::new(("ddl-open", tab_id)))

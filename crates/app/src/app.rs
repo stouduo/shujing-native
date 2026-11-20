@@ -132,7 +132,13 @@ pub enum BgEvent {
     },
     StructureLoaded {
         tab_id: String,
-        result: Result<shujing_core::TableStructure, String>,
+        result: Result<
+            (
+                shujing_core::TableStructure,
+                Vec<shujing_core::schema::FkMeta>,
+            ),
+            String,
+        >,
     },
     QueryDone {
         tab_id: String,
@@ -484,6 +490,8 @@ pub struct StructureTab {
     pub table: String,
     pub database: Option<String>,
     pub data: Option<shujing_core::TableStructure>,
+    /// 本表外键(结构页 FK 区;load_structure 拉取后过滤本表)
+    pub fks: Vec<shujing_core::schema::FkMeta>,
     pub loading: bool,
     pub error: Option<String>,
 }
@@ -1564,6 +1572,7 @@ impl ShujingApp {
                 table: table.to_string(),
                 database,
                 data: None,
+                fks: vec![],
                 loading: true,
                 error: None,
             }),
@@ -2359,9 +2368,20 @@ impl ShujingApp {
         st.loading = true;
         net::spawn(async move {
             let result = service
-                .get_table_structure(&conn_id, &table, database)
+                .get_table_structure(&conn_id, &table, database.clone())
                 .await;
-            let _ = tx.send(BgEvent::StructureLoaded { tab_id, result });
+            // FK 过滤本表(失败不阻断结构展示)
+            let fks = service
+                .list_foreign_keys(&conn_id, database.clone())
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|f| f.table == table)
+                .collect::<Vec<_>>();
+            let _ = tx.send(BgEvent::StructureLoaded {
+                tab_id,
+                result: result.map(|d| (d, fks)),
+            });
         });
     }
 
@@ -3456,6 +3476,7 @@ impl ShujingApp {
                             table: table.clone(),
                             database: database.clone(),
                             data: None,
+                            fks: vec![],
                             loading: true,
                             error: None,
                         }),
@@ -3974,8 +3995,9 @@ impl ShujingApp {
                         if let TabKind::Structure(st) = &mut tab.kind {
                             st.loading = false;
                             match result {
-                                Ok(data) => {
+                                Ok((data, fks)) => {
                                     st.data = Some(data);
+                                    st.fks = fks;
                                     st.error = None;
                                 }
                                 Err(e) => st.error = Some(e),
