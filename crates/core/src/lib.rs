@@ -101,6 +101,44 @@ impl Service {
         }
     }
 
+    /// Redis:向 stream 追加消息(返回服务端生成的消息 id)
+    pub async fn redis_stream_xadd(
+        &self,
+        id: &str,
+        db: u8,
+        key: &str,
+        fields: &[(String, String)],
+    ) -> Result<String, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match guard.backend {
+            crate::model::Backend::Redis(_) => {
+                if guard.info.read_only {
+                    return Err("只读连接不允许写入".into());
+                }
+                crate::redis_ops::stream_xadd(&mut guard.backend, db, key, fields).await
+            }
+            _ => Err("非 Redis 连接".into()),
+        }
+    }
+
+    /// Redis:stream 消费者组列表
+    pub async fn redis_stream_groups(
+        &self,
+        id: &str,
+        db: u8,
+        key: &str,
+    ) -> Result<Vec<crate::redis_ops::StreamGroup>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match guard.backend {
+            crate::model::Backend::Redis(_) => {
+                crate::redis_ops::stream_groups(&mut guard.backend, db, key).await
+            }
+            _ => Err("非 Redis 连接".into()),
+        }
+    }
+
     /// Redis:按模式 SCAN 计数(不删)
     pub async fn redis_scan_count(
         &self,
@@ -262,6 +300,24 @@ impl Service {
         match &mut guard.backend {
             crate::model::Backend::Mongo(st) => {
                 crate::mongo::import_docs(st, database, collection, json).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
+    /// MongoDB:导出集合文档为 JSON 数组文本
+    pub async fn mongo_export_docs(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        max: usize,
+    ) -> Result<(String, bool), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::export_docs(st, database, collection, max).await
             }
             _ => Err("非 MongoDB 连接".into()),
         }

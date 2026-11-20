@@ -87,6 +87,15 @@ pub enum BgEvent {
         op: u8, // 0 插入 1 替换 3 批量导入
         result: Result<String, String>,
     },
+    RedisStreamAddDone {
+        tab_id: String,
+        key: String,
+        result: Result<String, String>,
+    },
+    RedisStreamGroupsDone {
+        tab_id: String,
+        result: Result<Vec<shujing_core::redis_ops::StreamGroup>, String>,
+    },
     MongoIndexListDone {
         result: Result<Vec<shujing_core::mongo::IndexInfo>, String>,
     },
@@ -854,6 +863,12 @@ pub struct RedisTab {
     pub member_set_hash: bool,
     /// list 元素内联编辑:(显示序号, 草稿)
     pub list_edit: Option<(usize, String)>,
+    /// stream 发送草稿(每行 field=value)
+    pub stream_add_text: String,
+    /// stream 消费者组列表(None=未拉取)
+    pub stream_groups: Option<Vec<shujing_core::redis_ops::StreamGroup>>,
+    /// stream 操作在途
+    pub stream_busy: bool,
 }
 
 /// Redis 写操作完成后的行为
@@ -1556,6 +1571,123 @@ impl ShujingApp {
         self.error_toast = Some((msg.into(), std::time::Instant::now()));
     }
 
+    /// Mongo:导出集合文档为 JSON 文件(弹保存框,上限 5 万条)
+    pub fn mongo_export_json(&mut self, tab_id: &str) {
+        let Some(t) = self.table_tab(tab_id) else {
+            return;
+        };
+        let default_name = format!("{}.json", t.table);
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("JSON", &["json"])
+            .save_file()
+        else {
+            return;
+        };
+        let conn_id = t.conn_id.clone();
+        let db = t.database.clone();
+        let coll = t.table.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = match service
+                .mongo_export_docs(&conn_id, db.as_deref(), &coll, 50_000)
+                .await
+            {
+                Ok((json, truncated)) => {
+                    let mut note = String::new();
+                    if truncated {
+                        note = if ui_kit::i18n::is_english() {
+                            " (truncated at 50000)"
+                        } else {
+                            " (已达 5 万条上限截断)"
+                        }
+                        .to_string();
+                    }
+                    tokio::fs::write(&path, json)
+                        .await
+                        .map(|_| {
+                            format!(
+                                "{} {}{note}",
+                                ui_kit::t!("Exported", "已导出到"),
+                                path.display()
+                            )
+                        })
+                        .unwrap_or_else(|e| {
+                            if ui_kit::i18n::is_english() {
+                                format!("Write failed: {e}")
+                            } else {
+                                format!("写入失败: {e}")
+                            }
+                        })
+                }
+                Err(e) => e,
+            };
+            let _ = tx.send(BgEvent::ExportDone { result: Ok(result) });
+        });
+    }
+
+    /// Redis:向 stream 发送消息(草稿每行 field=value)
+    pub fn redis_stream_add(&mut self, tab_id: &str, key: &str) {
+        let Some(rt) = self.redis_tab_mut(tab_id) else {
+            return;
+        };
+        if rt.stream_busy {
+            return;
+        }
+        let fields: Vec<(String, String)> = rt
+            .stream_add_text
+            .lines()
+            .filter_map(|l| l.split_once('=').map(|(f, v)| (f.trim().to_string(), v.to_string())))
+            .filter(|(f, _)| !f.is_empty())
+            .collect();
+        if fields.is_empty() {
+            self.toast_error(
+                ui_kit::t!("Each line must be field=value", "每行一条 field=value")
+                    .to_string(),
+            );
+            return;
+        }
+        let db = rt.db;
+        let conn_id = rt.conn_id.clone();
+        let key = key.to_string();
+        let tid = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.redis_tab_mut(tab_id).unwrap().stream_busy = true;
+        net::spawn(async move {
+            let result = service
+                .redis_stream_xadd(&conn_id, db, &key, &fields)
+                .await;
+            let _ = tx.send(BgEvent::RedisStreamAddDone {
+                tab_id: tid,
+                key,
+                result,
+            });
+        });
+    }
+
+    /// Redis:拉取 stream 消费者组
+    pub fn redis_stream_groups(&mut self, tab_id: &str, key: &str) {
+        let Some(rt) = self.redis_tab_mut(tab_id) else {
+            return;
+        };
+        if rt.stream_busy {
+            return;
+        }
+        let db = rt.db;
+        let conn_id = rt.conn_id.clone();
+        let key = key.to_string();
+        let tid = tab_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.redis_tab_mut(tab_id).unwrap().stream_busy = true;
+        net::spawn(async move {
+            let result = service.redis_stream_groups(&conn_id, db, &key).await;
+            let _ = tx.send(BgEvent::RedisStreamGroupsDone { tab_id: tid, result });
+        });
+    }
+
     /// 重载当前激活标签的 Mongo 数据页(文档增删改/导入后)
     fn reload_active_mongo_rows(&mut self) {
         if let Some(tid) = self.tabs.get(self.active_tab).map(|t| t.id.clone()) {
@@ -1569,6 +1701,16 @@ impl ShujingApp {
                 }
             }
         }
+    }
+
+    pub fn redis_tab_mut(&mut self, tab_id: &str) -> Option<&mut RedisTab> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| match &mut t.kind {
+                TabKind::Redis(rt) => Some(rt),
+                _ => None,
+            })
     }
 
     pub fn table_tab_mut(&mut self, tab_id: &str) -> Option<&mut TableTab> {
@@ -1913,6 +2055,9 @@ impl ShujingApp {
                 member_add: None,
                 member_set_hash: false,
                 list_edit: None,
+                stream_add_text: String::new(),
+                stream_groups: None,
+                stream_busy: false,
             }),
         });
         self.active_tab = self.tabs.len() - 1;
@@ -3836,6 +3981,9 @@ impl ShujingApp {
                         id: id.clone(),
                         title: format!("db{db}"),
                         kind: TabKind::Redis(RedisTab {
+                            stream_add_text: String::new(),
+                            stream_groups: None,
+                            stream_busy: false,
                             conn_id: conn.clone(),
                             db: *db,
                             pattern: "*".to_string(),
@@ -4431,6 +4579,36 @@ impl ShujingApp {
                         error: err_res,
                         ..state
                     });
+                    continue;
+                }
+                BgEvent::RedisStreamAddDone { tab_id, key, result } => {
+                    if let Some(rt) = self.redis_tab_mut(&tab_id) {
+                        rt.stream_busy = false;
+                    }
+                    match &result {
+                        Ok(id) => {
+                            self.toast_error(format!(
+                                "{} {id}",
+                                ui_kit::t!("Message added", "已发送消息")
+                            ));
+                            // 刷新详情(XLEN/消息列表同步更新)
+                            self.redis_fetch_detail(&tab_id, &key);
+                        }
+                        Err(e) => self.toast_error(e.clone()),
+                    }
+                    continue;
+                }
+                BgEvent::RedisStreamGroupsDone { tab_id, result } => {
+                    if let Some(rt) = self.redis_tab_mut(&tab_id) {
+                        rt.stream_busy = false;
+                        match result {
+                            Ok(groups) => rt.stream_groups = Some(groups),
+                            Err(e) => {
+                                rt.stream_groups = Some(Vec::new());
+                                self.toast_error(e);
+                            }
+                        }
+                    }
                     continue;
                 }
                 BgEvent::MongoIndexListDone { result } => {

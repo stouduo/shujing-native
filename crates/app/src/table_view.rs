@@ -253,6 +253,24 @@ pub enum TabAction {
     MongoImport {
         tab_id: String,
     },
+    /// 导出查询结果集为 JSON 文件
+    ExportQueryJson {
+        tab_id: String,
+    },
+    /// Mongo:导出集合文档为 JSON 文件
+    MongoExportJson {
+        tab_id: String,
+    },
+    /// Redis:向 stream 发送消息(text 每行 field=value)
+    RedisStreamAdd {
+        tab_id: String,
+        key: String,
+    },
+    /// Redis:拉取 stream 消费者组
+    RedisStreamGroups {
+        tab_id: String,
+        key: String,
+    },
     OpenAiAssist {
         tab_id: String,
         mode: u8,
@@ -1159,6 +1177,12 @@ pub(crate) fn draw_table_view(
                                 }
                                 if ui.button(ui_kit::t!("Manage Indexes…", "索引管理…")).clicked() {
                                     actions.push(TabAction::MongoIndexes {
+                                        tab_id: tab_id_s.clone(),
+                                    });
+                                    ui.close_menu();
+                                }
+                                if ui.button(ui_kit::t!("Export Collection JSON…", "导出集合 JSON…")).clicked() {
+                                    actions.push(TabAction::MongoExportJson {
                                         tab_id: tab_id_s.clone(),
                                     });
                                     ui.close_menu();
@@ -4070,6 +4094,11 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
         TabAction::MongoInsertDoc { tab_id } => app.open_mongo_insert(&tab_id),
         TabAction::MongoIndexes { tab_id } => app.open_mongo_indexes(&tab_id),
         TabAction::MongoImport { tab_id } => app.open_mongo_import(&tab_id),
+        TabAction::MongoExportJson { tab_id } => app.mongo_export_json(&tab_id),
+        TabAction::RedisStreamAdd { tab_id, key } => app.redis_stream_add(&tab_id, &key),
+        TabAction::RedisStreamGroups { tab_id, key } => {
+            app.redis_stream_groups(&tab_id, &key)
+        }
         TabAction::MongoEditDoc { tab_id } => app.open_mongo_edit(&tab_id),
         TabAction::MongoDeleteDoc { tab_id } => {
             // 删除需确认:复用 ConfirmState(action mongo-del),expect=文档 _id
@@ -4546,6 +4575,40 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                     shujing_core::excel::export_xlsx(&columns, &rows, &path).map(|_| path.clone());
                 let _ = tx.send(BgEvent::ExportDone { result });
             });
+        }
+        TabAction::ExportQueryJson { tab_id } => {
+            let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
+                return;
+            };
+            let crate::app::TabKind::Query(q) = &tab.kind else {
+                return;
+            };
+            let Some(r) = q.results.get(q.active_set) else {
+                return;
+            };
+            if r.columns.is_empty() {
+                return;
+            }
+            let default_name = format!("query-results-{}.json", q.active_set + 1);
+            let Some(path) = rfd::FileDialog::new()
+                .set_file_name(&default_name)
+                .add_filter("JSON", &["json"])
+                .save_file()
+            else {
+                return;
+            };
+            let json = export_rows_json(&r.columns, &r.rows);
+            match std::fs::write(&path, json) {
+                Ok(_) => {
+                    let msg = if ui_kit::i18n::is_english() {
+                        format!("Exported to {}", path.display())
+                    } else {
+                        format!("已导出到 {}", path.display())
+                    };
+                    app.toast_error(msg);
+                }
+                Err(e) => app.toast_error(format!("{}: {e}", ui_kit::t!("Write failed", "写入失败"))),
+            }
         }
         TabAction::ExportQueryCsv { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {

@@ -653,6 +653,98 @@ fn draw_detail(
                     );
                 });
             }
+            // ── Stream 专属:发送消息 + 消费者组 ──
+            if d.key_type == "stream" {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(ui_kit::t!(
+                            "Publish message (one field=value per line)",
+                            "发送消息(每行一条 field=value)"
+                        ))
+                        .size(11.0)
+                        .color(p.muted),
+                    );
+                    if ui_kit::i18n::is_english() {
+                        ui.label(RichText::new("").size(11.0));
+                    }
+                });
+                theme::form_field_multiline(
+                    ui,
+                    "",
+                    &format!("stream-add-{tab_id}"),
+                    &mut rt.stream_add_text,
+                    520.0,
+                    3,
+                );
+                ui.horizontal(|ui| {
+                    let label = if rt.stream_busy {
+                        ui_kit::t!("Sending…", "发送中…")
+                    } else {
+                        ui_kit::t!("XADD", "追加消息")
+                    };
+                    if theme::button(ui, label, theme::BtnKind::Primary).clicked()
+                        && !rt.stream_busy
+                        && !read_only
+                    {
+                        actions.push(TabAction::RedisStreamAdd {
+                            tab_id: tab_id.to_string(),
+                            key: key.clone(),
+                        });
+                    }
+                    ui.add_space(10.0);
+                    let glabel = if rt.stream_busy {
+                        ui_kit::t!("Loading…", "加载中…")
+                    } else {
+                        ui_kit::t!("Consumer Groups", "消费者组")
+                    };
+                    if theme::button(ui, glabel, theme::BtnKind::Secondary).clicked()
+                        && !rt.stream_busy
+                    {
+                        rt.stream_groups = None;
+                        actions.push(TabAction::RedisStreamGroups {
+                            tab_id: tab_id.to_string(),
+                            key: key.clone(),
+                        });
+                    }
+                });
+                if let Some(groups) = &rt.stream_groups {
+                    if groups.is_empty() {
+                        ui.label(
+                            RichText::new(ui_kit::t!(
+                                "No consumer groups (XGROUP CREATE to consume)",
+                                "暂无消费者组(消费端 XGROUP CREATE 后出现)"
+                            ))
+                            .size(11.0)
+                            .color(p.muted),
+                        );
+                    } else {
+                        egui::Grid::new("stream-groups")
+                            .num_columns(4)
+                            .spacing([12.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.label(RichText::new(ui_kit::t!("Group", "组名")).size(10.5).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("Consumers", "消费者")).size(10.5).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("Pending", "待确认")).size(10.5).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("Last Delivered", "最后投递")).size(10.5).color(p.muted));
+                                ui.end_row();
+                                for g in groups {
+                                    ui.label(RichText::new(icons::clip(&g.name, 30)).size(11.5).color(p.text));
+                                    ui.label(RichText::new(g.consumers.to_string()).size(11.5).color(p.text));
+                                    ui.label(
+                                        RichText::new(g.pending.to_string())
+                                            .size(11.5)
+                                            .color(if g.pending > 0 { p.red } else { p.muted }),
+                                    );
+                                    ui.label(RichText::new(icons::clip(&g.last_delivered, 30)).font(theme::mono(11.0)).color(p.text2));
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                }
+            }
+
             // 添加成员
             if read_only {
                 return;

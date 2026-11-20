@@ -611,6 +611,42 @@ fn csv_scalar(v: &str) -> Option<Bson> {
     Some(Bson::String(v.to_string()))
 }
 
+/// 导出集合文档(原始 BSON→JSON,非展平网格):全量 find 逐条收,到 max 截断。
+/// 返回 (文档 JSON 数组文本, 是否截断)
+pub async fn export_docs(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    max: usize,
+) -> Result<(String, bool), String> {
+    let db = default_db(st, database)?;
+    if let Ok(mut g) = st.cur_db.try_lock() {
+        *g = Some(db.to_string());
+    }
+    use futures_util::StreamExt;
+    let mut cursor = st
+        .client
+        .database(db.as_str())
+        .collection::<Document>(collection)
+        .find(Document::new())
+        .await
+        .map_err(|e| format!("MongoDB 查询失败: {e}"))?;
+    let mut parts: Vec<String> = Vec::new();
+    let mut truncated = false;
+    while let Some(doc) = cursor.next().await {
+        if parts.len() >= max {
+            truncated = true;
+            break;
+        }
+        let doc = doc.map_err(|e| format!("MongoDB: {e}"))?;
+        match serde_json::to_string(&doc) {
+            Ok(s) => parts.push(s),
+            Err(e) => return Err(format!("文档序列化失败: {e}")),
+        }
+    }
+    Ok((format!("[\n  {}\n]", parts.join(",\n  ")), truncated))
+}
+
 /// 批量导入(CSV):首行列名,类型自动推断
 pub async fn import_docs_csv(
     st: &crate::model::MongoState,

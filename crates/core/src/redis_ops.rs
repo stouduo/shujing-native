@@ -236,6 +236,75 @@ pub async fn key_detail_page(
     Ok(d)
 }
 
+/// Stream 消费者组(XINFO GROUPS)
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamGroup {
+    pub name: String,
+    pub consumers: u64,
+    pub pending: u64,
+    /// 最后投递的消息 id
+    pub last_delivered: String,
+}
+
+/// 向 stream 追加一条消息(fields 键值对;id 由服务端生成 *)
+pub async fn stream_xadd(
+    backend: &mut Backend,
+    db: u8,
+    key: &str,
+    fields: &[(String, String)],
+) -> Result<String, String> {
+    if fields.is_empty() {
+        return Err("消息至少要有一对 field=value".into());
+    }
+    let mut con = get_con(backend).await?;
+    redis::cmd("SELECT").arg(db).query_async::<()>(&mut con).await.map_err(es)?;
+    let mut cmd = redis::cmd("XADD");
+    cmd.arg(key).arg("*");
+    for (f, v) in fields {
+        cmd.arg(f).arg(v);
+    }
+    cmd.query_async(&mut con).await.map_err(es)
+}
+
+/// 消费者组列表(key 不存在或无组返回空)
+pub async fn stream_groups(
+    backend: &mut Backend,
+    db: u8,
+    key: &str,
+) -> Result<Vec<StreamGroup>, String> {
+    let mut con = get_con(backend).await?;
+    redis::cmd("SELECT").arg(db).query_async::<()>(&mut con).await.map_err(es)?;
+    let raw: Vec<Vec<String>> = redis::cmd("XINFO")
+        .arg("GROUPS")
+        .arg(key)
+        .query_async(&mut con)
+        .await
+        .map_err(es)?;
+    // 每组是扁平 [k1,v1,k2,v2,...];XINFO 返回大写键名,统一小写后取值
+    let mut out = Vec::new();
+    for g in raw {
+        let kv: Vec<(String, String)> = g
+            .chunks(2)
+            .filter(|c| c.len() == 2)
+            .map(|c| (c[0].to_lowercase(), c[1].clone()))
+            .collect();
+        let get = |k: &str| -> String {
+            kv.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+        out.push(StreamGroup {
+            name: get("name"),
+            consumers: get("consumers").parse().unwrap_or(0),
+            pending: get("pending").parse().unwrap_or(0),
+            last_delivered: get("last-delivered-id"),
+        });
+    }
+    Ok(out)
+}
+
 /// key 统计(大 key / 热 key 分析)
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

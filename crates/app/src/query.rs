@@ -157,6 +157,19 @@ pub fn draw_query_view(
                             }
                         }
                     }
+                    let js = theme::button(ui, ui_kit::t!("Export JSON", "导出 JSON"), theme::BtnKind::Secondary);
+                    let js_clicked = js.clicked();
+                    if !has_grid {
+                        js.on_disabled_hover_text(ui_kit::t!(
+                            "Nothing to export in this result set (no grid)",
+                            "当前结果集不可导出(无表格)"
+                        ));
+                    }
+                    if has_grid && js_clicked {
+                        actions.push(TabAction::ExportQueryJson {
+                            tab_id: tab_id.to_string(),
+                        });
+                    }
                     if !is_redis {
                         let ai = theme::button(ui, "AI", theme::BtnKind::Secondary);
                         let ai_clicked = ai.clicked();
