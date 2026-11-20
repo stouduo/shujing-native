@@ -25,7 +25,7 @@ pub fn qualified_table(table: &str, database: Option<&str>, mysql: bool) -> Stri
     }
 }
 
-fn quote(name: &str, mysql: bool) -> String {
+pub(crate) fn quote(name: &str, mysql: bool) -> String {
     if mysql {
         format!("`{}`", name.replace('`', "``"))
     } else {
@@ -35,7 +35,7 @@ fn quote(name: &str, mysql: bool) -> String {
 
 /// 字符串字面量(统一加引号,三库都能隐式接受数字/日期文本;
 /// MySQL 默认把反斜杠当转义符,须同时双写,否则尾部反斜杠会吃掉收尾引号)
-fn literal(v: &str, mysql: bool) -> String {
+pub(crate) fn literal(v: &str, mysql: bool) -> String {
     let mut out = v.replace('\'', "''");
     if mysql {
         out = out.replace('\\', "\\\\");

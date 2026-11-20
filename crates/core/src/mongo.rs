@@ -227,3 +227,132 @@ pub async fn backend_list_databases(b: &mut Backend) -> Result<Vec<String>, Stri
 pub async fn backend_count(st: &crate::model::MongoState, collection: &str) -> Result<u64, String> {
     count(st, None, collection).await
 }
+
+// ── 文档编辑(v2)────────────────────────────────────────
+
+/// _id 字符串 → 定位用的 Bson:24 位十六进制→ObjectId,整数→Int64,其余→字符串
+pub fn parse_id(id: &str) -> Bson {
+    if id.len() == 24 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if let Ok(oid) = mongodb::bson::oid::ObjectId::parse_str(id) {
+            return Bson::ObjectId(oid);
+        }
+    }
+    if let Ok(n) = id.parse::<i64>() {
+        return Bson::Int64(n);
+    }
+    Bson::String(id.to_string())
+}
+
+fn id_filter(id: &str) -> Document {
+    mongodb::bson::doc! { "_id": parse_id(id) }
+}
+
+fn json_to_document(json: &str) -> Result<Document, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("不是合法 JSON: {e}"))?;
+        // serde_json::Value → Bson:bson 提供 Bson::try_from(serde_json::Value)
+    let b = Bson::try_from(v).map_err(|e| format!("JSON→BSON 转换失败: {e}"))?;
+    match b {
+        Bson::Document(d) => Ok(d),
+        _ => Err("顶层必须是 JSON 对象".into()),
+    }
+}
+
+/// 拉单个文档为 pretty JSON(编辑器预填)
+pub async fn get_doc(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    id: &str,
+) -> Result<String, String> {
+    let db = default_db(st, database)?;
+    let doc = st
+        .client
+        .database(db.as_str())
+        .collection::<Document>(collection)
+        .find_one(id_filter(id))
+        .await
+        .map_err(|e| format!("MongoDB: {e}"))?
+        .ok_or_else(|| format!("文档不存在(_id={id})"))?;
+    serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
+}
+
+pub async fn insert_doc(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    json: &str,
+) -> Result<String, String> {
+    let db = default_db(st, database)?;
+    let doc = json_to_document(json)?;
+    if doc.contains_key("_id") {
+        // 已带 _id:防重复(先查)
+        let id_b = doc.get("_id").unwrap();
+        let exists = st
+            .client
+            .database(db.as_str())
+            .collection::<Document>(collection)
+            .find_one(mongodb::bson::doc! { "_id": id_b.clone() })
+            .await
+            .map_err(|e| format!("MongoDB: {e}"))?
+            .is_some();
+        if exists {
+            return Err("已存在相同 _id 的文档".into());
+        }
+    }
+    let r = st
+        .client
+        .database(db.as_str())
+        .collection::<Document>(collection)
+        .insert_one(doc)
+        .await
+        .map_err(|e| format!("插入失败: {e}"))?;
+    Ok(r.inserted_id
+        .as_object_id()
+        .map(|o| o.to_hex())
+        .unwrap_or_default())
+}
+
+/// 替换文档:_id 不可变,新 JSON 里的 _id 剥掉后按定位 id 替换
+pub async fn replace_doc(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    id: &str,
+    json: &str,
+) -> Result<(), String> {
+    let db = default_db(st, database)?;
+    let mut doc = json_to_document(json)?;
+    doc.remove("_id");
+    let r = st
+        .client
+        .database(db.as_str())
+        .collection::<Document>(collection)
+        .replace_one(id_filter(id), doc)
+        .await
+        .map_err(|e| format!("替换失败: {e}"))?;
+    if r.matched_count == 0 {
+        return Err(format!("未找到文档(_id={id})——可能已被删除"));
+    }
+    Ok(())
+}
+
+pub async fn delete_doc(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    id: &str,
+) -> Result<(), String> {
+    let db = default_db(st, database)?;
+    let r = st
+        .client
+        .database(db.as_str())
+        .collection::<Document>(collection)
+        .delete_one(id_filter(id))
+        .await
+        .map_err(|e| format!("删除失败: {e}"))?;
+    if r.deleted_count == 0 {
+        return Err(format!("未找到文档(_id={id})"));
+    }
+    Ok(())
+}

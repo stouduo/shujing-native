@@ -225,6 +225,25 @@ pub enum TabAction {
     },
     OpenSettings,
     PreviewParquet,
+    OpenTransfer {
+        conn_id: String,
+        db: Option<String>,
+        table: String,
+    },
+    OpenDataDiff {
+        conn_id: String,
+        db: Option<String>,
+        table: String,
+    },
+    MongoInsertDoc {
+        tab_id: String,
+    },
+    MongoEditDoc {
+        tab_id: String,
+    },
+    MongoDeleteDoc {
+        tab_id: String,
+    },
     OpenAiAssist {
         tab_id: String,
         mode: u8,
@@ -994,6 +1013,12 @@ pub(crate) fn draw_table_view(
                             });
                         }
                     }
+                    let conn_is_mongo = conns
+                        .iter()
+                        .any(|c| c.id == tab.conn_id && c.db_type == shujing_core::DbType::Mongo);
+                    let conn_is_sqlite = conns
+                        .iter()
+                        .any(|c| c.id == tab.conn_id && c.db_type == shujing_core::DbType::Sqlite);
                     let more =
                         ui.menu_button(RichText::new("···").size(15.0).color(p.text2), |ui| {
                             ui.set_min_width(180.0);
@@ -1049,6 +1074,26 @@ pub(crate) fn draw_table_view(
                                 toolbar_menu = Some(TabAction::PreviewParquet);
                                 ui.close_menu();
                             }
+                            if !conn_is_mongo && !conn_is_sqlite {
+                                if ui.button("数据传输到…").clicked() {
+                                    actions.push(TabAction::OpenTransfer {
+                                        conn_id: tab.conn_id.clone(),
+                                        db: tab.database.clone(),
+                                        table: tab.table.clone(),
+                                    });
+                                    ui.close_menu();
+                                }
+                            }
+                            if !conn_is_mongo {
+                                if ui.button("数据对比…").clicked() {
+                                    actions.push(TabAction::OpenDataDiff {
+                                        conn_id: tab.conn_id.clone(),
+                                        db: tab.database.clone(),
+                                        table: tab.table.clone(),
+                                    });
+                                    ui.close_menu();
+                                }
+                            }
                             if ui.button("结构对比…").clicked() {
                                 actions.push(TabAction::OpenSchemaDiff {
                                     conn_id: tab.conn_id.clone(),
@@ -1056,6 +1101,28 @@ pub(crate) fn draw_table_view(
                                     table: tab.table.clone(),
                                 });
                                 ui.close_menu();
+                            }
+                            // Mongo 文档操作(只读浏览之外的 v2 编辑)
+                            if conn_is_mongo {
+                                ui.separator();
+                                if ui.button("插入文档(JSON)…").clicked() {
+                                    actions.push(TabAction::MongoInsertDoc {
+                                        tab_id: tab_id_s.clone(),
+                                    });
+                                    ui.close_menu();
+                                }
+                                if ui.button("编辑选中文档…").clicked() {
+                                    actions.push(TabAction::MongoEditDoc {
+                                        tab_id: tab_id_s.clone(),
+                                    });
+                                    ui.close_menu();
+                                }
+                                if ui.button("删除选中文档…").clicked() {
+                                    actions.push(TabAction::MongoDeleteDoc {
+                                        tab_id: tab_id_s.clone(),
+                                    });
+                                    ui.close_menu();
+                                }
                             }
                             ui.separator();
                             if ui.button("复制为 TSV").clicked() {
@@ -3792,6 +3859,51 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             });
         }
         TabAction::PreviewParquet => app.preview_parquet_file(),
+        TabAction::OpenTransfer {
+            conn_id,
+            db,
+            table,
+        } => app.open_transfer(&conn_id, db.as_deref(), &table),
+        TabAction::OpenDataDiff {
+            conn_id,
+            db,
+            table,
+        } => app.open_data_diff(&conn_id, db.as_deref(), &table),
+        TabAction::MongoInsertDoc { tab_id } => app.open_mongo_insert(&tab_id),
+        TabAction::MongoEditDoc { tab_id } => app.open_mongo_edit(&tab_id),
+        TabAction::MongoDeleteDoc { tab_id } => {
+            // 删除需确认:复用 ConfirmState(action mongo-del),expect=文档 _id
+            let Some(t) = app.table_tab(&tab_id) else { return };
+            let Some((ri, _)) = t.selected else {
+                app.toast_error("先点选一行文档".to_string());
+                return;
+            };
+            let Some(id_col) = t.columns.iter().position(|c| c == "_id") else {
+                app.toast_error("结果集中没有 _id 列".to_string());
+                return;
+            };
+            let Some(id) = t
+                .rows
+                .get(ri)
+                .and_then(|r| r.get(id_col))
+                .cloned()
+                .flatten()
+            else {
+                app.toast_error("该行 _id 为空".to_string());
+                return;
+            };
+            app.confirm = Some(crate::app::ConfirmState {
+                title: "删除 Mongo 文档".into(),
+                message: format!("确认删除 _id={id} 的文档?输入 _id 以确认:"),
+                expect: Some(id.clone()),
+                input: String::new(),
+                conn_id: String::new(),
+                sql: String::new(),
+                database: None,
+                preview_sql: None,
+                action: Some(format!("mongo-del:{}|{}", tab_id, id)),
+            });
+        }
         TabAction::OpenAiAssist { tab_id, mode } => app.open_ai_assist(&tab_id, mode),
         TabAction::OpenSchemaDiff {
             conn_id,
@@ -4783,6 +4895,9 @@ impl eframe::App for ShujingApp {
             || self.parquet_preview.is_some()
             || self.schema_diff.is_some()
             || self.ai_assist.is_some()
+            || self.mongo_doc.is_some()
+            || self.transfer.is_some()
+            || self.data_diff.is_some()
             || self
                 .tabs
                 .iter()
@@ -5057,6 +5172,9 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_parquet_modal(self, ctx);
         crate::modals::draw_schema_diff_modal(self, ctx);
         crate::modals::draw_ai_modal(self, ctx);
+        crate::modals::draw_mongo_doc_modal(self, ctx);
+        crate::modals::draw_transfer_modal(self, ctx);
+        crate::modals::draw_data_diff_modal(self, ctx);
 
         if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {
             self.conn_modal = Some(ConnModal::new());

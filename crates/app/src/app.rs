@@ -69,6 +69,17 @@ enum SessionTab {
 }
 
 pub enum BgEvent {
+    TransferDone {
+        result: Result<(u64, u64), String>,
+    },
+    DataDiffDone {
+        state: DataDiffState,
+        result: Result<shujing_core::data_diff::DataDiff, String>,
+    },
+    MongoDocDone {
+        op: u8, // 0 插入 1 替换
+        result: Result<String, String>,
+    },
     AiDone {
         tab_id: String,
         mode: u8,
@@ -599,6 +610,47 @@ impl ConfirmState {
     }
 }
 
+/// 数据传输状态(源表=右键;目标同类型连接)
+#[derive(Clone)]
+pub struct TransferState {
+    pub src_conn: String,
+    pub src_db: Option<String>,
+    pub src_table: String,
+    pub dst_conn: String,
+    pub dst_db: String,
+    pub dst_table: String,
+    pub with_data: bool,
+    pub drop_first: bool,
+    pub running: bool,
+    pub error: Option<String>,
+}
+
+/// 数据对比状态(按主键逐行对齐;目标侧同步 SQL)
+#[derive(Clone)]
+pub struct DataDiffState {
+    pub src_conn: String,
+    pub src_db: Option<String>,
+    pub src_table: String,
+    pub dst_conn: String,
+    pub dst_db: String,
+    pub dst_table: String,
+    pub running: bool,
+    pub result: Option<shujing_core::data_diff::DataDiff>,
+    pub error: Option<String>,
+}
+
+/// Mongo 文档编辑弹窗(插入/编辑;删除走确认框)
+pub struct MongoDocState {
+    pub conn_id: String,
+    pub db: Option<String>,
+    pub collection: String,
+    /// None=插入;Some(id)=编辑该文档
+    pub doc_id: Option<String>,
+    pub json: String,
+    pub running: bool,
+    pub error: Option<String>,
+}
+
 /// AI 助手弹窗(挂查询标签;模式=生成/解释/优化)
 pub struct AiAssistState {
     pub tab_id: String,
@@ -952,6 +1004,12 @@ pub struct ShujingApp {
     pub ai_config: shujing_core::ai::AiConfig,
     /// AI 助手弹窗(挂查询标签)
     pub ai_assist: Option<AiAssistState>,
+    /// Mongo 文档编辑弹窗
+    pub mongo_doc: Option<MongoDocState>,
+    /// 数据传输弹窗
+    pub transfer: Option<TransferState>,
+    /// 数据对比弹窗
+    pub data_diff: Option<DataDiffState>,
     /// 结构对比(源表来自右键,目标可跨连接)
     pub schema_diff: Option<SchemaDiffState>,
     /// 库筛选弹窗(每连接勾选显示哪些库)
@@ -1052,6 +1110,9 @@ impl ShujingApp {
             parquet_preview: None,
             ai_config: settings_ai.unwrap_or_default(),
             ai_assist: None,
+            mongo_doc: None,
+            transfer: None,
+            data_diff: None,
             schema_diff: None,
             db_filter: None,
             theme_toggle_requested: false,
@@ -2435,6 +2496,205 @@ impl ShujingApp {
         });
     }
 
+    /// 打开数据传输(源=右键表;目标默认同类型在线连接)
+    pub fn open_transfer(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
+        let src_info = self.conns.iter().find(|c| c.id == conn_id).cloned();
+        let Some(src_info) = src_info else { return };
+        let dst_conn = self
+            .conns
+            .iter()
+            .find(|c| c.id != conn_id && c.db_type == src_info.db_type)
+            .map(|c| c.id.clone());
+        self.transfer = Some(TransferState {
+            src_conn: conn_id.to_string(),
+            src_db: db.map(str::to_string),
+            src_table: table.to_string(),
+            dst_conn: dst_conn.unwrap_or_default(),
+            dst_db: db.unwrap_or_default().to_string(),
+            dst_table: table.to_string(),
+            with_data: true,
+            drop_first: false,
+            running: false,
+            error: None,
+        });
+    }
+
+    /// 运行数据传输
+    pub fn run_transfer(&mut self) {
+        let Some(st) = self.transfer.as_ref() else { return };
+        if st.running || st.dst_conn.is_empty() || st.dst_table.trim().is_empty() {
+            return;
+        }
+        let state = st.clone();
+        self.transfer.as_mut().unwrap().running = true;
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = shujing_core::transfer::transfer_table(
+                &service,
+                (&state.src_conn, state.src_db.as_deref(), &state.src_table),
+                (
+                    &state.dst_conn,
+                    if state.dst_db.is_empty() { None } else { Some(state.dst_db.as_str()) },
+                    &state.dst_table,
+                ),
+                state.with_data,
+                state.drop_first,
+            )
+            .await;
+            let _ = tx.send(BgEvent::TransferDone { result });
+        });
+    }
+
+    /// 打开数据对比(源=右键表)
+    pub fn open_data_diff(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
+        let src_info = self.conns.iter().find(|c| c.id == conn_id).cloned();
+        let Some(src_info) = src_info else { return };
+        let dst_conn = self
+            .conns
+            .iter()
+            .find(|c| c.id != conn_id && c.db_type == src_info.db_type)
+            .map(|c| c.id.clone());
+        self.data_diff = Some(DataDiffState {
+            src_conn: conn_id.to_string(),
+            src_db: db.map(str::to_string),
+            src_table: table.to_string(),
+            dst_conn: dst_conn.unwrap_or_default(),
+            dst_db: db.unwrap_or_default().to_string(),
+            dst_table: table.to_string(),
+            running: false,
+            result: None,
+            error: None,
+        });
+    }
+
+    /// 运行数据对比
+    pub fn run_data_diff(&mut self) {
+        let Some(st) = self.data_diff.as_ref() else { return };
+        if st.running || st.dst_conn.is_empty() || st.dst_table.trim().is_empty() {
+            return;
+        }
+        let state = st.clone();
+        self.data_diff.as_mut().unwrap().running = true;
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = shujing_core::data_diff::diff_data(
+                &service,
+                (&state.src_conn, state.src_db.as_deref(), &state.src_table),
+                (
+                    &state.dst_conn,
+                    if state.dst_db.is_empty() { None } else { Some(state.dst_db.as_str()) },
+                    &state.dst_table,
+                ),
+                5000,
+            )
+            .await;
+            let _ = tx.send(BgEvent::DataDiffDone { state, result });
+        });
+    }
+
+    /// 打开 Mongo 文档编辑(插入)
+    pub fn open_mongo_insert(&mut self, tab_id: &str) {
+        if let Some(t) = self.table_tab(&tab_id) {
+            self.mongo_doc = Some(MongoDocState {
+                conn_id: t.conn_id.clone(),
+                db: t.database.clone(),
+                collection: t.table.clone(),
+                doc_id: None,
+                json: "{\n  \"\": null\n}".into(),
+                running: false,
+                error: None,
+            });
+        }
+    }
+
+    /// 打开 Mongo 文档编辑(编辑选中行;取该行 _id)
+    pub fn open_mongo_edit(&mut self, tab_id: &str) {
+        let Some(t) = self.table_tab(&tab_id) else { return };
+        let Some((ri, _)) = t.selected else {
+            self.toast_error("先点选一行文档".to_string());
+            return;
+        };
+        let Some(id_col) = t.columns.iter().position(|c| c == "_id") else {
+            self.toast_error("结果集中没有 _id 列".to_string());
+            return;
+        };
+        let Some(id) = t.rows.get(ri).and_then(|r| r.get(id_col)).cloned().flatten() else {
+            self.toast_error("该行 _id 为空,无法编辑".to_string());
+            return;
+        };
+        let conn_id = t.conn_id.clone();
+        let db = t.database.clone();
+        let coll = t.table.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let id2 = id.clone();
+        self.mongo_doc = Some(MongoDocState {
+            conn_id: conn_id.clone(),
+            db: db.clone(),
+            collection: coll.clone(),
+            doc_id: Some(id),
+            json: String::new(),
+            running: true,
+            error: None,
+        });
+        net::spawn(async move {
+            let result = service.mongo_get_doc(&conn_id, db.as_deref(), &coll, &id2).await;
+            let _ = tx.send(BgEvent::MongoDocDone { op: 9, result });
+        });
+    }
+
+    /// Mongo 文档删除(确认框回执)
+    pub fn run_mongo_delete(&mut self, tab_id: &str, doc_id: &str) {
+        let Some(t) = self.table_tab(&tab_id) else { return };
+        let conn_id = t.conn_id.clone();
+        let db = t.database.clone();
+        let coll = t.table.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let id = doc_id.to_string();
+        net::spawn(async move {
+            let result = service
+                .mongo_delete_doc(&conn_id, db.as_deref(), &coll, &id)
+                .await
+                .map(|_| format!("已删除文档 {id}"));
+            let _ = tx.send(BgEvent::MongoDocDone { op: 2, result });
+        });
+    }
+
+    /// 提交 Mongo 文档插入/替换
+    pub fn run_mongo_save(&mut self) {
+        let Some(st) = self.mongo_doc.as_ref() else { return };
+        let conn_id = st.conn_id.clone();
+        let db = st.db.clone();
+        let coll = st.collection.clone();
+        let doc_id = st.doc_id.clone();
+        let json = st.json.clone();
+        let running = st.running;
+        drop(st);
+        if running {
+            return;
+        }
+        self.mongo_doc.as_mut().unwrap().running = true;
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let op = if doc_id.is_some() { 1u8 } else { 0u8 };
+            let result = if let Some(id) = doc_id {
+                service
+                    .mongo_replace_doc(&conn_id, db.as_deref(), &coll, &id, &json)
+                    .await
+                    .map(|_| format!("已更新文档 {id}"))
+            } else {
+                service
+                    .mongo_insert_doc(&conn_id, db.as_deref(), &coll, &json)
+                    .await
+            };
+            let _ = tx.send(BgEvent::MongoDocDone { op, result });
+        });
+    }
+
     /// 打开 AI 助手(mode:0 生成/1 解释/2 优化)
     pub fn open_ai_assist(&mut self, tab_id: &str, mode: u8) {
         let init_input = if mode == 0 {
@@ -3594,6 +3854,66 @@ impl ShujingApp {
                         m.testing = false;
                         m.test_result = Some(result);
                     }
+                }
+                BgEvent::TransferDone { result } => {
+                    match result {
+                        Ok((rows, _)) => {
+                            self.toast_error(format!("传输完成: 共 {rows} 行"));
+                        }
+                        Err(e) => self.toast_error(format!("传输失败: {e}")),
+                    }
+                    self.transfer = None;
+                    continue;
+                }
+                BgEvent::DataDiffDone { state, result } => {
+                    let (ok_res, err_res) = match result {
+                        Ok(d) => (Some(d), None),
+                        Err(e) => (None, Some(e)),
+                    };
+                    self.data_diff = Some(DataDiffState {
+                        running: false,
+                        result: ok_res,
+                        error: err_res,
+                        ..state
+                    });
+                    continue;
+                }
+                BgEvent::MongoDocDone { op, result } => {
+                    match op {
+                        // op=9:get_doc 回填编辑器(不关弹窗)
+                        9 => {
+                            if let Some(st) = self.mongo_doc.as_mut() {
+                                st.running = false;
+                                match result {
+                                    Ok(json) => st.json = json,
+                                    Err(e) => st.error = Some(e),
+                                }
+                            }
+                        }
+                        _ => {
+                            match &result {
+                                Ok(msg) => self.toast_error(msg.clone()),
+                                Err(e) => self.toast_error(format!("失败: {e}")),
+                            }
+                            self.mongo_doc = None;
+                            // 重载当前 Mongo 数据页
+                            if let Some(tid) = self
+                                .tabs
+                                .get(self.active_tab)
+                                .map(|t| t.id.clone())
+                            {
+                                if let Some(t) = self.table_tab(&tid) {
+                                    if self.conns.iter().any(|c| {
+                                        c.id == t.conn_id
+                                            && c.db_type == shujing_core::DbType::Mongo
+                                    }) {
+                                        self.load_rows(&tid);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    continue;
                 }
                 BgEvent::AiDone {
                     tab_id: _,

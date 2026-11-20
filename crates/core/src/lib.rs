@@ -14,7 +14,9 @@ pub mod conn_import;
 pub mod mongo;
 pub mod parquet_preview;
 pub mod schema;
+pub mod data_diff;
 pub mod schema_diff;
+pub mod transfer;
 pub mod ssh;
 mod search;
 pub mod sql_advisor;
@@ -76,6 +78,79 @@ impl Service {
         conns.retain(|c| c.id != id);
         store::save_conns(&self.config_dir, &conns)?;
         Ok(conns)
+    }
+
+    /// MongoDB:按 _id 取文档(pretty JSON,编辑器预填)
+    pub async fn mongo_get_doc(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<String, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::get_doc(st, database, collection, doc_id).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
+    /// MongoDB:插入文档(返回 inserted _id 文本)
+    pub async fn mongo_insert_doc(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        json: &str,
+    ) -> Result<String, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::insert_doc(st, database, collection, json).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
+    /// MongoDB:替换文档(_id 不可变)
+    pub async fn mongo_replace_doc(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        doc_id: &str,
+        json: &str,
+    ) -> Result<(), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::replace_doc(st, database, collection, doc_id, json).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
+    /// MongoDB:删除文档
+    pub async fn mongo_delete_doc(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<(), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::delete_doc(st, database, collection, doc_id).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
     }
 
     /// MongoDB 集合计数(带库上下文)

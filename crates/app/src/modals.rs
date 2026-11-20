@@ -1004,6 +1004,15 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 if !tid.is_empty() && !ris.is_empty() {
                     crate::table_view::run_delete_rows(app, tid, gen, &ris);
                 }
+            } else if let Some(rest) = action
+                .as_deref()
+                .and_then(|a| a.strip_prefix("mongo-del:"))
+            {
+                app.confirm = None;
+                let mut it = rest.splitn(2, '|');
+                let tid = it.next().unwrap_or("").to_string();
+                let id = it.next().unwrap_or("").to_string();
+                app.run_mongo_delete(&tid, &id);
             } else if let Some(tid) = action
                 .as_deref()
                 .and_then(|a| a.strip_prefix("save-changes:"))
@@ -1104,6 +1113,327 @@ pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 }
 /// 外观设置弹窗(强调色)
+/// Mongo 文档编辑弹窗(插入/编辑;JSON 多行编辑器)
+pub fn draw_mongo_doc_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.mongo_doc.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut save = false;
+    let modal = egui::Modal::new(egui::Id::new("mongo-doc"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(640.0);
+            let Some(st) = app.mongo_doc.as_mut() else { return };
+            let title = match &st.doc_id {
+                Some(id) => format!("编辑文档 · {}", icons::clip(id, 30)),
+                None => format!("插入文档 · {}", st.collection),
+            };
+            theme::modal_title(ui, &title);
+            ui.label(
+                RichText::new("BSON 文档 JSON;ObjectId 写作 {\"$oid\": \"hex\"}")
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            ui.add_space(4.0);
+            theme::form_field_multiline(ui, "", "mongo-doc-json", &mut st.json, 620.0, 14);
+            if let Some(err) = &st.error {
+                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(
+                    ui,
+                    if st.running { "保存中…" } else { "保存" },
+                    theme::BtnKind::Primary,
+                )
+                .clicked()
+                    && !st.running
+                {
+                    save = true;
+                }
+                if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if save {
+        app.run_mongo_save();
+    }
+    if close || modal.should_close() {
+        app.mongo_doc = None;
+    }
+}
+
+/// 数据传输弹窗(同类型连接;建表+分批搬运)
+pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.transfer.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut run = false;
+    let modal = egui::Modal::new(egui::Id::new("transfer-modal"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(560.0);
+            let Some(st) = app.transfer.as_mut() else { return };
+            let src_type = app
+                .conns
+                .iter()
+                .find(|c| c.id == st.src_conn)
+                .map(|c| c.db_type)
+                .unwrap_or(shujing_core::DbType::MySql);
+            theme::modal_title(ui, "数据传输");
+            ui.label(
+                RichText::new(format!(
+                    "源:{} · {} · {}",
+                    st.src_conn,
+                    st.src_db.as_deref().unwrap_or("(默认库)"),
+                    st.src_table
+                ))
+                .size(11.5)
+                .color(p.muted),
+            );
+            ui.add_space(6.0);
+            ui.label(RichText::new("目标连接(仅同类型)").size(11.0).color(p.muted));
+            let conn_opts: Vec<(String, String)> = app
+                .conns
+                .iter()
+                .filter(|c| c.id != st.src_conn && c.db_type == src_type)
+                .map(|c| (c.id.clone(), format!("{} ({})", c.name, c.id)))
+                .collect();
+            if conn_opts.is_empty() {
+                ui.label(
+                    RichText::new("没有同类型的其他连接——先在侧栏添加目标连接")
+                        .size(12.0)
+                        .color(DIFF_ORANGE),
+                );
+            } else {
+                let cur = st.dst_conn.clone();
+                if let Some(v) = theme::select(ui, "tf-dst-conn", &cur, &conn_opts, 320.0) {
+                    st.dst_conn = v;
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    theme::form_field(ui, "目标库", "tf-dst-db", &mut st.dst_db, 200.0, false);
+                });
+                ui.add_space(4.0);
+                ui.vertical(|ui| {
+                    theme::form_field(ui, "目标表名", "tf-dst-table", &mut st.dst_table, 200.0, false);
+                });
+            });
+            ui.add_space(2.0);
+            {
+                let mut wd = st.with_data;
+                if theme::checkbox(ui, &mut wd, "搬运数据(不勾=只建结构)").changed() {
+                    st.with_data = wd;
+                }
+            }
+            {
+                let mut df = st.drop_first;
+                let r = theme::checkbox(ui, &mut df, "先删除目标表(DROP IF EXISTS,破坏性)");
+                let changed = r.changed();
+                r.on_hover_text("目标已存在同名表时必须勾选,否则建表失败");
+                if changed {
+                    st.drop_first = df;
+                }
+            }
+            if let Some(err) = &st.error {
+                ui.add_space(4.0);
+                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+            }
+            ui.label(
+                RichText::new("传输幂等可重跑:失败后先勾选删除目标表再重试")
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            theme::modal_footer(ui, |ui| {
+                if theme::button(
+                    ui,
+                    if st.running { "传输中…" } else { "开始传输" },
+                    theme::BtnKind::Primary,
+                )
+                .clicked()
+                    && !st.running
+                {
+                    run = true;
+                }
+                if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if run {
+        app.run_transfer();
+    }
+    if close || modal.should_close() {
+        app.transfer = None;
+    }
+}
+
+/// 数据对比弹窗(按主键逐行;目标侧同步 SQL)
+pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.data_diff.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut run = false;
+    let modal = egui::Modal::new(egui::Id::new("data-diff"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(720.0);
+            let Some(st) = app.data_diff.as_mut() else { return };
+            theme::modal_title(ui, "数据对比");
+            ui.label(
+                RichText::new(format!(
+                    "源:{} · {} · {}",
+                    st.src_conn,
+                    st.src_db.as_deref().unwrap_or("(默认库)"),
+                    st.src_table
+                ))
+                .size(11.5)
+                .color(p.muted),
+            );
+            ui.add_space(6.0);
+            ui.label(RichText::new("目标(同类型连接)").size(11.0).color(p.muted));
+            let conn_opts: Vec<(String, String)> = app
+                .conns
+                .iter()
+                .filter(|c| c.id != st.src_conn)
+                .map(|c| (c.id.clone(), format!("{} ({})", c.name, c.id)))
+                .collect();
+            let cur = st.dst_conn.clone();
+            if let Some(v) = theme::select(ui, "dd-dst-conn", &cur, &conn_opts, 320.0) {
+                st.dst_conn = v;
+            }
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    theme::form_field(ui, "目标库", "dd-dst-db", &mut st.dst_db, 200.0, false);
+                });
+                ui.add_space(4.0);
+                ui.vertical(|ui| {
+                    theme::form_field(ui, "目标表名", "dd-dst-table", &mut st.dst_table, 200.0, false);
+                });
+            });
+            ui.add_space(4.0);
+            if theme::button(ui, if st.running { "对比中…" } else { "运行对比" }, theme::BtnKind::Primary)
+                .clicked()
+                && !st.running
+            {
+                run = true;
+            }
+            if let Some(err) = &st.error {
+                ui.add_space(4.0);
+                ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(p.red));
+            }
+            if let Some(d) = &st.result {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!(
+                        "源 {} 行 · 目标 {} 行 · 源独有 {} · 目标独有 {} · 差异 {}",
+                        d.src_rows,
+                        d.dst_rows,
+                        d.only_src.len(),
+                        d.only_dst.len(),
+                        d.changed.len()
+                    ))
+                    .size(11.5)
+                    .color(p.text2),
+                );
+                if d.truncated {
+                    ui.label(
+                        RichText::new(format!("已达对比上限({} 行),结果可能不完整", d.only_src.len().max(d.dst_rows)))
+                            .size(10.5)
+                            .color(DIFF_ORANGE),
+                    );
+                }
+                if !d.changed.is_empty() {
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("dd-changes")
+                        .max_height(ui.ctx().screen_rect().height() * 0.26)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            egui::Grid::new("dd-grid")
+                                .num_columns(4)
+                                .spacing([10.0, 4.0])
+                                .show(ui, |ui| {
+                                    for r in d.changed.iter().take(100) {
+                                        for (i, (col, sv, dv)) in r.columns.iter().enumerate() {
+                                            if i == 0 {
+                                                ui.label(
+                                                    RichText::new(format!("pk {}", r.pk))
+                                                        .font(theme::mono(11.5))
+                                                        .color(DIFF_ORANGE),
+                                                );
+                                            }
+                                            ui.label(RichText::new(col).font(theme::mono(11.5)).color(p.text));
+                                            ui.label(RichText::new(icons::clip(sv, 24)).font(theme::mono(11.5)).color(p.green));
+                                            ui.label(RichText::new(icons::clip(dv, 24)).font(theme::mono(11.5)).color(p.red));
+                                            ui.end_row();
+                                        }
+                                    }
+                                });
+                        });
+                }
+                if !d.sync_sql.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("目标侧同步 SQL({} 条)", d.sync_sql.len()))
+                            .size(11.0)
+                            .color(p.muted),
+                    );
+                    let sql_text = d.sync_sql.join("\n");
+                    egui::Frame::new()
+                        .fill(p.input_bg)
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("dd-sql")
+                                .max_height(ui.ctx().screen_rect().height() * 0.24)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    let mut job = crate::sql_highlight::highlight(&sql_text);
+                                    job.wrap.max_width = ui.available_width();
+                                    let galley = ui.fonts(|f| f.layout_job(job));
+                                    let sz = galley.size();
+                                    ui.painter().galley(ui.cursor().left_top(), galley, p.text2);
+                                    ui.allocate_space(sz);
+                                });
+                        });
+                    ui.horizontal(|ui| {
+                        if theme::button(ui, "复制 SQL", theme::BtnKind::Secondary).clicked() {
+                            ui.ctx().copy_text(sql_text);
+                        }
+                        ui.label(
+                            RichText::new("SQL 只展示不执行;在查询页人工审阅后运行")
+                                .size(10.5)
+                                .color(p.muted),
+                        );
+                    });
+                }
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, "关闭", theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if run {
+        app.run_data_diff();
+    }
+    if close || modal.should_close() {
+        app.data_diff = None;
+    }
+}
+
 /// AI 助手弹窗:生成/解释/优化三模式,历史记录展示,结果可插入编辑器
 pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.ai_assist.is_none() {
