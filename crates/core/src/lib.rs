@@ -31,7 +31,7 @@ pub mod store;
 pub use search::SearchHit;
 pub use model::{
     AppState, ColumnDef, ConnInfo, ConnectResult, DbType, ExecResult, IndexDef, LiveConn,
-    SshConfig, TableMeta, TableStructure, is_readonly_redis, is_readonly_sql,
+    SessionInfo, SshConfig, TableMeta, TableStructure, is_readonly_redis, is_readonly_sql,
 };
 
 use model::CancelState;
@@ -539,6 +539,74 @@ impl Service {
             }
             _ => Err("非 MongoDB 连接".into()),
         }
+    }
+
+    /// 服务器会话列表(MySQL/PG)
+    pub async fn list_sessions(&self, id: &str) -> Result<Vec<model::SessionInfo>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        crate::model::Backend::list_sessions(&mut guard.backend).await
+    }
+
+    /// 终止服务器会话
+    pub async fn kill_session(&self, id: &str, sid: &str, query_only: bool) -> Result<(), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        crate::model::Backend::kill_session(&mut guard.backend, sid, query_only).await
+    }
+
+    /// 数据字典导出:全部表的 列/类型/注释/默认/主键 Markdown
+    pub async fn export_dictionary(
+        &self,
+        id: &str,
+        database: Option<&str>,
+    ) -> Result<String, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        let info = guard.info.clone();
+        match &mut guard.backend {
+            crate::model::Backend::Kafka(_) | crate::model::Backend::Redis(_) => {
+                return Err("该数据源无表结构,不支持数据字典".into());
+            }
+            _ => {}
+        }
+        let tables = guard.backend.list_tables_in(&info, database).await?;
+        let mut md = String::new();
+        md.push_str(&format!(
+            "# 数据字典 · {}\n\n> 生成于 {} · {} 张表\n",
+            database.or(info.database.as_deref()).unwrap_or("database"),
+            chrono::Utc::now().format("%Y-%m-%d %H:%M"),
+            tables.len()
+        ));
+        for (i, t) in tables.iter().enumerate() {
+            let s = guard
+                .backend
+                .get_table_structure(&info, &t.name, database)
+                .await?;
+            md.push_str(&format!(
+                "\n## {}. {}\n\n| 字段 | 类型 | 可空 | 键 | 默认 | 注释 |\n|---|---|---|---|---|---|\n",
+                i + 1,
+                t.name
+            ));
+            for c in &s.columns {
+                md.push_str(&format!(
+                    "| {} | {} | {} | {} | {} | {} |\n",
+                    c.name,
+                    c.data_type,
+                    if c.nullable { "是" } else { "否" },
+                    if c.key == "PRI" { "PK" } else { "" },
+                    c.default.as_deref().unwrap_or(""),
+                    c.comment.replace('|', "\\|")
+                ));
+            }
+            if !s.indexes.is_empty() {
+                md.push_str("\n**索引**:\n\n");
+                for ix in &s.indexes {
+                    md.push_str(&format!("- {} ({})\n", ix.name, ix.columns));
+                }
+            }
+        }
+        Ok(md)
     }
 
     /// 查询结果集保存为新表:类型推断建表 + 分批 INSERT(MySQL/PG/SQLite;

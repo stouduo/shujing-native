@@ -359,6 +359,33 @@ impl ShujingApp {
                 ui.close_menu();
             }
             if online {
+                // 会话面板/数据字典仅 SQL 型(MySQL/PG 优先实现;其余 SQL 型只给数据字典)
+                let sql_dict = matches!(
+                    c.db_type,
+                    shujing_core::DbType::MySql
+                        | shujing_core::DbType::Postgres
+                        | shujing_core::DbType::Sqlite
+                        | shujing_core::DbType::Mssql
+                        | shujing_core::DbType::ClickHouse
+                );
+                let sessions_ok = matches!(
+                    c.db_type,
+                    shujing_core::DbType::MySql | shujing_core::DbType::Postgres
+                );
+                if sessions_ok
+                    && ui.button(ui_kit::t!("Sessions Panel…", "会话面板…")).clicked()
+                {
+                    self.open_sessions(&c.id);
+                    ui.close_menu();
+                }
+                if sql_dict
+                    && ui
+                        .button(ui_kit::t!("Export Data Dictionary (Markdown)…", "导出数据字典(Markdown)…"))
+                        .clicked()
+                {
+                    self.export_dictionary_for(&c.id);
+                    ui.close_menu();
+                }
                 if ui.button(ui_kit::t!("New Query", "新建查询")).clicked() {
                     menu_act = Some("query");
                     ui.close_menu();

@@ -450,6 +450,20 @@ pub struct MssqlState {
     pub next: std::sync::atomic::AtomicUsize,
 }
 
+/// 服务器会话(MySQL processlist / PG pg_stat_activity 行)
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInfo {
+    pub id: String,
+    pub user: String,
+    pub host: String,
+    pub db: Option<String>,
+    pub command: String,
+    pub time_secs: i64,
+    pub state: String,
+    pub query: String,
+}
+
 /// MongoDB 连接状态(驱动自带连接池与重连)
 pub struct MongoState {
     pub client: mongodb::Client,

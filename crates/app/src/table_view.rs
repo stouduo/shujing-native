@@ -293,6 +293,20 @@ pub enum TabAction {
     KafkaLoadGroups {
         tab_id: String,
     },
+    /// 打开会话面板
+    OpenSessions {
+        conn_id: String,
+    },
+    /// 会话面板刷新
+    SessionsRefresh {
+        tab_id: String,
+    },
+    /// 终止会话
+    SessionKill {
+        tab_id: String,
+        sid: String,
+        query_only: bool,
+    },
     /// Kafka:新建 topic
     KafkaCreateTopic {
         tab_id: String,
@@ -476,6 +490,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Designer(_) => 3,
                                 TabKind::Redis(_) => 4,
                                 TabKind::Kafka(_) => 7,
+                                TabKind::Session(_) => 8,
                                 TabKind::Er(_) => 5,
                                 TabKind::Ddl(_) => 6,
                             };
@@ -4133,6 +4148,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
         TabAction::RedisStreamGroups { tab_id, key } => {
             app.redis_stream_groups(&tab_id, &key)
         }
+        TabAction::OpenSessions { conn_id } => app.open_sessions(&conn_id),
+        TabAction::SessionsRefresh { tab_id: _ } => app.open_sessions_refresh(),
+        TabAction::SessionKill {
+            tab_id: _,
+            sid,
+            query_only,
+        } => app.session_kill(&sid, query_only),
         TabAction::KafkaLoadMsgs { tab_id: _ } => app.kafka_load_msgs(),
         TabAction::KafkaSend { tab_id: _, topic: _ } => app.kafka_send(),
         TabAction::KafkaLoadGroups { tab_id: _ } => app.kafka_load_groups(),
@@ -5581,6 +5603,7 @@ impl eframe::App for ShujingApp {
                 }
                 TabKind::Er(e) => crate::er::draw_er_view(ctx, &tab_id, e),
                 TabKind::Kafka(k) => crate::kafka::draw_kafka_view(ctx, &tab_id, k),
+                TabKind::Session(s) => crate::sessions::draw_sessions_view(ctx, &tab_id, s),
                 TabKind::Ddl(d) => structure::draw_ddl_view(ctx, &tab_id, d),
             };
             for a in actions {

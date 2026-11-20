@@ -93,6 +93,14 @@ pub enum BgEvent {
     KafkaTopicDeleted {
         result: Result<(), String>,
     },
+    SessionsLoaded {
+        tab_id: String,
+        result: Result<Vec<shujing_core::SessionInfo>, String>,
+    },
+    SessionKilled {
+        tab_id: String,
+        result: Result<(), String>,
+    },
     KafkaTopicsLoaded {
         conn_id: String,
         result: Result<Vec<shujing_core::kafka::TopicInfo>, String>,
@@ -729,6 +737,31 @@ pub struct MongoDocState {
     pub error: Option<String>,
 }
 
+/// 服务器会话面板标签(MySQL processlist / PG pg_stat_activity)
+pub struct SessionsTab {
+    pub conn_id: String,
+    pub db_type: shujing_core::DbType,
+    pub rows: Vec<shujing_core::SessionInfo>,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// 终止按钮 armed:已点过一次的会话 id
+    pub armed: Option<String>,
+}
+
+impl SessionsTab {
+    /// 用于 tabs 的独立实例(状态从零)
+    pub fn clone_shell(&self, _new_id: &str) -> SessionsTab {
+        SessionsTab {
+            conn_id: self.conn_id.clone(),
+            db_type: self.db_type,
+            rows: Vec::new(),
+            loading: false,
+            error: None,
+            armed: None,
+        }
+    }
+}
+
 /// Kafka 控制台标签(topic 浏览/消息读取/发送/消费组)
 pub struct KafkaTab {
     pub conn_id: String,
@@ -981,6 +1014,8 @@ pub enum TabKind {
     Er(ErTab),
     /// Kafka 控制台(不参与会话恢复:重启后从侧栏重开)
     Kafka(KafkaTab),
+    /// 服务器会话面板(不参与会话恢复)
+    Session(SessionsTab),
     Ddl(DdlTab),
 }
 
@@ -1182,6 +1217,7 @@ pub struct ShujingApp {
     pub mongo_doc: Option<MongoDocState>,
     pub mongo_indexes: Option<MongoIndexState>,
     pub kafka_tab: Option<KafkaTab>,
+    pub session_tab: Option<SessionsTab>,
     /// 查询结果存为新表:命名弹窗(tab_id, 表名草稿)
     pub save_result_modal: Option<(String, String)>,
     pub mongo_import: Option<MongoImportState>,
@@ -1307,6 +1343,7 @@ impl ShujingApp {
             mongo_doc: None,
             mongo_indexes: None,
             kafka_tab: None,
+            session_tab: None,
             save_result_modal: None,
             mongo_import: None,
             transfer: None,
@@ -1652,6 +1689,43 @@ impl ShujingApp {
         self.error_toast = Some((msg.into(), std::time::Instant::now()));
     }
 
+    /// 导出数据字典 Markdown(连接右键;弹保存框)
+    pub fn export_dictionary_for(&mut self, conn_id: &str) {
+        let Some(c) = self.conns.iter().find(|c| c.id == conn_id) else {
+            return;
+        };
+        let database = c.database.clone();
+        let default_name = format!(
+            "数据字典-{}.md",
+            database.as_deref().unwrap_or(&c.name)
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("Markdown", &["md"])
+            .save_file()
+        else {
+            return;
+        };
+        let conn_id = conn_id.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = match service
+                .export_dictionary(&conn_id, database.as_deref())
+                .await
+            {
+                Ok(md) => match tokio::fs::write(&path, md).await {
+                    Ok(_) => {
+                        format!("{} {}", ui_kit::t!("Exported", "已导出到"), path.display())
+                    }
+                    Err(e) => format!("{}: {e}", ui_kit::t!("Write failed", "写入失败")),
+                },
+                Err(e) => e,
+            };
+            let _ = tx.send(BgEvent::ExportDone { result: Ok(result) });
+        });
+    }
+
     /// 确认「结果存为新表」:表名白名单校验后建表+写入
     pub fn save_result_as_table_commit(&mut self, tab_id: &str, name: &str) {
         let name = name.trim().to_string();
@@ -1802,6 +1876,77 @@ impl ShujingApp {
                 key,
                 result,
             });
+        });
+    }
+
+
+    /// 打开会话面板(存在则聚焦)
+    pub fn open_sessions(&mut self, conn_id: &str) {
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.kind, TabKind::Session(s) if s.conn_id == conn_id))
+        {
+            self.active_tab = i;
+            return;
+        }
+        let Some(c) = self.conns.iter().find(|c| c.id == conn_id) else {
+            return;
+        };
+        let db_type = c.db_type;
+        let id = format!("s{}", rand_suffix());
+        self.session_tab = Some(SessionsTab {
+            conn_id: conn_id.to_string(),
+            db_type,
+            rows: Vec::new(),
+            loading: false,
+            error: None,
+            armed: None,
+        });
+        self.tabs.push(Tab {
+            id: id.clone(),
+            title: ui_kit::t!("Sessions", "会话面板").to_string(),
+            kind: TabKind::Session(
+                self.session_tab.as_ref().expect("session_tab 未初始化").clone_shell(&id),
+            ),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.open_sessions_refresh();
+    }
+
+    /// 重拉会话列表
+    pub fn open_sessions_refresh(&mut self) {
+        let Some(s) = self.session_tab.as_ref() else {
+            return;
+        };
+        let conn_id = s.conn_id.clone();
+        let tab_id = self
+            .tabs
+            .iter()
+            .find(|t| matches!(&t.kind, TabKind::Session(_)))
+            .map(|t| t.id.clone())
+            .unwrap_or_default();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.session_tab.as_mut().unwrap().loading = true;
+        net::spawn(async move {
+            let result = service.list_sessions(&conn_id).await;
+            let _ = tx.send(BgEvent::SessionsLoaded { tab_id, result });
+        });
+    }
+
+    /// 终止会话(query_only=仅中断当前查询)
+    pub fn session_kill(&mut self, sid: &str, query_only: bool) {
+        let Some(s) = self.session_tab.as_ref() else {
+            return;
+        };
+        let conn_id = s.conn_id.clone();
+        let sid = sid.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = service.kill_session(&conn_id, &sid, query_only).await;
+            let _ = tx.send(BgEvent::SessionKilled { tab_id: String::new(), result });
         });
     }
 
@@ -2075,6 +2220,7 @@ impl ShujingApp {
     pub fn active_tab_info(&self) -> Option<(&str, &str, Option<&str>)> {
         let t = self.tabs.get(self.active_tab)?;
         Some(match &t.kind {
+            TabKind::Session(s) => (s.conn_id.as_str(), "", None),
             TabKind::Kafka(k) => (k.conn_id.as_str(), "", None),
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Structure(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
@@ -2595,6 +2741,7 @@ impl ShujingApp {
                 TabKind::Er(e) => e.conn_id.clone(),
                 TabKind::Ddl(d) => d.conn_id.clone(),
                 TabKind::Kafka(k) => k.conn_id.clone(),
+                TabKind::Session(s) => s.conn_id.clone(),
             })
         });
         let inherit_db = self.tabs.get(self.active_tab).and_then(|t| match &t.kind {
@@ -2606,6 +2753,7 @@ impl ShujingApp {
             TabKind::Er(e) => e.database.clone(),
             TabKind::Ddl(d) => d.database.clone(),
             TabKind::Kafka(_) => None,
+            TabKind::Session(_) => None,
         });
         // 指定了连接(侧栏右键"新建查询")时,取侧栏展开的库;
         // 仅限无默认库的 MySQL 连接——有默认库的连接保持 None 走默认,
@@ -2713,6 +2861,7 @@ impl ShujingApp {
                 TabKind::Er(e) => e.conn_id == conn_id,
                 TabKind::Ddl(d) => d.conn_id == conn_id,
                 TabKind::Kafka(k) => k.conn_id == conn_id,
+                TabKind::Session(s) => s.conn_id == conn_id,
             };
             if belongs {
                 if i < self.active_tab {
@@ -4151,8 +4300,9 @@ impl ShujingApp {
                     conn: e.conn_id.clone(),
                     database: e.database.clone(),
                 }),
-                // Kafka 控制台不入会话(重启后从侧栏重开)
+                // Kafka/会话面板不入会话(重启后从侧栏重开)
                 TabKind::Kafka(_) => {}
+                TabKind::Session(_) => {}
                 TabKind::Ddl(d) => tabs.push(SessionTab::Ddl {
                     conn: d.conn_id.clone(),
                     database: d.database.clone(),
@@ -4972,6 +5122,31 @@ impl ShujingApp {
                         }
                         Err(e) => self.toast_error(e.clone()),
                     }
+                    continue;
+                }
+                BgEvent::SessionsLoaded { tab_id, result } => {
+                    if let Some(s) = self.session_tab.as_mut() {
+                        s.loading = false;
+                        match result {
+                            Ok(rows) => {
+                                s.error = None;
+                                s.rows = rows;
+                            }
+                            Err(e) => s.error = Some(e),
+                        }
+                    }
+                    let _ = tab_id;
+                    continue;
+                }
+                BgEvent::SessionKilled { result, .. } => {
+                    if let Some(s) = self.session_tab.as_mut() {
+                        match &result {
+                            Ok(_) => self.toast_error(ui_kit::t!("Session terminated", "已终止会话").to_string()),
+                            Err(e) => self.toast_error(e.clone()),
+                        }
+                    }
+                    // 终止后自动刷新
+                    self.open_sessions_refresh();
                     continue;
                 }
                 BgEvent::KafkaTopicsLoaded { conn_id, result } => {

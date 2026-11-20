@@ -10,6 +10,7 @@ mod modals;
 mod net;
 mod query;
 mod redis;
+mod sessions;
 mod sidebar;
 mod sql_highlight;
 mod structure;
