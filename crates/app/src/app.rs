@@ -83,7 +83,14 @@ pub enum BgEvent {
         result: Result<shujing_core::data_diff::DataDiff, String>,
     },
     MongoDocDone {
-        op: u8, // 0 插入 1 替换
+        op: u8, // 0 插入 1 替换 3 批量导入
+        result: Result<String, String>,
+    },
+    MongoIndexListDone {
+        result: Result<Vec<shujing_core::mongo::IndexInfo>, String>,
+    },
+    MongoIndexOpDone {
+        op: u8, // 4 创建 5 删除
         result: Result<String, String>,
     },
     AiDone {
@@ -688,6 +695,37 @@ pub struct MongoDocState {
     pub error: Option<String>,
 }
 
+/// Mongo 索引管理弹窗(列表 + 内嵌创建表单)
+pub struct MongoIndexState {
+    pub conn_id: String,
+    pub db: Option<String>,
+    pub collection: String,
+    pub items: Vec<shujing_core::mongo::IndexInfo>,
+    pub running: bool,
+    pub error: Option<String>,
+    /// 创建表单:键行(字段, 降序?)
+    pub rows: Vec<(String, bool)>,
+    pub unique: bool,
+    /// TTL 秒文本(空=不设)
+    pub ttl: String,
+    /// 自定义索引名(空=Mongo 自动生成)
+    pub name: String,
+    /// 创建/删除请求在途
+    pub busy: bool,
+    /// 已点过一次删除的索引名(二次点击确认;其余动作清空)
+    pub drop_arm: Option<String>,
+}
+
+/// Mongo 批量导入弹窗(粘贴/文件读入 JSON 数组)
+pub struct MongoImportState {
+    pub conn_id: String,
+    pub db: Option<String>,
+    pub collection: String,
+    pub json: String,
+    pub running: bool,
+    pub error: Option<String>,
+}
+
 /// AI 助手弹窗(挂查询标签;模式=生成/解释/优化)
 pub struct AiAssistState {
     pub tab_id: String,
@@ -1043,6 +1081,8 @@ pub struct ShujingApp {
     pub ai_assist: Option<AiAssistState>,
     /// Mongo 文档编辑弹窗
     pub mongo_doc: Option<MongoDocState>,
+    pub mongo_indexes: Option<MongoIndexState>,
+    pub mongo_import: Option<MongoImportState>,
     /// 数据传输弹窗
     pub transfer: Option<TransferState>,
     /// 数据对比弹窗
@@ -1163,6 +1203,8 @@ impl ShujingApp {
             ai_config: settings_ai.unwrap_or_default(),
             ai_assist: None,
             mongo_doc: None,
+            mongo_indexes: None,
+            mongo_import: None,
             transfer: None,
             data_diff: None,
             conn_crypto: None,
@@ -1504,6 +1546,21 @@ impl ShujingApp {
 
     pub fn toast_error(&mut self, msg: impl Into<String>) {
         self.error_toast = Some((msg.into(), std::time::Instant::now()));
+    }
+
+    /// 重载当前激活标签的 Mongo 数据页(文档增删改/导入后)
+    fn reload_active_mongo_rows(&mut self) {
+        if let Some(tid) = self.tabs.get(self.active_tab).map(|t| t.id.clone()) {
+            if let Some(t) = self.table_tab(&tid) {
+                if self
+                    .conns
+                    .iter()
+                    .any(|c| c.id == t.conn_id && c.db_type == shujing_core::DbType::Mongo)
+                {
+                    self.load_rows(&tid);
+                }
+            }
+        }
     }
 
     pub fn table_tab_mut(&mut self, tab_id: &str) -> Option<&mut TableTab> {
@@ -2950,6 +3007,156 @@ impl ShujingApp {
         });
     }
 
+    /// 打开 Mongo 索引管理(立即拉列表)
+    pub fn open_mongo_indexes(&mut self, tab_id: &str) {
+        if let Some(t) = self.table_tab(&tab_id) {
+            self.mongo_indexes = Some(MongoIndexState {
+                conn_id: t.conn_id.clone(),
+                db: t.database.clone(),
+                collection: t.table.clone(),
+                items: Vec::new(),
+                running: true,
+                error: None,
+                rows: vec![(String::new(), false)],
+                unique: false,
+                ttl: String::new(),
+                name: String::new(),
+                busy: false,
+                drop_arm: None,
+            });
+            self.refresh_mongo_indexes();
+        }
+    }
+
+    /// 重新拉取索引列表(用当前弹窗的连接上下文)
+    fn refresh_mongo_indexes(&mut self) {
+        let Some(st) = self.mongo_indexes.as_ref() else { return };
+        let conn_id = st.conn_id.clone();
+        let db = st.db.clone();
+        let coll = st.collection.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.mongo_indexes.as_mut().unwrap().running = true;
+        net::spawn(async move {
+            let result = service.mongo_list_indexes(&conn_id, db.as_deref(), &coll).await;
+            let _ = tx.send(BgEvent::MongoIndexListDone { result });
+        });
+    }
+
+    /// 提交创建索引(表单校验在弹窗层做,这里只管发请求)
+    pub fn run_mongo_create_index(&mut self) {
+        let Some(st) = self.mongo_indexes.as_ref() else { return };
+        if st.busy || st.running {
+            return;
+        }
+        // 去掉空字段行后交给 core(空列表由 core 报错)
+        let fields: Vec<(String, bool)> = st
+            .rows
+            .iter()
+            .filter(|(f, _)| !f.trim().is_empty())
+            .cloned()
+            .collect();
+        let unique = st.unique;
+        let ttl = st
+            .ttl
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|_| !st.ttl.trim().is_empty());
+        let name = st.name.trim().to_string();
+        let conn_id = st.conn_id.clone();
+        let db = st.db.clone();
+        let coll = st.collection.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.mongo_indexes.as_mut().unwrap().busy = true;
+        self.mongo_indexes.as_mut().unwrap().drop_arm = None;
+        net::spawn(async move {
+            let result = service
+                .mongo_create_index(
+                    &conn_id,
+                    db.as_deref(),
+                    &coll,
+                    &fields,
+                    unique,
+                    ttl,
+                    (!name.is_empty()).then_some(name.as_str()),
+                )
+                .await;
+            let _ = tx.send(BgEvent::MongoIndexOpDone { op: 4, result });
+        });
+    }
+
+    /// 删除索引(弹窗层二次确认后调用)
+    pub fn run_mongo_drop_index(&mut self, name: &str) {
+        let Some(st) = self.mongo_indexes.as_ref() else { return };
+        if st.busy {
+            return;
+        }
+        let conn_id = st.conn_id.clone();
+        let db = st.db.clone();
+        let coll = st.collection.clone();
+        let idx = name.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.mongo_indexes.as_mut().unwrap().busy = true;
+        self.mongo_indexes.as_mut().unwrap().drop_arm = None;
+        net::spawn(async move {
+            let result = service
+                .mongo_drop_index(&conn_id, db.as_deref(), &coll, &idx)
+                .await
+                .map(|_| format!("{} {idx}", ui_kit::t!("Index dropped", "已删除索引")));
+            let _ = tx.send(BgEvent::MongoIndexOpDone { op: 5, result });
+        });
+    }
+
+    /// 打开 Mongo 批量导入
+    pub fn open_mongo_import(&mut self, tab_id: &str) {
+        if let Some(t) = self.table_tab(&tab_id) {
+            self.mongo_import = Some(MongoImportState {
+                conn_id: t.conn_id.clone(),
+                db: t.database.clone(),
+                collection: t.table.clone(),
+                json: String::new(),
+                running: false,
+                error: None,
+            });
+        }
+    }
+
+    /// 执行批量导入:先本地解析(零副作用),通过才发请求
+    pub fn run_mongo_import(&mut self) {
+        let Some(st) = self.mongo_import.as_ref() else { return };
+        if st.running {
+            return;
+        }
+        if let Err(e) = shujing_core::mongo::parse_import_docs(&st.json) {
+            self.mongo_import.as_mut().unwrap().error = Some(e);
+            return;
+        }
+        let conn_id = st.conn_id.clone();
+        let db = st.db.clone();
+        let coll = st.collection.clone();
+        let json = st.json.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.mongo_import.as_mut().unwrap().running = true;
+        self.mongo_import.as_mut().unwrap().error = None;
+        net::spawn(async move {
+            let result = service
+                .mongo_import_docs(&conn_id, db.as_deref(), &coll, &json)
+                .await
+                .map(|n| {
+                    format!(
+                        "{} {n} {}",
+                        ui_kit::t!("Imported", "已导入"),
+                        ui_kit::t!("documents", "条文档")
+                    )
+                });
+            let _ = tx.send(BgEvent::MongoDocDone { op: 3, result });
+        });
+    }
+
     /// 打开 AI 助手(mode:0 生成/1 解释/2 优化)
     pub fn open_ai_assist(&mut self, tab_id: &str, mode: u8) {
         let init_input = if mode == 0 {
@@ -4203,7 +4410,41 @@ impl ShujingApp {
                     });
                     continue;
                 }
+                BgEvent::MongoIndexListDone { result } => {
+                    if let Some(st) = self.mongo_indexes.as_mut() {
+                        st.running = false;
+                        match result {
+                            Ok(items) => st.items = items,
+                            Err(e) => st.error = Some(e),
+                        }
+                    }
+                    continue;
+                }
+                BgEvent::MongoIndexOpDone { op, result } => {
+                    match &result {
+                        Ok(msg) => self.toast_error(msg.clone()),
+                        Err(e) => self.toast_error(format!("{}: {e}", ui_kit::t!("Failed", "失败"))),
+                    }
+                    // 成功后重拉列表;失败停在表单(错误信息在下一次列表刷新时清掉由 busy/armed 表达)
+                    if result.is_ok() {
+                        self.refresh_mongo_indexes();
+                    } else if let Some(st) = self.mongo_indexes.as_mut() {
+                        st.busy = false;
+                    }
+                    let _ = op;
+                    continue;
+                }
                 BgEvent::MongoDocDone { op, result } => {
+                    // op=3 批量导入:关导入弹窗 + 重载数据页
+                    if op == 3 {
+                        match &result {
+                            Ok(msg) => self.toast_error(msg.clone()),
+                            Err(e) => self.toast_error(format!("{}: {e}", ui_kit::t!("Failed", "失败"))),
+                        }
+                        self.mongo_import = None;
+                        self.reload_active_mongo_rows();
+                        continue;
+                    }
                     match op {
                         // op=9:get_doc 回填编辑器(不关弹窗)
                         9 => {
@@ -4222,20 +4463,7 @@ impl ShujingApp {
                             }
                             self.mongo_doc = None;
                             // 重载当前 Mongo 数据页
-                            if let Some(tid) = self
-                                .tabs
-                                .get(self.active_tab)
-                                .map(|t| t.id.clone())
-                            {
-                                if let Some(t) = self.table_tab(&tid) {
-                                    if self.conns.iter().any(|c| {
-                                        c.id == t.conn_id
-                                            && c.db_type == shujing_core::DbType::Mongo
-                                    }) {
-                                        self.load_rows(&tid);
-                                    }
-                                }
-                            }
+                            self.reload_active_mongo_rows();
                         }
                     }
                     continue;

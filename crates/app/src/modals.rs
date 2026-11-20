@@ -1256,6 +1256,289 @@ pub fn draw_mongo_doc_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 }
 
+/// Mongo 索引管理弹窗(列表 + 内嵌创建表单;删除走二次确认按钮)
+pub fn draw_mongo_indexes_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.mongo_indexes.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut create = false;
+    let mut drop_name: Option<String> = None;
+    let mut add_row = false;
+    let mut remove_row: Option<usize> = None;
+    let modal = egui::Modal::new(egui::Id::new("mongo-indexes"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(700.0);
+            let Some(st) = app.mongo_indexes.as_mut() else { return };
+            let title = format!(
+                "{} · {}",
+                ui_kit::t!("Manage Indexes", "索引管理"),
+                st.collection
+            );
+            theme::modal_title(ui, &title);
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "TTL indexes delete documents after expireAfterSeconds; the _id index cannot be dropped",
+                    "TTL 索引按过期秒数自动删除文档;_id 索引不可删除"
+                ))
+                .size(10.5)
+                .color(p.muted),
+            );
+            ui.add_space(6.0);
+            if st.running {
+                ui.label(
+                    RichText::new(ui_kit::t!("Loading…", "加载中…"))
+                        .size(11.5)
+                        .color(p.text2),
+                );
+            } else if st.items.is_empty() && st.error.is_none() {
+                ui.label(
+                    RichText::new(ui_kit::t!("No indexes", "暂无索引"))
+                        .size(11.5)
+                        .color(p.muted),
+                );
+            }
+            if let Some(err) = &st.error {
+                ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
+            }
+            if !st.items.is_empty() {
+                egui::Grid::new("mongo-idx-grid")
+                    .num_columns(4)
+                    .spacing([10.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(ui_kit::t!("Keys", "键"))
+                                .size(10.5)
+                                .color(p.muted),
+                        );
+                        ui.label(
+                            RichText::new(ui_kit::t!("Unique", "唯一"))
+                                .size(10.5)
+                                .color(p.muted),
+                        );
+                        ui.label(
+                            RichText::new(ui_kit::t!("TTL (s)", "TTL(秒)"))
+                                .size(10.5)
+                                .color(p.muted),
+                        );
+                        ui.label(RichText::new("").size(10.5));
+                        ui.end_row();
+                        for it in st.items.clone() {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {}",
+                                    icons::clip(&it.name, 30),
+                                    it.keys
+                                ))
+                                .font(theme::mono(11.5))
+                                .color(p.text),
+                            );
+                            ui.label(
+                                RichText::new(if it.unique {
+                                    ui_kit::t!("Yes", "是")
+                                } else {
+                                    "—"
+                                })
+                                .size(11.5)
+                                .color(if it.unique { DIFF_ORANGE } else { p.muted }),
+                            );
+                            ui.label(
+                                RichText::new(
+                                    it.ttl
+                                        .map(|t| t.to_string())
+                                        .unwrap_or_else(|| "—".into()),
+                                )
+                                .font(theme::mono(11.5))
+                                .color(p.text),
+                            );
+                            if it.name == "_id_" {
+                                ui.label(RichText::new("").size(11.5));
+                            } else {
+                                let armed = st.drop_arm.as_deref() == Some(it.name.as_str());
+                                let label = if armed {
+                                    ui_kit::t!("Click again to confirm", "再点一次确认")
+                                } else {
+                                    ui_kit::t!("Drop", "删除")
+                                };
+                                if theme::button(ui, label, theme::BtnKind::Secondary).clicked()
+                                    && !st.busy
+                                {
+                                    if armed {
+                                        drop_name = Some(it.name.clone());
+                                    } else {
+                                        st.drop_arm = Some(it.name.clone());
+                                    }
+                                }
+                            }
+                            ui.end_row();
+                        }
+                    });
+            }
+            ui.add_space(6.0);
+            ui.separator();
+            ui.label(
+                RichText::new(ui_kit::t!("Create Index", "创建索引"))
+                    .size(11.5)
+                    .color(p.text2),
+            );
+            ui.add_space(4.0);
+            // 键行:字段名 + 方向切换 + 删行(横向一行)
+            let row_count = st.rows.len();
+            for (ri, (fname, desc)) in st.rows.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    theme::field(ui, &format!("mongo-idx-f{ri}"), fname, 200.0, false);
+                    let dir = if *desc { "desc ↓" } else { "asc ↑" };
+                    if theme::button(ui, dir, theme::BtnKind::Secondary).clicked() {
+                        *desc = !*desc;
+                    }
+                    if row_count > 1
+                        && theme::button(ui, "×", theme::BtnKind::Secondary).clicked()
+                    {
+                        remove_row = Some(ri);
+                    }
+                });
+            }
+            if theme::button(ui, ui_kit::t!("＋ Key", "＋ 键行"), theme::BtnKind::Secondary).clicked() {
+                add_row = true;
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                theme::checkbox(ui, &mut st.unique, &ui_kit::t!("Unique", "唯一"));
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new(ui_kit::t!("TTL (s, empty = none)", "TTL(秒,空=不设)"))
+                        .size(11.0)
+                        .color(p.muted),
+                );
+                theme::field(ui, "mongo-idx-ttl", &mut st.ttl, 90.0, false);
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new(ui_kit::t!("Name (empty = auto)", "索引名(空=自动)"))
+                        .size(11.0)
+                        .color(p.muted),
+                );
+                theme::field(ui, "mongo-idx-name", &mut st.name, 160.0, false);
+            });
+            if let Some(err) = &st.error {
+                ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
+            }
+            theme::modal_footer(ui, |ui| {
+                let label = if st.busy || st.running {
+                    ui_kit::t!("Working…", "处理中…")
+                } else {
+                    ui_kit::t!("Create", "创建")
+                };
+                if theme::button(ui, label, theme::BtnKind::Primary).clicked() && !st.busy && !st.running
+                {
+                    create = true;
+                }
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    // 行增删与删除确认在可变借出结束后统一应用(同帧 widget id 复用防点击错位)
+    if let (Some(st), Some(ri)) = (app.mongo_indexes.as_mut(), remove_row) {
+        st.rows.remove(ri);
+    }
+    if let (Some(st), true) = (app.mongo_indexes.as_mut(), add_row) {
+        st.rows.push((String::new(), false));
+    }
+    if app.mongo_indexes.is_some() {
+        if let Some(n) = drop_name {
+            app.run_mongo_drop_index(&n);
+        }
+    }
+    if create {
+        app.run_mongo_create_index();
+    }
+    if close || modal.should_close() {
+        app.mongo_indexes = None;
+    }
+}
+
+/// Mongo 批量导入弹窗(粘贴/文件读入 JSON 数组)
+pub fn draw_mongo_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.mongo_import.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut import = false;
+    let mut picked: Option<String> = None;
+    let modal = egui::Modal::new(egui::Id::new("mongo-import"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(640.0);
+            let Some(st) = app.mongo_import.as_mut() else { return };
+            let title = format!(
+                "{} · {}",
+                ui_kit::t!("Import Documents (JSON)", "批量导入文档(JSON)"),
+                st.collection
+            );
+            theme::modal_title(ui, &title);
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "Top-level JSON array, each item one document; a duplicate _id aborts the run at that batch",
+                    "顶层 JSON 数组,每项一个文档;_id 重复会在该批次中断"
+                ))
+                .size(10.5)
+                .color(p.muted),
+            );
+            ui.add_space(4.0);
+            theme::form_field_multiline(ui, "", "mongo-import-json", &mut st.json, 620.0, 14);
+            if theme::button(
+                ui,
+                ui_kit::t!("Open File…", "选择文件…"),
+                theme::BtnKind::Secondary,
+            )
+            .clicked()
+            {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("JSON", &["json", "ndjson"])
+                    .pick_file()
+                {
+                    picked = Some(path.display().to_string());
+                }
+            }
+            if let Some(err) = &st.error {
+                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+            }
+            theme::modal_footer(ui, |ui| {
+                let label = if st.running {
+                    ui_kit::t!("Importing…", "导入中…")
+                } else {
+                    ui_kit::t!("Import", "导入")
+                };
+                if theme::button(ui, label, theme::BtnKind::Primary).clicked() && !st.running {
+                    import = true;
+                }
+                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if let (Some(st), Some(path)) = (app.mongo_import.as_mut(), picked) {
+        match std::fs::read_to_string(&path) {
+            Ok(s) => {
+                st.json = s;
+                st.error = None;
+            }
+            Err(e) => st.error = Some(format!("{}: {e}", ui_kit::t!("Read failed", "读取失败"))),
+        }
+    }
+    if import {
+        app.run_mongo_import();
+    }
+    if close || modal.should_close() {
+        app.mongo_import = None;
+    }
+}
+
 /// 连接备份口令弹窗(导出=输入+确认;导入=单口令)
 pub fn draw_conn_crypto_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.conn_crypto.is_none() {

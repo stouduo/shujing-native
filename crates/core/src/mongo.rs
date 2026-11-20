@@ -356,3 +356,249 @@ pub async fn delete_doc(
     }
     Ok(())
 }
+
+// ── 索引管理(v2)────────────────────────────────────────
+
+/// 索引信息(展示行)
+#[derive(Debug, Clone)]
+pub struct IndexInfo {
+    pub name: String,
+    /// 键展示,如 "name asc, age desc"
+    pub keys: String,
+    pub unique: bool,
+    /// TTL 秒(None=非 TTL 索引)
+    pub ttl: Option<i64>,
+}
+
+/// (字段, 降序?)列表 → 键 Document
+pub fn index_keys_doc(fields: &[(String, bool)]) -> Document {
+    let mut d = Document::new();
+    for (f, desc) in fields {
+        d.insert(
+            f.clone(),
+            if *desc {
+                Bson::Int32(-1)
+            } else {
+                Bson::Int32(1)
+            },
+        );
+    }
+    d
+}
+
+/// 键 Document → "name asc, age desc" 展示串(非 ±1 方向原样显示值)
+fn keys_display(keys: &Document) -> String {
+    keys.iter()
+        .map(|(k, v)| match v {
+            Bson::Int32(1) | Bson::Int64(1) => format!("{k} asc"),
+            Bson::Int32(-1) | Bson::Int64(-1) => format!("{k} desc"),
+            other => format!("{k} {other}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub async fn list_indexes(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+) -> Result<Vec<IndexInfo>, String> {
+    let db = default_db(st, database)?;
+    use futures_util::StreamExt;
+    let mut cur = st
+        .client
+        .database(db.as_str())
+        .collection::<Document>(collection)
+        .list_indexes()
+        .await
+        .map_err(|e| format!("MongoDB: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(m) = cur.next().await {
+        let m = m.map_err(|e| format!("MongoDB: {e}"))?;
+        let keys = keys_display(&m.keys);
+        let (name, unique, ttl) = match m.options.as_ref() {
+            Some(o) => (
+                o.name.clone().unwrap_or_else(|| keys.clone()),
+                o.unique.unwrap_or(false),
+                o.expire_after.map(|d| d.as_secs() as i64),
+            ),
+            None => (keys.clone(), false, None),
+        };
+        out.push(IndexInfo {
+            name,
+            keys,
+            unique,
+            ttl,
+        });
+    }
+    Ok(out)
+}
+
+/// 创建索引:字段列表 + 唯一/TTL/自定义名。
+/// IndexOptions 未被 crate 公开导出,用 serde 反序列化组装 IndexModel
+/// (camelCase + expireAfterSeconds 整数秒,与 crate 自身映射一致)。
+pub async fn create_index(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    fields: &[(String, bool)],
+    unique: bool,
+    ttl_secs: Option<i64>,
+    name: Option<&str>,
+) -> Result<String, String> {
+    let db = default_db(st, database)?;
+    if fields.is_empty() {
+        return Err("索引键不能为空".into());
+    }
+    let keys = index_keys_doc(fields);
+    let mut spec = Document::new();
+    spec.insert("key", Bson::Document(keys.clone()));
+    if unique {
+        spec.insert("unique", Bson::Boolean(true));
+    }
+    if let Some(t) = ttl_secs {
+        spec.insert("expireAfterSeconds", Bson::Int64(t));
+    }
+    if let Some(n) = name.map(str::trim).filter(|s| !s.is_empty()) {
+        spec.insert("name", Bson::String(n.to_string()));
+    }
+    let model: mongodb::IndexModel =
+        mongodb::bson::de::from_document(spec).map_err(|e| format!("索引定义无效: {e}"))?;
+    st.client
+        .database(db.as_str())
+        .collection::<Document>(collection)
+        .create_index(model)
+        .await
+        .map_err(|e| format!("创建索引失败: {e}"))?;
+    Ok(name
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| keys_display(&keys)))
+}
+
+pub async fn drop_index(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    name: &str,
+) -> Result<(), String> {
+    if name == "_id_" {
+        return Err("_id 索引不可删除".into());
+    }
+    let db = default_db(st, database)?;
+    st.client
+        .database(db.as_str())
+        .collection::<Document>(collection)
+        .drop_index(name)
+        .await
+        .map_err(|e| format!("删除索引失败: {e}"))
+}
+
+// ── 批量导入(v2)────────────────────────────────────────
+
+/// JSON → 文档数组:顶层 JSON 数组(每项必须是对象)或单个对象。
+/// 纯函数,先于任何写入执行,语法/形态错误零副作用。
+pub fn parse_import_docs(json: &str) -> Result<Vec<Document>, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("不是合法 JSON: {e}"))?;
+    let items: Vec<serde_json::Value> = match v {
+        serde_json::Value::Array(a) => a,
+        obj @ serde_json::Value::Object(_) => vec![obj],
+        _ => return Err("顶层必须是 JSON 数组(每项一个文档)".into()),
+    };
+    let mut docs = Vec::with_capacity(items.len());
+    for (i, it) in items.iter().enumerate() {
+        let b = Bson::try_from(it.clone())
+            .map_err(|e| format!("第 {} 条转换失败: {e}", i + 1))?;
+        match b {
+            Bson::Document(d) => docs.push(d),
+            _ => return Err(format!("第 {} 条顶层必须是 JSON 对象", i + 1)),
+        }
+    }
+    Ok(docs)
+}
+
+/// 批量导入:解析后分 200 条一批 insert_many。
+/// 某批失败即中止并报告(已导入条数 + 失败批次范围)——不回放重试,
+/// 避免无 _id 文档在部分成功后被重复插入。
+pub async fn import_docs(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    json: &str,
+) -> Result<usize, String> {
+    let db = default_db(st, database)?;
+    let docs = parse_import_docs(json)?;
+    let coll = st
+        .client
+        .database(db.as_str())
+        .collection::<Document>(collection);
+    let mut ok = 0usize;
+    for (ci, chunk) in docs.chunks(200).enumerate() {
+        if let Err(e) = coll.insert_many(chunk.to_vec()).await {
+            let start = ci * 200 + 1;
+            let end = start + chunk.len() - 1;
+            return Err(format!("已导入 {ok} 条;第 {start}-{end} 条导入失败: {e}"));
+        }
+        ok += chunk.len();
+    }
+    Ok(ok)
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+
+    #[test]
+    fn parse_array_of_objects() {
+        let docs = parse_import_docs(r#"[{"a":1},{"b":"x"}]"#).unwrap();
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs[0].get_i32("a").ok(), Some(1));
+    }
+
+    #[test]
+    fn parse_single_object() {
+        let docs = parse_import_docs(r#"{"a":1}"#).unwrap();
+        assert_eq!(docs.len(), 1);
+    }
+
+    #[test]
+    fn reject_bad_json() {
+        assert!(parse_import_docs("{oops").is_err());
+    }
+
+    #[test]
+    fn reject_scalar_top() {
+        assert!(parse_import_docs("42").is_err());
+    }
+
+    #[test]
+    fn reject_array_of_scalars() {
+        assert!(parse_import_docs("[1,2]").is_err());
+    }
+
+    #[test]
+    fn keys_doc_and_display() {
+        let d = index_keys_doc(&[("name".into(), false), ("age".into(), true)]);
+        assert_eq!(d.get_i32("name").ok(), Some(1));
+        assert_eq!(d.get_i32("age").ok(), Some(-1));
+        assert_eq!(keys_display(&d), "name asc, age desc");
+    }
+
+    #[test]
+    fn index_model_from_spec() {
+        // 与 create_index 相同的 serde 组装路径:unique + TTL + 自定义名
+        let mut spec = Document::new();
+        spec.insert("key", Bson::Document(index_keys_doc(&[("u".into(), true)])));
+        spec.insert("unique", Bson::Boolean(true));
+        spec.insert("expireAfterSeconds", Bson::Int64(3600));
+        spec.insert("name", Bson::String("u_ttl".into()));
+        let m: mongodb::IndexModel =
+            mongodb::bson::de::from_document(spec).expect("spec 反序列化失败");
+        assert_eq!(m.keys.get_i32("u").ok(), Some(-1));
+        let o = m.options.as_ref().expect("options 缺失");
+        assert_eq!(o.unique, Some(true));
+        assert_eq!(o.expire_after, Some(std::time::Duration::from_secs(3600)));
+        assert_eq!(o.name.as_deref(), Some("u_ttl"));
+    }
+}

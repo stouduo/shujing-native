@@ -189,6 +189,82 @@ impl Service {
         }
     }
 
+    /// MongoDB:列出集合索引
+    pub async fn mongo_list_indexes(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+    ) -> Result<Vec<crate::mongo::IndexInfo>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::list_indexes(st, database, collection).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
+    /// MongoDB:创建索引(返回索引名)
+    #[allow(clippy::too_many_arguments)]
+    pub async fn mongo_create_index(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        fields: &[(String, bool)],
+        unique: bool,
+        ttl_secs: Option<i64>,
+        name: Option<&str>,
+    ) -> Result<String, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::create_index(st, database, collection, fields, unique, ttl_secs, name)
+                    .await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
+    /// MongoDB:删除索引
+    pub async fn mongo_drop_index(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        name: &str,
+    ) -> Result<(), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::drop_index(st, database, collection, name).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
+    /// MongoDB:批量导入文档(返回成功条数)
+    pub async fn mongo_import_docs(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        json: &str,
+    ) -> Result<usize, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::import_docs(st, database, collection, json).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
     /// MongoDB 集合计数(带库上下文)
     pub async fn mongo_count(
         &self,

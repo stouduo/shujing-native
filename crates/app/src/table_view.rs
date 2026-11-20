@@ -247,6 +247,12 @@ pub enum TabAction {
     MongoDeleteDoc {
         tab_id: String,
     },
+    MongoIndexes {
+        tab_id: String,
+    },
+    MongoImport {
+        tab_id: String,
+    },
     OpenAiAssist {
         tab_id: String,
         mode: u8,
@@ -1141,6 +1147,18 @@ pub(crate) fn draw_table_view(
                                 }
                                 if ui.button(ui_kit::t!("Delete Selected Documents…", "删除选中文档…")).clicked() {
                                     actions.push(TabAction::MongoDeleteDoc {
+                                        tab_id: tab_id_s.clone(),
+                                    });
+                                    ui.close_menu();
+                                }
+                                if ui.button(ui_kit::t!("Import Documents (JSON)…", "批量导入文档(JSON)…")).clicked() {
+                                    actions.push(TabAction::MongoImport {
+                                        tab_id: tab_id_s.clone(),
+                                    });
+                                    ui.close_menu();
+                                }
+                                if ui.button(ui_kit::t!("Manage Indexes…", "索引管理…")).clicked() {
+                                    actions.push(TabAction::MongoIndexes {
                                         tab_id: tab_id_s.clone(),
                                     });
                                     ui.close_menu();
@@ -4050,6 +4068,8 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             table,
         } => app.open_data_diff(&conn_id, db.as_deref(), &table),
         TabAction::MongoInsertDoc { tab_id } => app.open_mongo_insert(&tab_id),
+        TabAction::MongoIndexes { tab_id } => app.open_mongo_indexes(&tab_id),
+        TabAction::MongoImport { tab_id } => app.open_mongo_import(&tab_id),
         TabAction::MongoEditDoc { tab_id } => app.open_mongo_edit(&tab_id),
         TabAction::MongoDeleteDoc { tab_id } => {
             // 删除需确认:复用 ConfirmState(action mongo-del),expect=文档 _id
@@ -5178,6 +5198,8 @@ impl eframe::App for ShujingApp {
             || self.schema_diff.is_some()
             || self.ai_assist.is_some()
             || self.mongo_doc.is_some()
+            || self.mongo_indexes.is_some()
+            || self.mongo_import.is_some()
             || self.transfer.is_some()
             || self.data_diff.is_some()
             || self
@@ -5455,6 +5477,8 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_schema_diff_modal(self, ctx);
         crate::modals::draw_ai_modal(self, ctx);
         crate::modals::draw_mongo_doc_modal(self, ctx);
+        crate::modals::draw_mongo_indexes_modal(self, ctx);
+        crate::modals::draw_mongo_import_modal(self, ctx);
         crate::modals::draw_transfer_modal(self, ctx);
         crate::modals::draw_data_diff_modal(self, ctx);
         crate::modals::draw_conn_crypto_modal(self, ctx);

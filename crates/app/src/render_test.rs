@@ -158,6 +158,8 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         ai_config: Default::default(),
         ai_assist: None,
         mongo_doc: None,
+        mongo_indexes: None,
+        mongo_import: None,
         transfer: None,
         data_diff: None,
         conn_crypto: None,
@@ -536,6 +538,68 @@ fn render_english_mode() {
     });
     ui_kit::i18n::set_english(false);
     assert_eq!(ui_kit::i18n::t("Tables", "表"), "表");
+}
+
+#[test]
+fn render_mongo_v2_modals() {
+    // 1) 索引管理:3 条索引(含 _id_ 不可删/TTL)+ 两条创建键行
+    let mut app = test_app(vec![], 0);
+    app.mongo_indexes = Some(crate::app::MongoIndexState {
+        conn_id: "c1".into(),
+        db: Some("dramato".into()),
+        collection: "users".into(),
+        items: vec![
+            shujing_core::mongo::IndexInfo {
+                name: "_id_".into(),
+                keys: "_id asc".into(),
+                unique: true,
+                ttl: None,
+            },
+            shujing_core::mongo::IndexInfo {
+                name: "email_unique".into(),
+                keys: "email asc".into(),
+                unique: true,
+                ttl: None,
+            },
+            shujing_core::mongo::IndexInfo {
+                name: "created_ttl".into(),
+                keys: "created_at asc".into(),
+                unique: false,
+                ttl: Some(86400),
+            },
+        ],
+        running: false,
+        error: None,
+        rows: vec![("user_id".into(), false), ("created_at".into(), true)],
+        unique: false,
+        ttl: "2592000".into(),
+        name: String::new(),
+        busy: false,
+        drop_arm: None,
+    });
+    let app = std::cell::RefCell::new(app);
+    render("modal_mongo_indexes", 900.0, 720.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_mongo_indexes_modal(&mut b, ctx);
+    });
+
+    // 2) 批量导入:预填 JSON 数组
+    let mut app = test_app(vec![], 0);
+    app.mongo_import = Some(crate::app::MongoImportState {
+        conn_id: "c1".into(),
+        db: Some("dramato".into()),
+        collection: "users".into(),
+        json: "[\n  {\"name\": \"张三\", \"age\": 28},\n  {\"name\": \"李四\", \"tags\": [\"vip\"]}\n]".into(),
+        running: false,
+        error: None,
+    });
+    let app = std::cell::RefCell::new(app);
+    render("modal_mongo_import", 900.0, 720.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_mongo_import_modal(&mut b, ctx);
+    });
 }
 
 #[test]
