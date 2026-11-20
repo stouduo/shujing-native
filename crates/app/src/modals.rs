@@ -1460,6 +1460,69 @@ pub fn draw_mongo_indexes_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 }
 
+/// 「结果存为新表」命名弹窗(查询结果集 → CREATE TABLE + INSERT)
+pub fn draw_save_result_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.save_result_modal.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut commit = false;
+    let modal = egui::Modal::new(egui::Id::new("save-result-table"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(420.0);
+            let Some((_, name)) = app.save_result_modal.as_mut() else {
+                return;
+            };
+            theme::modal_title(ui, ui_kit::t!("Save Result as New Table", "结果存为新表"));
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "Creates the table with inferred column types and inserts all rows",
+                    "按推断的列类型建表并写入全部数据行"
+                ))
+                .size(10.5)
+                .color(p.muted),
+            );
+            ui.add_space(6.0);
+            theme::form_field(
+                ui,
+                ui_kit::t!("Table name", "表名"),
+                "save-result-table-name",
+                name,
+                380.0,
+                false,
+            );
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "Letters/digits/underscore only, must not start with a digit",
+                    "仅限字母/数字/下划线,不能以数字开头"
+                ))
+                .size(10.5)
+                .color(p.muted),
+            );
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, ui_kit::t!("Create", "创建"), theme::BtnKind::Primary).clicked()
+                {
+                    commit = true;
+                }
+                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
+                    close = true;
+                }
+            });
+        });
+    if close || modal.should_close() {
+        app.save_result_modal = None;
+    }
+    if commit {
+        let (tab_id, name) = app.save_result_modal.clone().unwrap_or_default();
+        app.save_result_as_table_commit(&tab_id, &name);
+    }
+}
+
 /// Mongo 批量导入弹窗(粘贴/文件读入 JSON 数组)
 pub fn draw_mongo_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.mongo_import.is_none() {

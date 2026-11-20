@@ -170,6 +170,23 @@ pub fn draw_query_view(
                             tab_id: tab_id.to_string(),
                         });
                     }
+                    let sat = theme::button(
+                        ui,
+                        ui_kit::t!("Save as Table", "存为新表"),
+                        theme::BtnKind::Secondary,
+                    );
+                    let sat_clicked = sat.clicked();
+                    if !has_grid {
+                        sat.on_disabled_hover_text(ui_kit::t!(
+                            "Nothing to export in this result set (no grid)",
+                            "当前结果集不可导出(无表格)"
+                        ));
+                    }
+                    if has_grid && sat_clicked {
+                        actions.push(TabAction::SaveResultAsTableOpen {
+                            tab_id: tab_id.to_string(),
+                        });
+                    }
                     if !is_redis {
                         let ai = theme::button(ui, "AI", theme::BtnKind::Secondary);
                         let ai_clicked = ai.clicked();

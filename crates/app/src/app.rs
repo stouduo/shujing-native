@@ -1105,6 +1105,8 @@ pub struct ShujingApp {
     /// Mongo 文档编辑弹窗
     pub mongo_doc: Option<MongoDocState>,
     pub mongo_indexes: Option<MongoIndexState>,
+    /// 查询结果存为新表:命名弹窗(tab_id, 表名草稿)
+    pub save_result_modal: Option<(String, String)>,
     pub mongo_import: Option<MongoImportState>,
     /// 数据传输弹窗
     pub transfer: Option<TransferState>,
@@ -1227,6 +1229,7 @@ impl ShujingApp {
             ai_assist: None,
             mongo_doc: None,
             mongo_indexes: None,
+            save_result_modal: None,
             mongo_import: None,
             transfer: None,
             data_diff: None,
@@ -1569,6 +1572,63 @@ impl ShujingApp {
 
     pub fn toast_error(&mut self, msg: impl Into<String>) {
         self.error_toast = Some((msg.into(), std::time::Instant::now()));
+    }
+
+    /// 确认「结果存为新表」:表名白名单校验后建表+写入
+    pub fn save_result_as_table_commit(&mut self, tab_id: &str, name: &str) {
+        let name = name.trim().to_string();
+        let valid = !name.is_empty()
+            && !name.chars().next().unwrap().is_ascii_digit()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        if !valid {
+            self.toast_error(
+                ui_kit::t!(
+                    "Table name: letters/digits/underscore only, must not start with a digit",
+                    "表名仅限字母/数字/下划线,且不能以数字开头"
+                )
+                .to_string(),
+            );
+            return;
+        }
+        let Some((tid, _)) = self.save_result_modal.clone() else {
+            return;
+        };
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tid) else {
+            return;
+        };
+        let crate::app::TabKind::Query(q) = &tab.kind else {
+            return;
+        };
+        let Some(r) = q.results.get(q.active_set) else {
+            return;
+        };
+        if r.columns.is_empty() || r.rows.is_empty() {
+            self.toast_error(ui_kit::t!("Result set is empty", "结果集为空").to_string());
+            return;
+        }
+        let conn_id = q.conn_id.clone();
+        let database = q.database.clone();
+        let columns = r.columns.clone();
+        let rows = r.rows.clone();
+        self.save_result_modal = None;
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = service
+                .save_result_as_table(&conn_id, database.as_deref(), &name, &columns, &rows)
+                .await
+                .map(|n| {
+                    format!(
+                        "{} {name} · {} {n} {}",
+                        ui_kit::t!("Created table", "已建表"),
+                        ui_kit::t!("inserted", "写入"),
+                        ui_kit::t!("rows", "行")
+                    )
+                });
+            let _ = tx.send(BgEvent::ExportDone { result });
+        });
     }
 
     /// Mongo:导出集合文档为 JSON 文件(弹保存框,上限 5 万条)

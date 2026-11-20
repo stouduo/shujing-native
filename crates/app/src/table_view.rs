@@ -257,6 +257,15 @@ pub enum TabAction {
     ExportQueryJson {
         tab_id: String,
     },
+    /// 打开「结果存为新表」命名弹窗
+    SaveResultAsTableOpen {
+        tab_id: String,
+    },
+    /// 确认建表并写入
+    SaveResultAsTableCommit {
+        tab_id: String,
+        name: String,
+    },
     /// Mongo:导出集合文档为 JSON 文件
     MongoExportJson {
         tab_id: String,
@@ -4576,6 +4585,12 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                 let _ = tx.send(BgEvent::ExportDone { result });
             });
         }
+        TabAction::SaveResultAsTableOpen { tab_id } => {
+            app.save_result_modal = Some((tab_id, String::new()));
+        }
+        TabAction::SaveResultAsTableCommit { tab_id, name } => {
+            app.save_result_as_table_commit(&tab_id, &name);
+        }
         TabAction::ExportQueryJson { tab_id } => {
             let Some(tab) = app.tabs.iter().find(|t| t.id == tab_id) else {
                 return;
@@ -5270,6 +5285,8 @@ impl eframe::App for ShujingApp {
             || self.mongo_doc.is_some()
             || self.mongo_indexes.is_some()
             || self.mongo_import.is_some()
+            || self.save_result_modal.is_some()
+            || self.save_result_modal.is_some()
             || self.transfer.is_some()
             || self.data_diff.is_some()
             || self
@@ -5549,6 +5566,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_mongo_doc_modal(self, ctx);
         crate::modals::draw_mongo_indexes_modal(self, ctx);
         crate::modals::draw_mongo_import_modal(self, ctx);
+        crate::modals::draw_save_result_modal(self, ctx);
         crate::modals::draw_transfer_modal(self, ctx);
         crate::modals::draw_data_diff_modal(self, ctx);
         crate::modals::draw_conn_crypto_modal(self, ctx);

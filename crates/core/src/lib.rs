@@ -36,6 +36,143 @@ pub use model::{
 use model::CancelState;
 use std::path::PathBuf;
 
+/// 列值集合 → 建表列类型(方言无关的语义档位)
+fn infer_column_type<'a>(vals: impl Iterator<Item = Option<&'a str>>) -> &'static str {
+    let mut seen = false;
+    let mut int_ok = true;
+    let mut float_ok = true;
+    let mut bool_ok = true;
+    for v in vals {
+        let Some(s) = v else { continue };
+        seen = true;
+        let t = s.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.parse::<i64>().is_err() {
+            int_ok = false;
+        }
+        if t.parse::<f64>().is_err() {
+            float_ok = false;
+        }
+        if !matches!(t, "true" | "false") {
+            bool_ok = false;
+        }
+        if !int_ok && !float_ok && !bool_ok {
+            return "TEXT";
+        }
+    }
+    if !seen {
+        "TEXT"
+    } else if int_ok {
+        "BIGINT"
+    } else if bool_ok {
+        "BOOLEAN"
+    } else if float_ok {
+        "DOUBLE"
+    } else {
+        "TEXT"
+    }
+}
+
+/// 结果集建表语句:CREATE TABLE(推断类型)+ 分批 INSERT(200/批)
+/// ClickHouse 引擎语法不同,Redis/Mongo/MSSQL 无 SQL 表——调用方拒绝;
+/// 表名做方言引注,值走 edits::literal 转义。MySQL/PG 带库限定,SQLite 单文件不带
+pub fn build_save_table_stmts(
+    info: &ConnInfo,
+    database: Option<&str>,
+    table: &str,
+    columns: &[String],
+    rows: &[Vec<Option<String>>],
+) -> Result<Vec<String>, String> {
+    use crate::model::DbType;
+    if columns.is_empty() {
+        return Err("结果集没有列".into());
+    }
+    if rows.is_empty() {
+        return Err("结果集没有数据行".into());
+    }
+    match info.db_type {
+        DbType::Redis | DbType::Mongo | DbType::Mssql | DbType::ClickHouse => {
+            return Err("该数据库类型暂不支持结果存为新表".into());
+        }
+        _ => {}
+    }
+    let mysql = matches!(info.db_type, DbType::MySql | DbType::ClickHouse);
+    let q = |s: &str| crate::edits::quote(s, mysql);
+    let table_full = match info.db_type {
+        DbType::Postgres => q(table),
+        _ => match database.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(db) => format!("{}.{}", q(db), q(table)),
+            None => q(table),
+        },
+    };
+    // 列类型:按列收集非空值推断
+    let mut types = Vec::with_capacity(columns.len());
+    for (ci, _c) in columns.iter().enumerate() {
+        let refs: Vec<Option<&str>> = rows
+            .iter()
+            .map(|r| r.get(ci).and_then(|v| v.as_deref()))
+            .collect();
+        types.push(infer_column_type(refs.into_iter()));
+    }
+    let cols_def: Vec<String> = columns
+        .iter()
+        .zip(&types)
+        .map(|(c, t)| format!("{} {}", q(c), dialect_type(t, &info.db_type)))
+        .collect();
+    let mut stmts = vec![format!(
+        "CREATE TABLE {} ({})",
+        table_full,
+        cols_def.join(", ")
+    )];
+    const BATCH: usize = 200;
+    let col_list = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+    for chunk in rows.chunks(BATCH) {
+        let values: Vec<String> = chunk
+            .iter()
+            .map(|row| {
+                let vals: Vec<String> = columns
+                    .iter()
+                    .enumerate()
+                    .map(|(ci, _)| {
+                        row.get(ci)
+                            .and_then(|v| v.as_deref())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| crate::edits::literal(s, mysql))
+                            .unwrap_or_else(|| "NULL".into())
+                    })
+                    .collect();
+                format!("({})", vals.join(", "))
+            })
+            .collect();
+        stmts.push(format!(
+            "INSERT INTO {} ({}) VALUES {}",
+            table_full,
+            col_list,
+            values.join(",")
+        ));
+    }
+    Ok(stmts)
+}
+
+/// 语义档位 → 方言类型名(BOOLEAN 在 SQLite 是 NUMERIC 别名,直接可用)
+fn dialect_type(t: &str, db_type: &DbType) -> String {
+    match t {
+        "BIGINT" => "BIGINT".into(),
+        "BOOLEAN" => match db_type {
+            DbType::MySql => "TINYINT(1)".into(),
+            _ => "BOOLEAN".into(),
+        },
+        "DOUBLE" => match db_type {
+            DbType::MySql => "DOUBLE".into(),
+            DbType::Sqlite => "REAL".into(),
+            _ => "DOUBLE PRECISION".into(),
+        },
+        _ => "TEXT".into(),
+    }
+}
+
 /// 顶层服务:持有连接状态与配置目录(等价于 Tauri 版的 AppState + AppHandle)
 pub struct Service {
     pub state: AppState,
@@ -303,6 +440,36 @@ impl Service {
             }
             _ => Err("非 MongoDB 连接".into()),
         }
+    }
+
+    /// 查询结果集保存为新表:类型推断建表 + 分批 INSERT(MySQL/PG/SQLite;
+    /// ClickHouse 引擎语法不同暂不支持)。返回写入行数
+    pub async fn save_result_as_table(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        table: &str,
+        columns: &[String],
+        rows: &[Vec<Option<String>>],
+    ) -> Result<u64, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        let info = guard.info.clone();
+        if guard.info.read_only {
+            return Err("只读连接不允许建表".into());
+        }
+        let stmts = build_save_table_stmts(&info, database, table, columns, rows)?;
+        // 走通用执行臂(复用 run_sql 的事务/方言处理),最后一条 INSERT 影响行数累加
+        let mut affected_total = 0u64;
+        for s in &stmts {
+            let rs = guard.backend.run_sql(s, 1, None).await?;
+            if let Some(r) = rs.first() {
+                if r.affected > 0 {
+                    affected_total += r.affected;
+                }
+            }
+        }
+        Ok(affected_total)
     }
 
     /// MongoDB:导出集合文档为 JSON 数组文本
@@ -1099,6 +1266,102 @@ impl Service {
         let mut guard = live.lock().await;
         let info = guard.info.clone();
         redis_ops::run_command(&mut guard.backend, &info, command).await
+    }
+}
+
+#[cfg(test)]
+mod save_table_tests {
+    use super::*;
+
+    fn info(db_type: DbType) -> ConnInfo {
+        ConnInfo {
+            id: "c".into(),
+            name: "c".into(),
+            db_type,
+            host: None,
+            port: None,
+            user: None,
+            password: None,
+            database: Some("d1".into()),
+            file_path: None,
+            color: None,
+            read_only: false,
+            ssh: None,
+        }
+    }
+
+    #[test]
+    fn type_inference() {
+        let vals = || [Some("1"), Some("2"), None].into_iter();
+        assert_eq!(infer_column_type(vals()), "BIGINT");
+        let vals = || [Some("1.5"), Some("2"), None].into_iter();
+        assert_eq!(infer_column_type(vals()), "DOUBLE");
+        let vals = || [Some("true"), Some("false")].into_iter();
+        assert_eq!(infer_column_type(vals()), "BOOLEAN");
+        let vals = || [Some("张三"), Some("2")].into_iter();
+        assert_eq!(infer_column_type(vals()), "TEXT");
+        let vals = || [None, None].into_iter();
+        assert_eq!(infer_column_type(vals()), "TEXT");
+    }
+
+    #[test]
+    fn mysql_stmts_qualified_and_escaped() {
+        let info = info(DbType::MySql);
+        let stmts = build_save_table_stmts(
+            &info,
+            Some("d1"),
+            "new_t",
+            &["name".into(), "age".into()],
+            &[vec![Some("张三".into()), Some("28".into())]],
+        )
+        .unwrap();
+        assert_eq!(
+            stmts[0],
+            "CREATE TABLE `d1`.`new_t` (`name` TEXT, `age` BIGINT)"
+        );
+        assert!(stmts[1]
+            .starts_with("INSERT INTO `d1`.`new_t` (`name`, `age`) VALUES ('张三', '28')"));
+    }
+
+    #[test]
+    fn pg_ignores_db_qualifier_and_double_precision() {
+        let info = info(DbType::Postgres);
+        let stmts = build_save_table_stmts(
+            &info,
+            Some("e2e_a"),
+            "new_t",
+            &["score".into()],
+            &[vec![Some("91.5".into())]],
+        )
+        .unwrap();
+        assert_eq!(
+            stmts[0],
+            "CREATE TABLE \"new_t\" (\"score\" DOUBLE PRECISION)"
+        );
+    }
+
+    #[test]
+    fn unsupported_and_empty_rejected() {
+        let c = info(DbType::ClickHouse);
+        assert!(build_save_table_stmts(&c, None, "t", &["a".into()], &[vec![Some("1".into())]]).is_err());
+        let m = info(DbType::MySql);
+        assert!(build_save_table_stmts(&m, None, "t", &[], &[vec![]]).is_err());
+        assert!(build_save_table_stmts(&m, None, "t", &["a".into()], &[]).is_err());
+    }
+
+    #[test]
+    fn null_and_empty_string_become_null() {
+        let info = info(DbType::Sqlite);
+        let stmts = build_save_table_stmts(
+            &info,
+            None,
+            "t",
+            &["a".into()],
+            &[vec![None], vec![Some("".into())]],
+        )
+        .unwrap();
+        assert!(stmts[1].contains("(NULL)"));
+        assert_eq!(stmts.len(), 2);
     }
 }
 
