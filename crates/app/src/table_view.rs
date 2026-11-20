@@ -230,6 +230,9 @@ pub enum TabAction {
         db: Option<String>,
         table: String,
     },
+    RedisBatchDelete {
+        tab_id: String,
+    },
     OpenDataDiff {
         conn_id: String,
         db: Option<String>,
@@ -3864,6 +3867,7 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             db,
             table,
         } => app.open_transfer(&conn_id, db.as_deref(), &table),
+        TabAction::RedisBatchDelete { tab_id } => app.open_redis_batch_delete(&tab_id),
         TabAction::OpenDataDiff {
             conn_id,
             db,
@@ -5175,6 +5179,8 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_mongo_doc_modal(self, ctx);
         crate::modals::draw_transfer_modal(self, ctx);
         crate::modals::draw_data_diff_modal(self, ctx);
+        crate::modals::draw_conn_crypto_modal(self, ctx);
+        crate::modals::draw_redis_batch_modal(self, ctx);
 
         if self.conn_modal.is_none() && std::env::var("SHUJING_OPEN_CONN").is_ok() {
             self.conn_modal = Some(ConnModal::new());

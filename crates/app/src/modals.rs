@@ -1166,6 +1166,150 @@ pub fn draw_mongo_doc_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 }
 
+/// 连接备份口令弹窗(导出=输入+确认;导入=单口令)
+pub fn draw_conn_crypto_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.conn_crypto.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut run = false;
+    let modal = egui::Modal::new(egui::Id::new("conn-crypto"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(460.0);
+            let Some(st) = app.conn_crypto.as_mut() else { return };
+            let title = if st.export {
+                "导出连接(加密备份)"
+            } else {
+                "导入连接(加密备份)"
+            };
+            theme::modal_title(ui, title);
+            ui.label(
+                RichText::new(if st.export {
+                    "备份含全部连接与明文密码,用下方口令 AES-256-GCM 加密;口令丢失不可解"
+                        .to_string()
+                } else {
+                    "输入导出时设置的口令;同名同类型连接跳过".to_string()
+                })
+                .size(11.0)
+                .color(p.muted),
+            );
+            ui.add_space(6.0);
+            theme::form_field(
+                ui,
+                "口令(至少 8 位)",
+                "cc-pass",
+                &mut st.passphrase,
+                440.0,
+                true,
+            );
+            if st.export {
+                theme::form_field(ui, "确认口令", "cc-confirm", &mut st.confirm, 440.0, true);
+            }
+            if let Some(err) = &st.error {
+                ui.add_space(4.0);
+                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, if st.export { "导出" } else { "导入" }, theme::BtnKind::Primary)
+                    .clicked()
+                {
+                    run = true;
+                }
+                if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if run {
+        app.run_conn_crypto();
+    }
+    if close || modal.should_close() {
+        app.conn_crypto = None;
+        app.pending_crypto_path = None;
+    }
+}
+
+/// Redis 批量删除弹窗:pattern 预填 → 计数 → 确认删除
+pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.redis_batch_del.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut count = false;
+    let mut del = false;
+    let modal = egui::Modal::new(egui::Id::new("redis-batch"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(520.0);
+            let Some(st) = app.redis_batch_del.as_mut() else { return };
+            theme::modal_title(ui, &format!("批量删除 key · db{}", st.db));
+            ui.label(
+                RichText::new(format!(
+                    "pattern: {}(SCAN 全量游标,上限 1 万)",
+                    st.pattern
+                ))
+                .size(11.5)
+                .color(p.muted),
+            );
+            ui.add_space(4.0);
+            if st.deleting {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(12.0).color(p.muted));
+                    ui.label(RichText::new("删除中…").size(12.0).color(p.muted));
+                });
+            } else if let Some(n) = st.counted {
+                ui.label(
+                    RichText::new(format!(
+                        "将删除 {n} 个 key,不可恢复!输入 pattern 确认:"
+                    ))
+                    .size(12.0)
+                    .color(DIFF_ORANGE),
+                );
+                let mut v = n.to_string();
+                let resp = ui.add_sized(
+                    [200.0, 26.0],
+                    egui::TextEdit::singleline(&mut v).font(theme::mono(12.0)),
+                );
+                let _ = resp;
+                if v == n.to_string() {
+                    if theme::button(ui, "确认删除", theme::BtnKind::Danger).clicked() {
+                        del = true;
+                    }
+                } else {
+                    ui.label(RichText::new("输入匹配数量后才能删除").size(10.5).color(p.muted));
+                }
+            } else {
+                if theme::button(ui, "先计数", theme::BtnKind::Secondary).clicked() {
+                    count = true;
+                }
+                ui.label(RichText::new("先看会删掉多少再决定").size(10.5).color(p.muted));
+            }
+            if let Some(err) = &st.error {
+                ui.add_space(4.0);
+                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, "关闭", theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if count {
+        app.run_redis_batch_count();
+    }
+    if del {
+        app.run_redis_batch_delete();
+    }
+    if close || modal.should_close() {
+        app.redis_batch_del = None;
+    }
+}
+
 /// 数据传输弹窗(同类型连接;建表+分批搬运)
 pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.transfer.is_none() {

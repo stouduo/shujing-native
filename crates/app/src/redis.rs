@@ -100,6 +100,14 @@ pub fn draw_redis_view(
                         lines: String::new(),
                     });
                 }
+                let batch = theme::button(ui, "批量删", theme::BtnKind::Secondary);
+                let batch_clicked = batch.clicked();
+                batch.on_hover_text("按当前 pattern 批量删除 key(SCAN 全量,上限 1 万;先计数确认)");
+                if batch_clicked {
+                    actions.push(TabAction::RedisBatchDelete {
+                        tab_id: tab_id.to_string(),
+                    });
+                }
                 if theme::button(ui, "分析", theme::BtnKind::Secondary).clicked() {
                     rt.analyze = Some(crate::app::RedisAnalyzeState {
                         mode: 0,

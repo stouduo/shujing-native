@@ -404,6 +404,71 @@ pub async fn set_ttl(backend: &mut Backend, db: u8, key: &str, seconds: i64) -> 
     Ok(())
 }
 
+/// 按模式批量删除:SCAN 全量游标循环 + DEL,单次上限 10000 键。
+/// 只读连接在上层被 is_readonly_redis 拦截(DEL 不在白名单)。
+/// 按模式 SCAN 计数(不删;上限 10 万防大 keyspace 拖死)
+pub async fn scan_count(
+    backend: &mut Backend,
+    db: u8,
+    pattern: &str,
+) -> Result<u64, String> {
+    let mut con = get_con(backend).await?;
+    redis::cmd("SELECT").arg(db).query_async::<()>(&mut con).await.map_err(es)?;
+    let mut cursor: u64 = 0;
+    let mut n: u64 = 0;
+    loop {
+        let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(pattern)
+            .arg("COUNT")
+            .arg(500)
+            .query_async(&mut con)
+            .await
+            .map_err(es)?;
+        n += keys.len() as u64;
+        cursor = next;
+        if cursor == 0 || n >= 100_000 {
+            break;
+        }
+    }
+    Ok(n)
+}
+
+pub async fn delete_by_pattern(
+    backend: &mut Backend,
+    db: u8,
+    pattern: &str,
+) -> Result<u64, String> {
+    let mut con = get_con(backend).await?;
+    redis::cmd("SELECT").arg(db).query_async::<()>(&mut con).await.map_err(es)?;
+    let mut cursor: u64 = 0;
+    let mut deleted: u64 = 0;
+    loop {
+        let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(pattern)
+            .arg("COUNT")
+            .arg(500)
+            .query_async(&mut con)
+            .await
+            .map_err(es)?;
+        if !keys.is_empty() {
+            deleted += redis::cmd("DEL")
+                .arg(&keys)
+                .query_async::<u64>(&mut con)
+                .await
+                .map_err(es)?;
+        }
+        cursor = next;
+        if cursor == 0 || deleted >= 10000 {
+            break;
+        }
+    }
+    Ok(deleted)
+}
+
 pub async fn rename(backend: &mut Backend, db: u8, key: &str, new_key: &str) -> Result<(), String> {
     let mut con = get_con(backend).await?;
     redis::cmd("SELECT").arg(db).query_async::<()>(&mut con).await.map_err(es)?;

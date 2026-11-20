@@ -10,6 +10,7 @@ pub mod excel;
 pub mod exec;
 mod model;
 pub mod redis_ops;
+pub mod config_crypto;
 pub mod conn_import;
 pub mod mongo;
 pub mod parquet_preview;
@@ -78,6 +79,40 @@ impl Service {
         conns.retain(|c| c.id != id);
         store::save_conns(&self.config_dir, &conns)?;
         Ok(conns)
+    }
+
+    /// Redis:按模式批量删除(上限 10000)
+    pub async fn redis_delete_by_pattern(
+        &self,
+        id: &str,
+        db: u8,
+        pattern: &str,
+    ) -> Result<u64, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match guard.backend {
+            crate::model::Backend::Redis(_) => {
+                crate::redis_ops::delete_by_pattern(&mut guard.backend, db, pattern).await
+            }
+            _ => Err("非 Redis 连接".into()),
+        }
+    }
+
+    /// Redis:按模式 SCAN 计数(不删)
+    pub async fn redis_scan_count(
+        &self,
+        id: &str,
+        db: u8,
+        pattern: &str,
+    ) -> Result<u64, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match guard.backend {
+            crate::model::Backend::Redis(_) => {
+                crate::redis_ops::scan_count(&mut guard.backend, db, pattern).await
+            }
+            _ => Err("非 Redis 连接".into()),
+        }
     }
 
     /// MongoDB:按 _id 取文档(pretty JSON,编辑器预填)

@@ -161,6 +161,31 @@ pub async fn connect(
         }
         DbType::Mongo => {
             let host = req(&info.host, "缺少 MongoDB 主机地址")?;
+            // 主机栏直接粘完整连接串(含 Atlas 的 mongodb+srv://)即 URL 模式
+            if host.starts_with("mongodb://") || host.starts_with("mongodb+srv://") {
+                let client = mongodb::Client::with_uri_str(host)
+                    .await
+                    .map_err(|e| format!("MongoDB 连接失败: {e}"))?;
+                tokio::time::timeout(
+                    Duration::from_secs(8),
+                    client
+                        .database("admin")
+                        .run_command(mongodb::bson::doc! { "ping": 1 }),
+                )
+                .await
+                .map_err(|_| "MongoDB 连接超时(8s)".to_string())?
+                .map_err(|e| format!("MongoDB 连接失败: {e}"))?;
+                return Ok(Backend::Mongo(crate::model::MongoState {
+                    client,
+                    cur_db: tokio::sync::Mutex::new(
+                        info.database
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string),
+                    ),
+                }));
+            }
             let port = info.port.unwrap_or(27017);
             let mut url = match (&info.user, &info.password) {
                 (Some(u), Some(p)) => format!(

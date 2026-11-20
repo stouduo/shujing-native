@@ -102,7 +102,38 @@ impl ShujingApp {
                                 .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-import-conns"), true));
                             ui.close_menu();
                         }
+                        if ui.button("导出连接(加密备份)…").clicked() {
+                            ui.ctx()
+                                .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-export-enc"), true));
+                            ui.close_menu();
+                        }
+                        if ui.button("导入连接(加密备份)…").clicked() {
+                            ui.ctx()
+                                .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-import-enc"), true));
+                            ui.close_menu();
+                        }
                     });
+                    for (temp_key, method) in [
+                        ("sidebar-import-conns", 0u8),
+                        ("sidebar-export-enc", 1u8),
+                        ("sidebar-import-enc", 2u8),
+                    ] {
+                        let hit = ui.ctx().memory(|m| {
+                            m.data
+                                .get_temp::<bool>(egui::Id::new(temp_key))
+                                .unwrap_or(false)
+                        });
+                        if hit {
+                            ui.ctx().memory_mut(|m| {
+                                m.data.remove_temp::<bool>(egui::Id::new(temp_key))
+                            });
+                            match method {
+                                0 => self.import_connections_file(),
+                                1 => self.export_connections_encrypted(),
+                                _ => self.import_connections_encrypted(),
+                            }
+                        }
+                    }
                     if ui
                         .ctx()
                         .memory(|m| {

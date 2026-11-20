@@ -174,3 +174,108 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// CSV/JSON 文件预览(与 Parquet 同结构;row_groups=0)
+pub fn preview_csv(path: &std::path::Path, max_rows: usize) -> Result<ParquetPreview, String> {
+    let (headers, all) = crate::composite::parse_csv(
+        path.to_str().ok_or("路径含非 UTF-8 字符")?,
+    )?;
+    let total = all.len() as i64;
+    let rows: Vec<Vec<Option<String>>> = all
+        .into_iter()
+        .take(max_rows)
+        .map(|r| r.into_iter().map(Some).collect())
+        .collect();
+    let truncated = rows.len() < total as usize;
+    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    Ok(ParquetPreview {
+        columns: headers,
+        rows,
+        total_rows: total,
+        row_groups: 0,
+        file_size,
+        truncated,
+    })
+}
+
+/// JSON 文件预览:对象数组展平(顶层键并集)/对象转键值两列/标量数组单列
+pub fn preview_json(path: &std::path::Path, max_rows: usize) -> Result<ParquetPreview, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("读取失败: {e}"))?;
+    let file_size = text.len() as u64;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("JSON 解析失败: {e}"))?;
+    fn cell(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                Some(serde_json::to_string(v).unwrap_or_default())
+            }
+            other => Some(other.to_string()),
+        }
+    }
+    let (columns, rows): (Vec<String>, Vec<Vec<Option<String>>>) = match v {
+        serde_json::Value::Array(items) => {
+            let mut cols: Vec<String> = Vec::new();
+            for it in &items {
+                if let serde_json::Value::Object(o) = it {
+                    for k in o.keys() {
+                        if !cols.contains(k) {
+                            cols.push(k.clone());
+                        }
+                    }
+                }
+            }
+            if cols.is_empty() {
+                (
+                    vec!["value".into()],
+                    items.iter().map(|it| vec![cell(it)]).collect(),
+                )
+            } else {
+                let rows = items
+                    .iter()
+                    .map(|it| match it {
+                        serde_json::Value::Object(o) => {
+                            cols.iter().map(|c| o.get(c).and_then(cell)).collect()
+                        }
+                        other => vec![cell(other)],
+                    })
+                    .collect();
+                (cols, rows)
+            }
+        }
+        serde_json::Value::Object(o) => (
+            vec!["key".into(), "value".into()],
+            o.into_iter()
+                .map(|(k, v)| vec![Some(k), cell(&v)])
+                .collect(),
+        ),
+        _ => return Err("JSON 顶层应是数组或对象".into()),
+    };
+    let total = rows.len() as i64;
+    let rows: Vec<Vec<Option<String>>> = rows.into_iter().take(max_rows).collect();
+    let truncated = rows.len() < total as usize;
+    Ok(ParquetPreview {
+        columns,
+        rows,
+        total_rows: total,
+        row_groups: 0,
+        file_size,
+        truncated,
+    })
+}
+
+/// 按扩展名分发(拖拽与菜单共用)
+pub fn preview_data_file(path: &std::path::Path, max_rows: usize) -> Result<ParquetPreview, String> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .as_deref()
+    {
+        Some("parquet") => preview(path, max_rows),
+        Some("csv") | Some("tsv") => preview_csv(path, max_rows),
+        Some("json") | Some("ndjson") => preview_json(path, max_rows),
+        other => Err(format!("不支持的文件类型: {:?}(支持 parquet/csv/tsv/json)", other)),
+    }
+}

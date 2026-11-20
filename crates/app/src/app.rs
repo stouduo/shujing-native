@@ -69,6 +69,11 @@ enum SessionTab {
 }
 
 pub enum BgEvent {
+    RedisBatchDone {
+        is_delete: bool,
+        count: Option<u64>,
+        error: Option<String>,
+    },
     TransferDone {
         result: Result<(u64, u64), String>,
     },
@@ -639,6 +644,26 @@ pub struct DataDiffState {
     pub error: Option<String>,
 }
 
+/// 连接备份口令弹窗(导出=加密生成文件;导入=解密合并)
+pub struct ConnCryptoState {
+    /// true=导出 / false=导入
+    pub export: bool,
+    pub passphrase: String,
+    pub confirm: String,
+    pub error: Option<String>,
+}
+
+/// Redis 批量删除状态(pattern + 计数确认)
+pub struct RedisBatchDeleteState {
+    pub conn_id: String,
+    pub db: u8,
+    pub pattern: String,
+    /// SCAN 计数结果(Some=已计数,待确认删除)
+    pub counted: Option<u64>,
+    pub deleting: bool,
+    pub error: Option<String>,
+}
+
 /// Mongo 文档编辑弹窗(插入/编辑;删除走确认框)
 pub struct MongoDocState {
     pub conn_id: String,
@@ -1010,6 +1035,12 @@ pub struct ShujingApp {
     pub transfer: Option<TransferState>,
     /// 数据对比弹窗
     pub data_diff: Option<DataDiffState>,
+    /// 连接备份口令弹窗
+    pub conn_crypto: Option<ConnCryptoState>,
+    /// 待写盘路径(口令确认后用)
+    pub pending_crypto_path: Option<String>,
+    /// Redis 批量删除弹窗
+    pub redis_batch_del: Option<RedisBatchDeleteState>,
     /// 结构对比(源表来自右键,目标可跨连接)
     pub schema_diff: Option<SchemaDiffState>,
     /// 库筛选弹窗(每连接勾选显示哪些库)
@@ -1113,6 +1144,9 @@ impl ShujingApp {
             mongo_doc: None,
             transfer: None,
             data_diff: None,
+            conn_crypto: None,
+            pending_crypto_path: None,
+            redis_batch_del: None,
             schema_diff: None,
             db_filter: None,
             theme_toggle_requested: false,
@@ -2496,6 +2530,177 @@ impl ShujingApp {
         });
     }
 
+    /// 导出连接(加密备份):选路径 → 口令弹窗 → AES-GCM 写文件
+    pub fn export_connections_encrypted(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("shujing-connections.sjenc")
+            .add_filter("数镜加密备份", &["sjenc"])
+            .save_file()
+        else {
+            return;
+        };
+        self.conn_crypto = Some(ConnCryptoState {
+            export: true,
+            passphrase: String::new(),
+            confirm: String::new(),
+            error: None,
+        });
+        self.pending_crypto_path = Some(path.display().to_string());
+    }
+
+    /// 导入连接(加密备份):选路径 → 口令弹窗 → 解密合并
+    pub fn import_connections_encrypted(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("数镜加密备份", &["sjenc"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.conn_crypto = Some(ConnCryptoState {
+            export: false,
+            passphrase: String::new(),
+            confirm: String::new(),
+            error: None,
+        });
+        self.pending_crypto_path = Some(path.display().to_string());
+    }
+
+    /// 口令确认后执行导出/导入
+    pub fn run_conn_crypto(&mut self) {
+        let Some(st) = self.conn_crypto.as_mut() else { return };
+        if st.passphrase.chars().count() < 8 {
+            st.error = Some("口令至少 8 个字符".into());
+            return;
+        }
+        if st.export && st.passphrase != st.confirm {
+            st.error = Some("两次口令不一致".into());
+            return;
+        }
+        let Some(path) = self.pending_crypto_path.clone() else { return };
+        let export = st.export;
+        let pass = st.passphrase.clone();
+        let result = if export {
+            let do_export = || -> Result<String, String> {
+                let conns = serde_json::to_string_pretty(&self.service.list_saved_connections())
+                    .map_err(|e| e.to_string())?;
+                let enc = shujing_core::config_crypto::encrypt(&conns, &pass)?;
+                std::fs::write(&path, enc).map_err(|e| format!("写入失败: {e}"))?;
+                Ok(format!(
+                    "已导出 {} 条连接(含密码,口令即钥匙)",
+                    self.service.list_saved_connections().len()
+                ))
+            };
+            do_export()
+        } else {
+            // 非 Result 返回函数:内部错误用 let 链收集
+            let mut do_import = || -> Result<usize, String> {
+                let text = std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))?;
+                let json = shujing_core::config_crypto::decrypt(&text, &pass)?;
+                let imported: Vec<shujing_core::ConnInfo> = serde_json::from_str(&json)
+                    .map_err(|e| format!("备份内容解析失败: {e}"))?;
+                let existing = self.service.list_saved_connections();
+                let mut new_conns = Vec::new();
+                for c in &imported {
+                    if !existing
+                        .iter()
+                        .any(|e| e.db_type == c.db_type && e.name == c.name)
+                    {
+                        new_conns.push(c.clone());
+                    }
+                }
+                let n = new_conns.len();
+                for c in new_conns {
+                    self.service.save_connection(c)?;
+                }
+                self.conns = self.service.list_saved_connections();
+                Ok(n)
+            };
+            match do_import() {
+                Ok(n) => Ok(format!("已导入 {n} 条连接(密码含在备份里)")),
+                Err(e) => Err(e),
+            }
+        };
+        match result {
+            Ok(msg) => {
+                self.conn_crypto = None;
+                self.pending_crypto_path = None;
+                self.toast_error(msg);
+            }
+            Err(e) => {
+                if let Some(st) = self.conn_crypto.as_mut() {
+                    st.error = Some(e);
+                }
+            }
+        }
+    }
+
+    /// Redis 批量删除弹窗
+    pub fn open_redis_batch_delete(&mut self, tab_id: &str) {
+        if let Some(t) = self.tabs.iter().find(|t| t.id == tab_id) {
+            if let TabKind::Redis(rt) = &t.kind {
+                self.redis_batch_del = Some(RedisBatchDeleteState {
+                    conn_id: rt.conn_id.clone(),
+                    db: rt.db,
+                    pattern: rt.pattern.clone(),
+                    counted: None,
+                    deleting: false,
+                    error: None,
+                });
+            }
+        }
+    }
+
+    /// 计数(SCAN-only,不删)
+    pub fn run_redis_batch_count(&mut self) {
+        let Some(st) = self.redis_batch_del.as_ref() else { return };
+        if st.pattern.trim().is_empty() {
+            return;
+        }
+        let conn_id = st.conn_id.clone();
+        let db = st.db;
+        let pattern = st.pattern.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.redis_batch_del.as_mut().unwrap().error = None;
+        net::spawn(async move {
+            let r = service.redis_scan_count(&conn_id, db, &pattern).await;
+            let (count, error) = match r {
+                Ok(n) => (Some(n), None),
+                Err(e) => (None, Some(e)),
+            };
+            let _ = tx.send(BgEvent::RedisBatchDone {
+                is_delete: false,
+                count,
+                error,
+            });
+        });
+    }
+
+    /// 执行批量删除
+    pub fn run_redis_batch_delete(&mut self) {
+        let Some(st) = self.redis_batch_del.as_ref() else { return };
+        let conn_id = st.conn_id.clone();
+        let db = st.db;
+        let pattern = st.pattern.clone();
+        self.redis_batch_del.as_mut().unwrap().deleting = true;
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let r = service
+                .redis_delete_by_pattern(&conn_id, db, &pattern)
+                .await;
+            let (count, error) = match r {
+                Ok(n) => (Some(n), None),
+                Err(e) => (None, Some(e)),
+            };
+            let _ = tx.send(BgEvent::RedisBatchDone {
+                is_delete: true,
+                count,
+                error,
+            });
+        });
+    }
+
     /// 打开数据传输(源=右键表;目标默认同类型在线连接)
     pub fn open_transfer(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
         let src_info = self.conns.iter().find(|c| c.id == conn_id).cloned();
@@ -2827,7 +3032,7 @@ impl ShujingApp {
         let tx = self.event_tx.clone();
         let p = path.clone();
         net::spawn_blocking(move || {
-            let result = shujing_core::parquet_preview::preview(&p, 200);
+            let result = shujing_core::parquet_preview::preview_data_file(&p, 200);
             let _ = tx.send(BgEvent::ParquetPreviewDone {
                 path: path_s,
                 result,
@@ -3854,6 +4059,31 @@ impl ShujingApp {
                         m.testing = false;
                         m.test_result = Some(result);
                     }
+                }
+                BgEvent::RedisBatchDone {
+                    is_delete,
+                    count,
+                    error,
+                } => {
+                    let Some(st) = self.redis_batch_del.as_mut() else { continue };
+                    if let Some(e) = error {
+                        st.deleting = false;
+                        st.error = Some(e);
+                        continue;
+                    }
+                    if is_delete {
+                        let n = count.unwrap_or(0);
+                        self.redis_batch_del = None;
+                        self.toast_error(format!("批量删除完成: 共 {n} 个 key"));
+                        if let Some(tid) = self.tabs.get(self.active_tab).map(|t| t.id.clone()) {
+                            if self.tabs.get(self.active_tab).map(|t| matches!(&t.kind, TabKind::Redis(_))).unwrap_or(false) {
+                                self.redis_scan(&tid, true);
+                            }
+                        }
+                    } else {
+                        st.counted = Some(count.unwrap_or(0));
+                    }
+                    continue;
                 }
                 BgEvent::TransferDone { result } => {
                     match result {
