@@ -518,17 +518,27 @@ pub fn parse_import_docs(json: &str) -> Result<Vec<Document>, String> {
     Ok(docs)
 }
 
-/// 批量导入:解析后分 200 条一批 insert_many。
-/// 某批失败即中止并报告(已导入条数 + 失败批次范围)——不回放重试,
-/// 避免无 _id 文档在部分成功后被重复插入。
+/// 批量导入(JSON):解析后走通用分批插入
 pub async fn import_docs(
     st: &crate::model::MongoState,
     database: Option<&str>,
     collection: &str,
     json: &str,
 ) -> Result<usize, String> {
-    let db = default_db(st, database)?;
     let docs = parse_import_docs(json)?;
+    insert_chunked(st, database, collection, docs).await
+}
+
+/// 分批插入(200 条一批 insert_many),JSON 与 CSV 导入共用。
+/// 某批失败即中止并报告(已导入条数 + 失败批次范围)——不回放重试,
+/// 避免无 _id 文档在部分成功后被重复插入。
+async fn insert_chunked(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    docs: Vec<Document>,
+) -> Result<usize, String> {
+    let db = default_db(st, database)?;
     let coll = st
         .client
         .database(db.as_str())
@@ -543,6 +553,73 @@ pub async fn import_docs(
         ok += chunk.len();
     }
     Ok(ok)
+}
+
+/// CSV → 文档:首行=键名;类型推断 空值→Null / true,false→Bool / 整数→Int64 /
+/// 浮点→Double / 其余→String;_id 列走 parse_id(24hex→ObjectId)。
+/// 列数不齐宽容处理:缺列不填键,多余列忽略;空表头列跳过。
+pub fn csv_to_docs(raw: &str) -> Result<Vec<Document>, String> {
+    let (headers, rows) = crate::composite::parse_csv_str(raw)?;
+    let headers: Vec<&str> = headers.iter().map(|h| h.trim()).collect();
+    if headers.is_empty() || headers.iter().all(|h| h.is_empty()) {
+        return Err("CSV 首行必须有列名".into());
+    }
+    let mut docs = Vec::with_capacity(rows.len());
+    for (ri, row) in rows.iter().enumerate() {
+        let mut d = Document::new();
+        for (ci, h) in headers.iter().enumerate() {
+            if h.is_empty() {
+                continue;
+            }
+            let Some(v) = row.get(ci) else { continue };
+            let bson = if *h == "_id" {
+                Some(parse_id(v))
+            } else {
+                csv_scalar(v)
+            };
+            if let Some(b) = bson {
+                d.insert(*h, b);
+            }
+        }
+        if d.is_empty() {
+            return Err(format!("第 {} 行没有可用列", ri + 2));
+        }
+        docs.push(d);
+    }
+    Ok(docs)
+}
+
+/// 单元格 → Bson 类型推断
+fn csv_scalar(v: &str) -> Option<Bson> {
+    if v.is_empty() {
+        return Some(Bson::Null);
+    }
+    if v == "true" {
+        return Some(Bson::Boolean(true));
+    }
+    if v == "false" {
+        return Some(Bson::Boolean(false));
+    }
+    if let Ok(n) = v.parse::<i64>() {
+        return Some(Bson::Int64(n));
+    }
+    if let Ok(f) = v.parse::<f64>() {
+        if f.is_finite() {
+            return Some(Bson::Double(f));
+        }
+    }
+    Some(Bson::String(v.to_string()))
+}
+
+/// 批量导入(CSV):首行列名,类型自动推断
+pub async fn import_docs_csv(
+    st: &crate::model::MongoState,
+    database: Option<&str>,
+    collection: &str,
+    csv_raw: &str,
+) -> Result<usize, String> {
+    let docs = csv_to_docs(csv_raw)?;
+    insert_chunked(st, database, collection, docs).await
 }
 
 #[cfg(test)]
@@ -583,6 +660,43 @@ mod import_tests {
         assert_eq!(d.get_i32("name").ok(), Some(1));
         assert_eq!(d.get_i32("age").ok(), Some(-1));
         assert_eq!(keys_display(&d), "name asc, age desc");
+    }
+
+    #[test]
+    fn csv_types_and_headers() {
+        let docs = csv_to_docs("name,age,score,ok,note,_id\n张三,28,91.5,true,\n李四,3e2,,false,x\n").unwrap();
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs[0].get_str("name"), Ok("张三"));
+        assert_eq!(docs[0].get_i64("age").ok(), Some(28));
+        assert!((docs[0].get_f64("score").unwrap() - 91.5).abs() < 1e-9);
+        assert_eq!(docs[0].get_bool("ok"), Ok(true));
+        // 空值 → Null
+        assert_eq!(docs[0].get("note"), Some(&Bson::Null));
+        // 第二行:3e2 浮点;空 score→Null;false 布尔
+        assert!((docs[1].get_f64("age").unwrap() - 300.0).abs() < 1e-9);
+        assert_eq!(docs[1].get("score"), Some(&Bson::Null));
+        assert_eq!(docs[1].get_bool("ok"), Ok(false));
+    }
+
+    #[test]
+    fn csv_id_column_to_objectid() {
+        let hex = "5f8d0d55b5476c5a4b3c9e1a";
+        let docs = csv_to_docs(&format!("_id,name\n{hex},a\n")).unwrap();
+        assert!(docs[0].get("_id").unwrap().as_object_id().is_some());
+    }
+
+    #[test]
+    fn csv_quoted_comma_and_empty_header() {
+        let docs = csv_to_docs("name,\n\"a,b\",skip\n").unwrap();
+        assert_eq!(docs[0].get_str("name"), Ok("a,b"));
+        // 空表头列被跳过
+        assert!(docs[0].get("").is_none());
+    }
+
+    #[test]
+    fn csv_bad_top_rejected() {
+        assert!(csv_to_docs("").is_err());
+        assert!(csv_to_docs(",\n,a\n").is_err());
     }
 
     #[test]

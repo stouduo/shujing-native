@@ -591,6 +591,7 @@ fn render_mongo_v2_modals() {
         db: Some("dramato".into()),
         collection: "users".into(),
         json: "[\n  {\"name\": \"张三\", \"age\": 28},\n  {\"name\": \"李四\", \"tags\": [\"vip\"]}\n]".into(),
+        src_csv: false,
         running: false,
         error: None,
     });

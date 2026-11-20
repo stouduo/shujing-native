@@ -267,6 +267,24 @@ impl Service {
         }
     }
 
+    /// MongoDB:批量导入 CSV(首行列名,类型自动推断)
+    pub async fn mongo_import_docs_csv(
+        &self,
+        id: &str,
+        database: Option<&str>,
+        collection: &str,
+        csv_raw: &str,
+    ) -> Result<usize, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mongo(st) => {
+                crate::mongo::import_docs_csv(st, database, collection, csv_raw).await
+            }
+            _ => Err("非 MongoDB 连接".into()),
+        }
+    }
+
     /// MongoDB 集合计数(带库上下文)
     pub async fn mongo_count(
         &self,

@@ -719,12 +719,14 @@ pub struct MongoIndexState {
     pub drop_arm: Option<String>,
 }
 
-/// Mongo 批量导入弹窗(粘贴/文件读入 JSON 数组)
+/// Mongo 批量导入弹窗(粘贴/文件读入;JSON 数组或 CSV,按来源扩展名分流)
 pub struct MongoImportState {
     pub conn_id: String,
     pub db: Option<String>,
     pub collection: String,
     pub json: String,
+    /// 来源是 .csv 文件(解析按 CSV;粘贴区恒为 JSON)
+    pub src_csv: bool,
     pub running: bool,
     pub error: Option<String>,
 }
@@ -3125,6 +3127,7 @@ impl ShujingApp {
                 db: t.database.clone(),
                 collection: t.table.clone(),
                 json: String::new(),
+                src_csv: false,
                 running: false,
                 error: None,
             });
@@ -3137,29 +3140,41 @@ impl ShujingApp {
         if st.running {
             return;
         }
-        if let Err(e) = shujing_core::mongo::parse_import_docs(&st.json) {
+        if !st.src_csv {
+            if let Err(e) = shujing_core::mongo::parse_import_docs(&st.json) {
+                self.mongo_import.as_mut().unwrap().error = Some(e);
+                return;
+            }
+        } else if let Err(e) = shujing_core::mongo::csv_to_docs(&st.json) {
             self.mongo_import.as_mut().unwrap().error = Some(e);
             return;
         }
         let conn_id = st.conn_id.clone();
         let db = st.db.clone();
         let coll = st.collection.clone();
-        let json = st.json.clone();
+        let payload = st.json.clone();
+        let src_csv = st.src_csv;
         let tx = self.event_tx.clone();
         let service = self.service.clone();
         self.mongo_import.as_mut().unwrap().running = true;
         self.mongo_import.as_mut().unwrap().error = None;
         net::spawn(async move {
-            let result = service
-                .mongo_import_docs(&conn_id, db.as_deref(), &coll, &json)
-                .await
-                .map(|n| {
-                    format!(
-                        "{} {n} {}",
-                        ui_kit::t!("Imported", "已导入"),
-                        ui_kit::t!("documents", "条文档")
-                    )
-                });
+            let result = (if src_csv {
+                service
+                    .mongo_import_docs_csv(&conn_id, db.as_deref(), &coll, &payload)
+                    .await
+            } else {
+                service
+                    .mongo_import_docs(&conn_id, db.as_deref(), &coll, &payload)
+                    .await
+            })
+            .map(|n| {
+                format!(
+                    "{} {n} {}",
+                    ui_kit::t!("Imported", "已导入"),
+                    ui_kit::t!("documents", "条文档")
+                )
+            });
             let _ = tx.send(BgEvent::MongoDocDone { op: 3, result });
         });
     }

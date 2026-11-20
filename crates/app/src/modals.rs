@@ -1482,10 +1482,17 @@ pub fn draw_mongo_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             );
             theme::modal_title(ui, &title);
             ui.label(
-                RichText::new(ui_kit::t!(
-                    "Top-level JSON array, each item one document; a duplicate _id aborts the run at that batch",
-                    "顶层 JSON 数组,每项一个文档;_id 重复会在该批次中断"
-                ))
+                RichText::new(if st.src_csv {
+                    ui_kit::t!(
+                        "CSV: first row = key names; integers/floats/true/false/empty are auto-typed; a duplicate _id aborts the run at that batch",
+                        "CSV:首行=键名;整数/浮点/true/false/空值自动推断;_id 重复会在该批次中断"
+                    )
+                } else {
+                    ui_kit::t!(
+                        "Top-level JSON array, each item one document; a duplicate _id aborts the run at that batch",
+                        "顶层 JSON 数组,每项一个文档;_id 重复会在该批次中断"
+                    )
+                })
                 .size(10.5)
                 .color(p.muted),
             );
@@ -1500,6 +1507,7 @@ pub fn draw_mongo_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("JSON", &["json", "ndjson"])
+                    .add_filter("CSV", &["csv"])
                     .pick_file()
                 {
                     picked = Some(path.display().to_string());
@@ -1523,6 +1531,10 @@ pub fn draw_mongo_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             });
         });
     if let (Some(st), Some(path)) = (app.mongo_import.as_mut(), picked) {
+        st.src_csv = std::path::Path::new(&path)
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("csv"))
+            .unwrap_or(false);
         match std::fs::read_to_string(&path) {
             Ok(s) => {
                 st.json = s;
