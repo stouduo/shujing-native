@@ -58,7 +58,7 @@ pub fn draw_redis_view(
                         reset: true,
                     });
                 }
-                if !rt.scanning && icons::refresh(ui, p.text2).on_hover_text("重新扫描").clicked() {
+                if !rt.scanning && icons::refresh(ui, p.text2).on_hover_text(ui_kit::t!("Rescan", "重新扫描")).clicked() {
                     actions.push(TabAction::RedisScan {
                         tab_id: tab_id.to_string(),
                         reset: true,
@@ -73,10 +73,10 @@ pub fn draw_redis_view(
                 }
                 // 「继续扫描」常驻(不可用时不响应),宽度恒定
                 let more_enabled = rt.cursor != 0 && !rt.scanning;
-                let more = theme::button(ui, "继续扫描", theme::BtnKind::Secondary);
+                let more = theme::button(ui, ui_kit::t!("Scan More", "继续扫描"), theme::BtnKind::Secondary);
                 let more_clicked = more.clicked();
                 if !more_enabled {
-                    more.on_disabled_hover_text("没有待续扫的游标");
+                    more.on_disabled_hover_text(ui_kit::t!("No cursor left to continue", "没有待续扫的游标"));
                 }
                 if more_enabled && more_clicked {
                     actions.push(TabAction::RedisScan {
@@ -85,14 +85,14 @@ pub fn draw_redis_view(
                     });
                 }
                 let sort_label = match rt.sort {
-                    0 => "排序",
+                    0 => ui_kit::t!("Sort", "排序"),
                     1 => "A→Z",
                     _ => "Z→A",
                 };
                 if theme::button(ui, sort_label, theme::BtnKind::Secondary).clicked() {
                     rt.sort = (rt.sort + 1) % 3;
                 }
-                if !read_only && theme::button(ui, "新建", theme::BtnKind::Secondary).clicked() {
+                if !read_only && theme::button(ui, ui_kit::t!("New", "新建"), theme::BtnKind::Secondary).clicked() {
                     rt.new_key = Some(RedisNewKeyState {
                         name: String::new(),
                         kind: 0,
@@ -100,15 +100,18 @@ pub fn draw_redis_view(
                         lines: String::new(),
                     });
                 }
-                let batch = theme::button(ui, "批量删", theme::BtnKind::Secondary);
+                let batch = theme::button(ui, ui_kit::t!("Batch Delete", "批量删"), theme::BtnKind::Secondary);
                 let batch_clicked = batch.clicked();
-                batch.on_hover_text("按当前 pattern 批量删除 key(SCAN 全量,上限 1 万;先计数确认)");
+                batch.on_hover_text(ui_kit::t!(
+                    "Batch delete keys matching the current pattern (full SCAN, limit 10k; counts first for confirmation)",
+                    "按当前 pattern 批量删除 key(SCAN 全量,上限 1 万;先计数确认)"
+                ));
                 if batch_clicked {
                     actions.push(TabAction::RedisBatchDelete {
                         tab_id: tab_id.to_string(),
                     });
                 }
-                if theme::button(ui, "分析", theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Analyze", "分析"), theme::BtnKind::Secondary).clicked() {
                     rt.analyze = Some(crate::app::RedisAnalyzeState {
                         mode: 0,
                         sample: 1000,
@@ -127,7 +130,11 @@ pub fn draw_redis_view(
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
-                        RichText::new(format!("{} 个 key", rt.keys.len()))
+                        RichText::new(format!(
+                            "{} {}",
+                            rt.keys.len(),
+                            ui_kit::t!("keys", "个 key")
+                        ))
                             .size(theme::FS_AUX)
                             .color(p.muted),
                     );
@@ -180,7 +187,7 @@ pub fn draw_redis_view(
                             }
                             if shown.is_empty() && !rt.scanning {
                                 ui.centered_and_justified(|ui| {
-                                    ui.label(RichText::new("无匹配 key").size(12.0).color(p.muted));
+                                    ui.label(RichText::new(ui_kit::t!("No matching keys", "无匹配 key")).size(12.0).color(p.muted));
                                 });
                                 return;
                             }
@@ -360,11 +367,11 @@ fn draw_key_row(
         });
     }
     let _ = resp.clone().context_menu(|ui| {
-        if ui.button("复制 key 名").clicked() {
+        if ui.button(ui_kit::t!("Copy Key Name", "复制 key 名")).clicked() {
             ui.ctx().copy_text(key.to_string());
             ui.close_menu();
         }
-        if ui.button("按此 key 前缀扫描").clicked() {
+        if ui.button(ui_kit::t!("Scan by This Key Prefix", "按此 key 前缀扫描")).clicked() {
             let prefix = if key.contains(':') {
                 format!("{}*", &key[..key.rfind(':').unwrap() + 1])
             } else {
@@ -377,7 +384,7 @@ fn draw_key_row(
             });
             ui.close_menu();
         }
-        if ui.button("以此 key 精确匹配").clicked() {
+        if ui.button(ui_kit::t!("Exact Match This Key", "以此 key 精确匹配")).clicked() {
             rt.pattern = key.to_string();
             actions.push(TabAction::RedisScan {
                 tab_id: tab_id.to_string(),
@@ -408,7 +415,7 @@ fn draw_detail(
     let Some(key) = rt.selected_key.clone() else {
         ui.centered_and_justified(|ui| {
             ui.add_space(40.0);
-            ui.label(RichText::new("点击左侧 key 查看内容").size(12.5).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Select a key on the left to view its content", "点击左侧 key 查看内容")).size(12.5).color(p.muted));
         });
         return;
     };
@@ -417,7 +424,7 @@ fn draw_detail(
         ui.centered_and_justified(|ui| {
             ui.add_space(20.0);
             ui.label(
-                RichText::new("详情加载失败,点右上 ↻ 重试")
+                RichText::new(ui_kit::t!("Failed to load details, click ↻ at top right to retry", "详情加载失败,点右上 ↻ 重试"))
                     .size(12.5)
                     .color(p.red),
             );
@@ -464,14 +471,16 @@ fn draw_detail(
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     // 删除(确认在 actions 层做二次弹窗成本高:右键再删,这里直接删但悬停提示)
-                    if !read_only && theme::mini_text_button(ui, "删除", p.red).0 && !rt.op_running
+                    if !read_only
+                        && theme::mini_text_button(ui, ui_kit::t!("Delete", "删除"), p.red).0
+                        && !rt.op_running
                     {
                         actions.push(TabAction::RedisOp {
                             tab_id: tab_id.to_string(),
                             op: RedisOp::Del { key: key.clone() },
                         });
                     }
-                    if icons::refresh(ui, p.text2).on_hover_text("刷新").clicked() {
+                    if icons::refresh(ui, p.text2).on_hover_text(ui_kit::t!("Refresh", "刷新")).clicked() {
                         actions.push(TabAction::RedisSelectKey {
                             tab_id: tab_id.to_string(),
                             key: key.clone(),
@@ -484,9 +493,12 @@ fn draw_detail(
                             .as_deref()
                             .map(|t| t.chars().count() >= 50_000)
                             .unwrap_or(false);
-                        let btn = theme::mini_text_button(ui, "编辑", if truncated { p.muted } else { p.text2 });
+                        let btn = theme::mini_text_button(ui, ui_kit::t!("Edit", "编辑"), if truncated { p.muted } else { p.text2 });
                         if truncated {
-                            btn.1.on_hover_text("值超过 5 万字符已截断显示,为防丢数据不支持在线编辑");
+                            btn.1.on_hover_text(ui_kit::t!(
+                                "Value over 50k characters is truncated; online editing is disabled to prevent data loss",
+                                "值超过 5 万字符已截断显示,为防丢数据不支持在线编辑"
+                            ));
                         } else if btn.0 {
                             rt.edit_value = Some(d.text.clone().unwrap_or_default());
                         }
@@ -549,7 +561,7 @@ fn draw_detail(
                                     });
                                 }
                             }
-                        } else if theme::mini_text_button(ui, "重命名", p.text2).0 {
+                        } else if theme::mini_text_button(ui, ui_kit::t!("Rename", "重命名"), p.text2).0 {
                             rt.ttl_draft = None; // 与 TTL 草稿互斥
                             rt.rename_draft = Some(key.clone());
                         }
@@ -594,7 +606,7 @@ fn draw_detail(
                         resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     rt.list_edit = Some((idx, v));
                     let busy = rt.op_running || rt.detail_loading;
-                    if (theme::button(ui, "保存", theme::BtnKind::Primary).clicked() || entered)
+                    if (theme::button(ui, ui_kit::t!("Save", "保存"), theme::BtnKind::Primary).clicked() || entered)
                         && !busy
                     {
                         if let Some((idx2, v2)) = rt.list_edit.clone() {
@@ -611,7 +623,7 @@ fn draw_detail(
                         }
                         rt.list_edit = None;
                     }
-                    if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
                         rt.list_edit = None;
                     }
                 });
@@ -623,7 +635,7 @@ fn draw_detail(
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.add_space(10.0);
-                    if theme::button(ui, "加载更多", theme::BtnKind::Secondary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Load More", "加载更多"), theme::BtnKind::Secondary).clicked() {
                         actions.push(TabAction::RedisLoadMore {
                             tab_id: tab_id.to_string(),
                             key: key.clone(),
@@ -631,7 +643,8 @@ fn draw_detail(
                     }
                     ui.label(
                         RichText::new(format!(
-                            "已显示 {} / {}",
+                            "{} {} / {}",
+                            ui_kit::t!("Showing", "已显示"),
                             d.pairs.len(),
                             d.len
                         ))
@@ -650,9 +663,9 @@ fn draw_detail(
                     let mut mv = m;
                     let mut ev = extra;
                     let ph = match d.key_type.as_str() {
-                        "hash" => "字段名",
-                        "zset" => "成员",
-                        _ => "值",
+                        "hash" => ui_kit::t!("Field Name", "字段名"),
+                        "zset" => ui_kit::t!("Member", "成员"),
+                        _ => ui_kit::t!("Value", "值"),
                     };
                     let resp_m = ui.add_sized(
                         [160.0, 24.0],
@@ -662,7 +675,11 @@ fn draw_detail(
                     );
                     let mut resp_v: Option<egui::Response> = None;
                     if matches!(d.key_type.as_str(), "hash" | "zset") {
-                        let ph2 = if d.key_type == "hash" { "值" } else { "分数" };
+                        let ph2 = if d.key_type == "hash" {
+                            ui_kit::t!("Value", "值")
+                        } else {
+                            ui_kit::t!("Score", "分数")
+                        };
                         resp_v = Some(ui.add_sized(
                             [140.0, 24.0],
                             egui::TextEdit::singleline(&mut ev)
@@ -675,7 +692,11 @@ fn draw_detail(
                         || resp_v.as_ref().is_some_and(|r| r.lost_focus()))
                         && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let editing = rt.member_set_hash;
-                    let btn_label = if editing { "保存" } else { "添加" };
+                    let btn_label = if editing {
+                        ui_kit::t!("Save", "保存")
+                    } else {
+                        ui_kit::t!("Add", "添加")
+                    };
                     // 写操作在途时提交会按下标/字段写错数据(list 左移)
                     let busy = rt.op_running || rt.detail_loading;
                     if (theme::button(ui, btn_label, theme::BtnKind::Primary).clicked() || entered)
@@ -697,16 +718,16 @@ fn draw_detail(
                     } else {
                         rt.member_add = Some((mv, ev));
                     }
-                    if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
                         rt.member_add = None;
                         rt.member_set_hash = false;
                     }
                 });
             } else {
                 let label = if d.key_type == "hash" {
-                    "＋ 添加字段"
+                    ui_kit::t!("＋ Add Field", "＋ 添加字段")
                 } else {
-                    "＋ 添加成员"
+                    ui_kit::t!("＋ Add Member", "＋ 添加成员")
                 };
                 let (r2, resp) = ui.allocate_exact_size(
                     egui::vec2((ui.available_width() - 20.0).max(40.0), 26.0),
@@ -735,15 +756,27 @@ fn draw_detail(
 
 fn ttl_text(ttl: i64) -> String {
     if ttl == -1 {
-        "永久".into()
+        ui_kit::t!("Permanent", "永久").into()
     } else if ttl == -2 {
-        "已过期".into()
+        ui_kit::t!("Expired", "已过期").into()
     } else if ttl < 60 {
-        format!("{ttl} 秒")
+        format!("{} {}", ttl, ui_kit::t!("sec", "秒"))
     } else if ttl < 3600 {
-        format!("{} 分 {} 秒", ttl / 60, ttl % 60)
+        format!(
+            "{} {} {} {}",
+            ttl / 60,
+            ui_kit::t!("min", "分"),
+            ttl % 60,
+            ui_kit::t!("sec", "秒")
+        )
     } else {
-        format!("{} 时 {} 分", ttl / 3600, (ttl % 3600) / 60)
+        format!(
+            "{} {} {} {}",
+            ttl / 3600,
+            ui_kit::t!("h", "时"),
+            (ttl % 3600) / 60,
+            ui_kit::t!("min", "分")
+        )
     }
 }
 
@@ -851,7 +884,7 @@ fn draw_pair_row(
         ui.painter().text(
             er.center(),
             egui::Align2::CENTER_CENTER,
-            "编辑",
+            ui_kit::t!("Edit", "编辑"),
             egui::FontId::proportional(10.5),
             ecol,
         );
@@ -908,39 +941,39 @@ fn draw_new_key_modal(
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(500.0);
-            theme::modal_title(ui, &format!("新建 key · db{}", rt.db));
+            theme::modal_title(ui, &format!("{} · db{}", ui_kit::t!("New Key", "新建 key"), rt.db));
             ui.spacing_mut().item_spacing.y = 10.0;
             let st = rt.new_key.as_mut().unwrap();
-            theme::form_field(ui, "key 名称", "rk-name", &mut st.name, 500.0, false);
+            theme::form_field(ui, ui_kit::t!("Key Name", "key 名称"), "rk-name", &mut st.name, 500.0, false);
             // 类型分段
-            ui.label(RichText::new("类型").size(11.0).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Type", "类型")).size(11.0).color(p.muted));
             ui.add_space(2.0);
             segmented_key_type(ui, &mut st.kind, 500.0);
             if st.kind == 0 {
-                theme::form_field(ui, "字符串值", "rk-text", &mut st.text, 500.0, false);
+                theme::form_field(ui, ui_kit::t!("String Value", "字符串值"), "rk-text", &mut st.text, 500.0, false);
             } else {
                 let hint = match st.kind {
-                    1 => "每行一条:field=value",
-                    2 => "每行一个元素(尾部追加)",
-                    3 => "每行一个成员",
-                    _ => "每行一条:member score(如 张三 98)",
+                    1 => ui_kit::t!("One per line: field=value", "每行一条:field=value"),
+                    2 => ui_kit::t!("One element per line (appended at tail)", "每行一个元素(尾部追加)"),
+                    3 => ui_kit::t!("One member per line", "每行一个成员"),
+                    _ => ui_kit::t!("One per line: member score (e.g. Alice 98)", "每行一条:member score(如 张三 98)"),
                 };
                 ui.label(RichText::new(hint).size(11.0).color(p.muted));
                 ui.add_space(2.0);
                 theme::form_field_multiline(ui, "", "rk-lines", &mut st.lines, 500.0, 6);
                 let n = parse_pairs(st.kind, &st.lines).len();
                 ui.label(
-                    RichText::new(format!("{n} 条记录"))
+                    RichText::new(format!("{} {}", n, ui_kit::t!("records", "条记录")))
                         .size(11.5)
                         .color(p.accent),
                 );
             }
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, "创建", theme::BtnKind::Primary).clicked() {
+                if theme::button(ui, ui_kit::t!("Create", "创建"), theme::BtnKind::Primary).clicked() {
                     create = true;
                 }
                 ui.add_space(6.0);
-                if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
                     cancel = true;
                 }
             });
@@ -1051,12 +1084,18 @@ fn draw_analyze_modal(
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(680.0);
-            theme::modal_title(ui, &format!("扫描分析 · db{}", rt.db));
+            theme::modal_title(ui, &format!("{} · db{}", ui_kit::t!("Scan Analysis", "扫描分析"), rt.db));
             ui.spacing_mut().item_spacing.y = 10.0;
             let a = rt.analyze.as_mut().unwrap();
             ui.horizontal(|ui| {
                 // 模式(running 时锁定:迟到结果按新模式渲染会把口径标错)
-                if seg_two(ui, "大 key(内存/元素)", "热 key(LFU)", a.mode == 0, 320.0)
+                if seg_two(
+                    ui,
+                    ui_kit::t!("Big Keys (Mem/Items)", "大 key(内存/元素)"),
+                    ui_kit::t!("Hot Keys (LFU)", "热 key(LFU)"),
+                    a.mode == 0,
+                    320.0,
+                )
                     && !a.running
                 {
                     a.mode = 1 - a.mode;
@@ -1064,14 +1103,18 @@ fn draw_analyze_modal(
                 }
                 ui.add_space(8.0);
                 // 采样(同上锁定)
-                for (v, label) in [(500usize, "采样 500"), (1000, "1000"), (5000, "5000")] {
+                for (v, label) in [
+                    (500usize, ui_kit::t!("Sample 500", "采样 500")),
+                    (1000, "1000"),
+                    (5000, "5000"),
+                ] {
                     if seg_one(ui, label, a.sample == v, 92.0) && !a.running {
                         a.sample = v;
                         a.ran = false;
                     }
                 }
                 ui.add_space(4.0);
-                if theme::button(ui, "扫描", theme::BtnKind::Primary).clicked() && !a.running {
+                if theme::button(ui, ui_kit::t!("Scan", "扫描"), theme::BtnKind::Primary).clicked() && !a.running {
                     run = true;
                 }
                 if a.running {
@@ -1080,9 +1123,15 @@ fn draw_analyze_modal(
             });
             ui.label(
                 RichText::new(if a.mode == 1 {
-                    "需要服务端 maxmemory-policy 为 LFU 策略,否则无法统计频率"
+                    ui_kit::t!(
+                        "Requires server maxmemory-policy to be an LFU policy, frequency stats unavailable otherwise",
+                        "需要服务端 maxmemory-policy 为 LFU 策略,否则无法统计频率"
+                    )
                 } else {
-                    "SCAN 采样 + MEMORY USAGE 批量统计,按内存降序;>64KB 黄色、>1MB 红色高亮"
+                    ui_kit::t!(
+                        "SCAN sampling + MEMORY USAGE batch stats, sorted by memory desc; >64KB yellow, >1MB red",
+                        "SCAN 采样 + MEMORY USAGE 批量统计,按内存降序;>64KB 黄色、>1MB 红色高亮"
+                    )
                 })
                 .size(11.0)
                 .color(p.muted),
@@ -1100,7 +1149,7 @@ fn draw_analyze_modal(
                     .show(ui, |ui| {
                         if a.stats.is_empty() {
                             ui.centered_and_justified(|ui| {
-                                ui.label(RichText::new("没有扫描到 key").size(12.0).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("No keys found", "没有扫描到 key")).size(12.0).color(p.muted));
                             });
                             return;
                         }
@@ -1115,9 +1164,15 @@ fn draw_analyze_modal(
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("#").size(10.5).color(p.muted));
                             ui.add_sized([300.0, 16.0], egui::Label::new(RichText::new("key").size(10.5).color(p.muted)));
-                            ui.add_sized([60.0, 16.0], egui::Label::new(RichText::new("类型").size(10.5).color(p.muted)));
+                            ui.add_sized([60.0, 16.0], egui::Label::new(RichText::new(ui_kit::t!("Type", "类型")).size(10.5).color(p.muted)));
                             ui.add_sized([90.0, 16.0], egui::Label::new(
-                                RichText::new(if a.mode == 1 { "频率" } else { "内存" }).size(10.5).color(p.muted),
+                                RichText::new(if a.mode == 1 {
+                                    ui_kit::t!("Freq", "频率")
+                                } else {
+                                    ui_kit::t!("Memory", "内存")
+                                })
+                                .size(10.5)
+                                .color(p.muted),
                             ));
                         });
                         theme::hairline_bottom(ui);
@@ -1193,7 +1248,7 @@ fn draw_analyze_modal(
             }
             theme::modal_footer(ui, |ui| {
                 ui.label(
-                    RichText::new("点击行跳到对应 key")
+                    RichText::new(ui_kit::t!("Click a row to jump to the key", "点击行跳到对应 key"))
                         .size(11.0)
                         .color(p.muted),
                 );
@@ -1287,10 +1342,10 @@ fn draw_edit_string_modal(
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(560.0);
-            theme::modal_title(ui, &format!("编辑:{key}"));
+            theme::modal_title(ui, &format!("{}:{key}", ui_kit::t!("Edit", "编辑")));
             ui.spacing_mut().item_spacing.y = 10.0;
             let v = rt.edit_value.as_mut().unwrap();
-            ui.label(RichText::new("内容").size(11.0).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Content", "内容")).size(11.0).color(p.muted));
             ui.add_space(4.0);
             ui.add(
                 egui::TextEdit::multiline(v)
@@ -1301,11 +1356,11 @@ fn draw_edit_string_modal(
                     .code_editor(),
             );
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, "保存(TTL 保留)", theme::BtnKind::Primary).clicked() {
+                if theme::button(ui, ui_kit::t!("Save (Keep TTL)", "保存(TTL 保留)"), theme::BtnKind::Primary).clicked() {
                     save = true;
                 }
                 ui.add_space(6.0);
-                if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
                     cancel = true;
                 }
             });

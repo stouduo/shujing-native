@@ -450,7 +450,10 @@ pub fn compute_col_stats(
         .collect();
     let numeric = non_null.len();
     let mut out = vec![
-        ("行数".to_string(), crate::icons::thousands(total as u64)),
+        (
+            ui_kit::t!("Row count", "行数").to_string(),
+            crate::icons::thousands(total as u64),
+        ),
         ("NULL".to_string(), crate::icons::thousands(nulls as u64)),
     ];
     if numeric > 0 {
@@ -465,7 +468,7 @@ pub fn compute_col_stats(
             }
         };
         out.push((
-            "数值个数".to_string(),
+            ui_kit::t!("Numeric count", "数值个数").to_string(),
             crate::icons::thousands(numeric as u64),
         ));
         out.push(("SUM".to_string(), fmt(sum)));
@@ -477,7 +480,7 @@ pub fn compute_col_stats(
         distinct.sort();
         distinct.dedup();
         out.push((
-            "非空去重".to_string(),
+            ui_kit::t!("Distinct non-null", "非空去重").to_string(),
             crate::icons::thousands(distinct.len() as u64),
         ));
     }
@@ -1563,7 +1566,7 @@ impl ShujingApp {
             return;
         }
         let id = format!("s{}", rand_suffix());
-        let title = format!("{table} 结构");
+        let title = format!("{table} {}", ui_kit::t!("Structure", "结构"));
         self.tabs.push(Tab {
             id: id.clone(),
             title,
@@ -1586,7 +1589,7 @@ impl ShujingApp {
         let id = format!("d{}", rand_suffix());
         match table {
             Some(t) => {
-                let title = format!("设计 {t}");
+                let title = format!("{} {t}", ui_kit::t!("Design", "设计"));
                 self.tabs.push(Tab {
                     id: id.clone(),
                     title,
@@ -1610,7 +1613,7 @@ impl ShujingApp {
             None => {
                 self.tabs.push(Tab {
                     id: id.clone(),
-                    title: "新表".to_string(),
+                    title: ui_kit::t!("New Table", "新表").to_string(),
                     kind: TabKind::Designer(DesignerTab {
                         conn_id: conn_id.to_string(),
                         database,
@@ -1729,7 +1732,7 @@ impl ShujingApp {
         let id = format!("e{}", rand_suffix());
         self.tabs.push(Tab {
             id: id.clone(),
-            title: "ER 图".to_string(),
+            title: ui_kit::t!("ER Diagram", "ER 图").to_string(),
             kind: TabKind::Er(ErTab {
                 conn_id: conn_id.to_string(),
                 database,
@@ -2073,7 +2076,7 @@ impl ShujingApp {
         });
         let id = format!("q{}", rand_suffix());
         self.query_seq += 1;
-        let title = format!("查询 {}", self.query_seq);
+        let title = format!("{} {}", ui_kit::t!("Query", "查询"), self.query_seq);
         self.tabs.push(Tab {
             id: id.clone(),
             title,
@@ -2316,7 +2319,10 @@ impl ShujingApp {
                     tab_id: tab_id.clone(),
                     seq,
                     result: Err(
-                        "Mongo 仅支持 JSON 过滤:在筛选框输入如 {\"age\": {\"$gt\": 18}}"
+                        ui_kit::t!(
+                            "Mongo only supports JSON filters: enter e.g. {\"age\": {\"$gt\": 18}} in the filter box",
+                            "Mongo 仅支持 JSON 过滤:在筛选框输入如 {\"age\": {\"$gt\": 18}}"
+                        )
                             .into(),
                     ),
                 });
@@ -2400,12 +2406,12 @@ impl ShujingApp {
             return;
         }
         if q.conn_id.is_empty() {
-            q.error = Some("请先在工具栏选择目标连接".into());
+            q.error = Some(ui_kit::t!("Select a target connection in the toolbar first", "请先在工具栏选择目标连接").into());
             return;
         }
         let sql = q.sql.trim().to_string();
         if sql.is_empty() {
-            q.error = Some("SQL 为空".into());
+            q.error = Some(ui_kit::t!("SQL is empty", "SQL 为空").into());
             return;
         }
         q.running = true;
@@ -2432,11 +2438,11 @@ impl ShujingApp {
         let sql = q.sql.trim().to_string();
         let head = sql.get(..8).unwrap_or("").to_uppercase();
         if sql.is_empty() || (!head.starts_with("SELECT") && !head.starts_with("WITH")) {
-            self.toast_error("计划仅支持 SELECT 语句".to_string());
+            self.toast_error(ui_kit::t!("EXPLAIN only supports SELECT statements", "计划仅支持 SELECT 语句").to_string());
             return;
         }
         let Some(conn) = self.conns.iter().find(|c| c.id == q.conn_id) else {
-            self.toast_error("请先选择连接".to_string());
+            self.toast_error(ui_kit::t!("Select a connection first", "请先选择连接").to_string());
             return;
         };
         let explain = shujing_core::sql_advisor::explain_sql(conn.db_type, &sql);
@@ -2504,12 +2510,12 @@ impl ShujingApp {
             return;
         }
         if q.conn_id.is_empty() {
-            q.error = Some("请先在工具栏选择目标连接".into());
+            q.error = Some(ui_kit::t!("Select a target connection in the toolbar first", "请先在工具栏选择目标连接").into());
             return;
         }
         let cmd = q.sql.trim().to_string();
         if cmd.is_empty() {
-            q.error = Some("命令为空".into());
+            q.error = Some(ui_kit::t!("Command is empty", "命令为空").into());
             return;
         }
         q.running = true;
@@ -2521,7 +2527,7 @@ impl ShujingApp {
         net::spawn(async move {
             let result = service.redis_run(&conn_id, &cmd).await.map(|lines| {
                 vec![shujing_core::ExecResult {
-                    columns: vec!["结果".to_string()],
+                    columns: vec![ui_kit::t!("Result", "结果").to_string()],
                     rows: lines.into_iter().map(|l| vec![Some(l)]).collect(),
                     affected: 0,
                     elapsed_ms: 0,
@@ -2555,7 +2561,7 @@ impl ShujingApp {
                 Ok((sql, _)) => tokio::fs::write(&path, sql)
                     .await
                     .map(|_| path.display().to_string())
-                    .map_err(|e| format!("写入失败: {e}")),
+                    .map_err(|e| format!("{}: {e}", ui_kit::t!("Write failed", "写入失败"))),
                 Err(e) => Err(e),
             };
             let _ = tx.send(BgEvent::ExportDone { result });
@@ -2566,7 +2572,7 @@ impl ShujingApp {
     pub fn export_connections_encrypted(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .set_file_name("shujing-connections.sjenc")
-            .add_filter("数镜加密备份", &["sjenc"])
+            .add_filter(ui_kit::t!("Shujing encrypted backup", "数镜加密备份"), &["sjenc"])
             .save_file()
         else {
             return;
@@ -2583,7 +2589,7 @@ impl ShujingApp {
     /// 导入连接(加密备份):选路径 → 口令弹窗 → 解密合并
     pub fn import_connections_encrypted(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("数镜加密备份", &["sjenc"])
+            .add_filter(ui_kit::t!("Shujing encrypted backup", "数镜加密备份"), &["sjenc"])
             .pick_file()
         else {
             return;
@@ -2601,11 +2607,11 @@ impl ShujingApp {
     pub fn run_conn_crypto(&mut self) {
         let Some(st) = self.conn_crypto.as_mut() else { return };
         if st.passphrase.chars().count() < 8 {
-            st.error = Some("口令至少 8 个字符".into());
+            st.error = Some(ui_kit::t!("Passphrase must be at least 8 characters", "口令至少 8 个字符").into());
             return;
         }
         if st.export && st.passphrase != st.confirm {
-            st.error = Some("两次口令不一致".into());
+            st.error = Some(ui_kit::t!("Passphrases do not match", "两次口令不一致").into());
             return;
         }
         let Some(path) = self.pending_crypto_path.clone() else { return };
@@ -2616,20 +2622,28 @@ impl ShujingApp {
                 let conns = serde_json::to_string_pretty(&self.service.list_saved_connections())
                     .map_err(|e| e.to_string())?;
                 let enc = shujing_core::config_crypto::encrypt(&conns, &pass)?;
-                std::fs::write(&path, enc).map_err(|e| format!("写入失败: {e}"))?;
-                Ok(format!(
-                    "已导出 {} 条连接(含密码,口令即钥匙)",
-                    self.service.list_saved_connections().len()
-                ))
+                std::fs::write(&path, enc).map_err(|e| format!("{}: {e}", ui_kit::t!("Write failed", "写入失败")))?;
+                Ok(if ui_kit::i18n::is_english() {
+                    format!(
+                        "Exported {} connections (passwords included; the passphrase is the key)",
+                        self.service.list_saved_connections().len()
+                    )
+                } else {
+                    format!(
+                        "已导出 {} 条连接(含密码,口令即钥匙)",
+                        self.service.list_saved_connections().len()
+                    )
+                })
             };
             do_export()
         } else {
             // 非 Result 返回函数:内部错误用 let 链收集
             let mut do_import = || -> Result<usize, String> {
-                let text = std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))?;
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("{}: {e}", ui_kit::t!("Read failed", "读取失败")))?;
                 let json = shujing_core::config_crypto::decrypt(&text, &pass)?;
                 let imported: Vec<shujing_core::ConnInfo> = serde_json::from_str(&json)
-                    .map_err(|e| format!("备份内容解析失败: {e}"))?;
+                    .map_err(|e| format!("{}: {e}", ui_kit::t!("Failed to parse backup", "备份内容解析失败")))?;
                 let existing = self.service.list_saved_connections();
                 let mut new_conns = Vec::new();
                 for c in &imported {
@@ -2648,7 +2662,11 @@ impl ShujingApp {
                 Ok(n)
             };
             match do_import() {
-                Ok(n) => Ok(format!("已导入 {n} 条连接(密码含在备份里)")),
+                Ok(n) => Ok(if ui_kit::i18n::is_english() {
+                    format!("Imported {n} connections (passwords are included in the backup)")
+                } else {
+                    format!("已导入 {n} 条连接(密码含在备份里)")
+                }),
                 Err(e) => Err(e),
             }
         };
@@ -2850,15 +2868,15 @@ impl ShujingApp {
     pub fn open_mongo_edit(&mut self, tab_id: &str) {
         let Some(t) = self.table_tab(&tab_id) else { return };
         let Some((ri, _)) = t.selected else {
-            self.toast_error("先点选一行文档".to_string());
+            self.toast_error(ui_kit::t!("Select a document row first", "先点选一行文档").to_string());
             return;
         };
         let Some(id_col) = t.columns.iter().position(|c| c == "_id") else {
-            self.toast_error("结果集中没有 _id 列".to_string());
+            self.toast_error(ui_kit::t!("No _id column in the result set", "结果集中没有 _id 列").to_string());
             return;
         };
         let Some(id) = t.rows.get(ri).and_then(|r| r.get(id_col)).cloned().flatten() else {
-            self.toast_error("该行 _id 为空,无法编辑".to_string());
+            self.toast_error(ui_kit::t!("The _id of this row is empty and cannot be edited", "该行 _id 为空,无法编辑").to_string());
             return;
         };
         let conn_id = t.conn_id.clone();
@@ -2895,7 +2913,7 @@ impl ShujingApp {
             let result = service
                 .mongo_delete_doc(&conn_id, db.as_deref(), &coll, &id)
                 .await
-                .map(|_| format!("已删除文档 {id}"));
+                .map(|_| format!("{} {id}", ui_kit::t!("Deleted document", "已删除文档")));
             let _ = tx.send(BgEvent::MongoDocDone { op: 2, result });
         });
     }
@@ -2922,7 +2940,7 @@ impl ShujingApp {
                 service
                     .mongo_replace_doc(&conn_id, db.as_deref(), &coll, &id, &json)
                     .await
-                    .map(|_| format!("已更新文档 {id}"))
+                    .map(|_| format!("{} {id}", ui_kit::t!("Updated document", "已更新文档")))
             } else {
                 service
                     .mongo_insert_doc(&conn_id, db.as_deref(), &coll, &json)
@@ -2992,9 +3010,13 @@ impl ShujingApp {
             })
             .unwrap_or_default();
         let schema_ctx = if tables.is_empty() {
-            "(表列表未加载,请先在侧栏展开库)".to_string()
+            ui_kit::t!(
+                "(table list not loaded; expand a database in the sidebar first)",
+                "(表列表未加载,请先在侧栏展开库)"
+            )
+            .to_string()
         } else {
-            format!("表: {}", tables.join(", "))
+            format!("{}: {}", ui_kit::t!("Tables", "表"), tables.join(", "))
         };
         let tid = st.tab_id.clone();
         drop(st);
@@ -3075,13 +3097,13 @@ impl ShujingApp {
     /// 导入连接配置(DBeaver DataSources.json / Navicat .ncx)
     pub fn import_connections_file(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("连接导出文件", &["json", "ncx"])
+            .add_filter(ui_kit::t!("Connection export files", "连接导出文件"), &["json", "ncx"])
             .pick_file()
         else {
             return;
         };
         let Ok(content) = std::fs::read_to_string(&path) else {
-            self.toast_error(format!("读取失败: {}", path.display()));
+            self.toast_error(format!("{}: {}", ui_kit::t!("Read failed", "读取失败"), path.display()));
             return;
         };
         let imported = match shujing_core::conn_import::import_connections(&content) {
@@ -3105,18 +3127,31 @@ impl ShujingApp {
         }
         for c in new_conns {
             if let Err(e) = self.service.save_connection(c) {
-                self.toast_error(format!("保存导入连接失败: {e}"));
+                self.toast_error(format!(
+                    "{}: {e}",
+                    ui_kit::t!("Failed to save imported connections", "保存导入连接失败")
+                ));
                 return;
             }
         }
         // 侧栏连接列表重载
         self.conns = self.service.list_saved_connections();
         if added > 0 {
-            self.toast_error(format!(
-                "已导入 {added} 条连接(密码无法迁移,请重新输入);跳过 {skipped} 条重复"
-            ));
+            self.toast_error(if ui_kit::i18n::is_english() {
+                format!(
+                    "Imported {added} connections (passwords cannot be migrated, please re-enter); skipped {skipped} duplicates"
+                )
+            } else {
+                format!(
+                    "已导入 {added} 条连接(密码无法迁移,请重新输入);跳过 {skipped} 条重复"
+                )
+            });
         } else {
-            self.toast_error(format!("没有新增连接(跳过 {skipped} 条重复)"));
+            self.toast_error(if ui_kit::i18n::is_english() {
+                format!("No new connections ({skipped} duplicates skipped)")
+            } else {
+                format!("没有新增连接(跳过 {skipped} 条重复)")
+            });
         }
         let _ = skipped; // 上文已用
     }
@@ -3130,7 +3165,7 @@ impl ShujingApp {
             return;
         };
         let Ok(content) = std::fs::read_to_string(&path) else {
-            self.toast_error(format!("读取失败: {}", path.display()));
+            self.toast_error(format!("{}: {}", ui_kit::t!("Read failed", "读取失败"), path.display()));
             return;
         };
         let conn_id = conn_id.to_string();
@@ -3146,8 +3181,14 @@ impl ShujingApp {
                 .await
                 .map(|rs| rs.iter().map(|r| r.affected).sum::<u64>());
             let msg = match &result {
-                Ok(n) => format!("已导入 {fname} · 影响 {n} 行"),
-                Err(_) => format!("已导入 {fname}"),
+                Ok(n) => {
+                    if ui_kit::i18n::is_english() {
+                        format!("Imported {fname} · {n} rows affected")
+                    } else {
+                        format!("已导入 {fname} · 影响 {n} 行")
+                    }
+                }
+                Err(_) => format!("{} {fname}", ui_kit::t!("Imported", "已导入")),
             };
             let result = result.map(|_| ());
             let _ = tx.send(BgEvent::SqlDone { msg, result });
@@ -3204,7 +3245,7 @@ impl ShujingApp {
                 Ok((sql, _)) => tokio::fs::write(&path, sql)
                     .await
                     .map(|_| path.display().to_string())
-                    .map_err(|e| format!("写入失败: {e}")),
+                    .map_err(|e| format!("{}: {e}", ui_kit::t!("Write failed", "写入失败"))),
                 Err(e) => Err(e),
             };
             let _ = tx.send(BgEvent::ExportDone { result });
@@ -3279,7 +3320,7 @@ impl ShujingApp {
     pub fn open_db_filter(&mut self, conn_id: &str) {
         let Some(tree) = self.trees.get(conn_id) else { return };
         if tree.databases.is_empty() {
-            self.toast_error("没有可筛选的库(连接未就绪)".to_string());
+            self.toast_error(ui_kit::t!("No databases to filter (connection not ready)", "没有可筛选的库(连接未就绪)").to_string());
             return;
         }
         let selected = tree.visible_dbs.clone().unwrap_or_else(|| tree.databases.clone());
@@ -3470,7 +3511,7 @@ impl ShujingApp {
                     let id = format!("s{}", rand_suffix());
                     self.tabs.push(Tab {
                         id: id.clone(),
-                        title: format!("{table} 结构"),
+                        title: format!("{table} {}", ui_kit::t!("Structure", "结构")),
                         kind: TabKind::Structure(StructureTab {
                             conn_id: conn.clone(),
                             table: table.clone(),
@@ -3493,7 +3534,7 @@ impl ShujingApp {
                     let id = format!("q{}", rand_suffix());
                     self.tabs.push(Tab {
                         id: id.clone(),
-                        title: format!("查询 {}", self.query_seq),
+                        title: format!("{} {}", ui_kit::t!("Query", "查询"), self.query_seq),
                         kind: TabKind::Query(QueryTab {
                             conn_id: conn.clone(),
                             database: database.clone(),
@@ -3527,8 +3568,8 @@ impl ShujingApp {
                     self.tabs.push(Tab {
                         id: id.clone(),
                         title: match table {
-                            Some(t) => format!("设计 {t}"),
-                            None => "新表".to_string(),
+                            Some(t) => format!("{} {t}", ui_kit::t!("Design", "设计")),
+                            None => ui_kit::t!("New Table", "新表").to_string(),
                         },
                         kind: TabKind::Designer(DesignerTab {
                             conn_id: conn.clone(),
@@ -3597,7 +3638,7 @@ impl ShujingApp {
                     let id = format!("e{}", rand_suffix());
                     self.tabs.push(Tab {
                         id: id.clone(),
-                        title: "ER 图".to_string(),
+                        title: ui_kit::t!("ER Diagram", "ER 图").to_string(),
                         kind: TabKind::Er(ErTab {
                             conn_id: conn.clone(),
                             database: database.clone(),
@@ -3705,15 +3746,15 @@ impl ShujingApp {
         let sql = q.sql.trim().to_string();
         let head = sql.get(..8).unwrap_or("").to_uppercase();
         if sql.is_empty() {
-            self.toast_error("当前查询页没有 SQL".to_string());
+            self.toast_error(ui_kit::t!("No SQL in the current query tab", "当前查询页没有 SQL").to_string());
             return;
         }
         if !head.starts_with("SELECT") && !head.starts_with("WITH") {
-            self.toast_error("优化分析仅支持 SELECT 语句".to_string());
+            self.toast_error(ui_kit::t!("Optimize analysis only supports SELECT statements", "优化分析仅支持 SELECT 语句").to_string());
             return;
         }
         let Some(conn) = self.conns.iter().find(|c| c.id == q.conn_id) else {
-            self.toast_error("请先选择连接".to_string());
+            self.toast_error(ui_kit::t!("Select a connection first", "请先选择连接").to_string());
             return;
         };
         let explain = shujing_core::sql_advisor::explain_sql(conn.db_type, &sql);
@@ -3741,7 +3782,7 @@ impl ShujingApp {
                 .await
                 .and_then(|mut rs| {
                     rs.truncate(1);
-                    rs.pop().ok_or_else(|| "没有执行计划".to_string())
+                    rs.pop().ok_or_else(|| ui_kit::t!("No execution plan", "没有执行计划").to_string())
                 });
             let _ = tx.send(BgEvent::OptimizeDone {
                 tab_id: tid,
@@ -3765,7 +3806,7 @@ impl ShujingApp {
         let service = self.service.clone();
         let info = ConnInfo {
             id: "auto".into(),
-            name: "本地".into(),
+            name: ui_kit::t!("Local", "本地").into(),
             db_type: shujing_core::DbType::Sqlite,
             host: None,
             port: None,
@@ -3840,7 +3881,7 @@ impl ShujingApp {
                     }
                     Err(e) => {
                         self.trees.remove(&conn_id);
-                        self.toast_error(format!("连接失败: {e}"));
+                        self.toast_error(format!("{}: {e}", ui_kit::t!("Connection Failed", "连接失败")));
                     }
                 },
                 BgEvent::DatabasesLoaded {
@@ -3974,12 +4015,20 @@ impl ShujingApp {
                                     q.q_editing = None;
                                 }
                             }
-                            self.toast_error(format!("已保存 {n} 处修改"));
+                            self.toast_error(if ui_kit::i18n::is_english() {
+                                format!("Saved {n} changes")
+                            } else {
+                                format!("已保存 {n} 处修改")
+                            });
                             self.run_query(&tab_id);
                         } else if let Some(t) = self.table_tab_mut(&tab_id) {
                             t.changes.clear();
                             self.load_rows(&tab_id);
-                            self.toast_error(format!("已保存 {n} 处修改"));
+                            self.toast_error(if ui_kit::i18n::is_english() {
+                                format!("Saved {n} changes")
+                            } else {
+                                format!("已保存 {n} 处修改")
+                            });
                         }
                     }
                     Err(e) => {
@@ -3987,7 +4036,7 @@ impl ShujingApp {
                         if let Some(t) = self.table_tab_mut(&tab_id) {
                             t.loading = false;
                         }
-                        self.toast_error(format!("保存失败: {e}"));
+                        self.toast_error(format!("{}: {e}", ui_kit::t!("Save failed", "保存失败")));
                     }
                 },
                 BgEvent::StructureLoaded { tab_id, result } => {
@@ -4054,7 +4103,7 @@ impl ShujingApp {
                                         || low.contains("kill")
                                         || low.contains("中止")
                                     {
-                                        q.error = Some("已取消".to_string());
+                                        q.error = Some(ui_kit::t!("Cancelled", "已取消").to_string());
                                     } else {
                                         q.error = Some(e);
                                     }
@@ -4112,7 +4161,11 @@ impl ShujingApp {
                     if is_delete {
                         let n = count.unwrap_or(0);
                         self.redis_batch_del = None;
-                        self.toast_error(format!("批量删除完成: 共 {n} 个 key"));
+                        self.toast_error(if ui_kit::i18n::is_english() {
+                            format!("Batch delete completed: {n} keys total")
+                        } else {
+                            format!("批量删除完成: 共 {n} 个 key")
+                        });
                         if let Some(tid) = self.tabs.get(self.active_tab).map(|t| t.id.clone()) {
                             if self.tabs.get(self.active_tab).map(|t| matches!(&t.kind, TabKind::Redis(_))).unwrap_or(false) {
                                 self.redis_scan(&tid, true);
@@ -4126,9 +4179,13 @@ impl ShujingApp {
                 BgEvent::TransferDone { result } => {
                     match result {
                         Ok((rows, _)) => {
-                            self.toast_error(format!("传输完成: 共 {rows} 行"));
+                            self.toast_error(if ui_kit::i18n::is_english() {
+                                format!("Transfer completed: {rows} rows total")
+                            } else {
+                                format!("传输完成: 共 {rows} 行")
+                            });
                         }
-                        Err(e) => self.toast_error(format!("传输失败: {e}")),
+                        Err(e) => self.toast_error(format!("{}: {e}", ui_kit::t!("Transfer failed", "传输失败"))),
                     }
                     self.transfer = None;
                     continue;
@@ -4161,7 +4218,7 @@ impl ShujingApp {
                         _ => {
                             match &result {
                                 Ok(msg) => self.toast_error(msg.clone()),
-                                Err(e) => self.toast_error(format!("失败: {e}")),
+                                Err(e) => self.toast_error(format!("{}: {e}", ui_kit::t!("Failed", "失败"))),
                             }
                             self.mongo_doc = None;
                             // 重载当前 Mongo 数据页
@@ -4193,9 +4250,9 @@ impl ShujingApp {
                         match result {
                             Ok(text) => {
                                 let title = match mode {
-                                    0 => "生成 SQL".into(),
-                                    1 => "解释".into(),
-                                    _ => "优化建议".into(),
+                                    0 => ui_kit::t!("Generate SQL", "生成 SQL").into(),
+                                    1 => ui_kit::t!("Explain", "解释").into(),
+                                    _ => ui_kit::t!("Optimization suggestions", "优化建议").into(),
                                 };
                                 st.history.push((title, text));
                                 st.error = None;
@@ -4227,13 +4284,20 @@ impl ShujingApp {
                         Ok(preview) => {
                             self.parquet_preview = Some((path, preview));
                         }
-                        Err(e) => self.toast_error(format!("Parquet 预览失败: {e}")),
+                        Err(e) => self.toast_error(format!(
+                            "{}: {e}",
+                            ui_kit::t!("Parquet preview failed", "Parquet 预览失败")
+                        )),
                     }
                     continue;
                 }
                 BgEvent::ExportDone { result } => match result {
-                    Ok(path) => self.toast_error(format!("已导出: {path}")),
-                    Err(e) => self.toast_error(format!("导出失败: {e}")),
+                    Ok(path) => {
+                        self.toast_error(format!("{}: {path}", ui_kit::t!("Exported", "已导出")))
+                    }
+                    Err(e) => {
+                        self.toast_error(format!("{}: {e}", ui_kit::t!("Export failed", "导出失败")))
+                    }
                 },
                 BgEvent::StatsLoaded { key, result } => {
                     // 用户可能已关闭统计弹窗:只更新仍打开同一张表的统计,避免迟到结果重新弹窗
@@ -4287,7 +4351,11 @@ impl ShujingApp {
                     match result {
                     Ok(n) => {
                         self.import = None;
-                        self.toast_error(format!("已导入 {n} 行"));
+                        self.toast_error(if ui_kit::i18n::is_english() {
+                            format!("Imported {n} rows")
+                        } else {
+                            format!("已导入 {n} 行")
+                        });
                         // 刷新当前表标签(若是导入目标)——简单起见全部刷新
                         let ids: Vec<String> = self
                             .tabs
@@ -4303,7 +4371,7 @@ impl ShujingApp {
                         if let Some(im) = self.import.as_mut() {
                             im.batch_errors = Some(e);
                         } else {
-                            self.toast_error(format!("导入失败: {e}"));
+                            self.toast_error(format!("{}: {e}", ui_kit::t!("Import failed", "导入失败")));
                         }
                     }
                     }
@@ -4313,9 +4381,13 @@ impl ShujingApp {
                         // 建表路径(msg 空)关新建表弹窗;其余 DDL 用各自的操作名做提示
                         if msg.is_empty() {
                             self.new_table = None;
-                            self.toast_error("创建成功".to_string());
+                            self.toast_error(ui_kit::t!("Created successfully", "创建成功").to_string());
                         } else {
-                            self.toast_error(format!("{msg}成功"));
+                            self.toast_error(if ui_kit::i18n::is_english() {
+                                format!("{msg} succeeded")
+                            } else {
+                                format!("{msg}成功")
+                            });
                         } // 重新载入所有在线树的表
                         let ids: Vec<String> = self.trees.keys().cloned().collect();
                         for cid in ids {
@@ -4343,7 +4415,7 @@ impl ShujingApp {
                             }
                         }
                     }
-                    Err(e) => self.toast_error(format!("创建失败: {e}")),
+                    Err(e) => self.toast_error(format!("{}: {e}", ui_kit::t!("Create failed", "创建失败"))),
                 },
                 BgEvent::DesignerLoaded { tab_id, result } => {
                     let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
@@ -4494,7 +4566,13 @@ impl ShujingApp {
                                     rt.selected_key = None;
                                     rt.detail = None;
                                 }
-                                self.toast_error(format!("{key} 已不存在(已过期或被删除),已从列表移除"));
+                                self.toast_error(if ui_kit::i18n::is_english() {
+                                    format!(
+                                        "{key} no longer exists (expired or deleted); removed from the list"
+                                    )
+                                } else {
+                                    format!("{key} 已不存在(已过期或被删除),已从列表移除")
+                                });
                             } else {
                                 rt.error = Some(e);
                             }
@@ -4553,7 +4631,7 @@ impl ShujingApp {
                 }
                 BgEvent::RedisOpDone { tab_id, op, result } => {
                     if let Err(e) = &result {
-                        self.toast_error(format!("操作失败: {e}"));
+                        self.toast_error(format!("{}: {e}", ui_kit::t!("Operation failed", "操作失败")));
                     }
                     let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
                         continue;
@@ -4572,7 +4650,7 @@ impl ShujingApp {
                             rt.key_ttls.remove(&key);
                             rt.selected_key = None;
                             rt.detail = None;
-                            self.toast_error(format!("已删除 {key}"));
+                            self.toast_error(format!("{} {key}", ui_kit::t!("Deleted", "已删除")));
                         }
                         RedisOp::Rename { from, to } => {
                             // RENAME 会覆盖服务端已存在的 to:列表与徽标映射同步迁移
@@ -4593,7 +4671,7 @@ impl ShujingApp {
                             }
                             let tid = tab_id.clone();
                             self.redis_fetch_detail(&tid, &to);
-                            self.toast_error(format!("已重命名为 {to}"));
+                            self.toast_error(format!("{} {to}", ui_kit::t!("Renamed to", "已重命名为")));
                         }
                         RedisOp::Refresh { key } => {
                             let tid = tab_id.clone();
@@ -4608,7 +4686,7 @@ impl ShujingApp {
                 }
                 BgEvent::SqlDone { msg, result } => match result {
                     Ok(()) => self.toast_error(msg),
-                    Err(e) => self.toast_error(format!("执行失败: {e}")),
+                    Err(e) => self.toast_error(format!("{}: {e}", ui_kit::t!("Execution failed", "执行失败"))),
                 },
                 BgEvent::DdlLoaded { tab_id, result } => {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
@@ -4936,7 +5014,7 @@ impl ShujingApp {
             .filter_map(|(src, dst)| dst.map(|d| (src, im.target_cols[d].clone())))
             .collect();
         if col_map.is_empty() {
-            self.toast_error("未映射任何列".to_string());
+            self.toast_error(ui_kit::t!("No columns mapped", "未映射任何列").to_string());
             return;
         }
         let imp = shujing_core::composite::CsvImport {
@@ -4987,12 +5065,12 @@ impl ShujingApp {
     pub fn open_import(&mut self, conn_id: &str, database: &str, table: &str) {
         // 在途导入不允许重开:弹窗状态会被重建,running 门随之失效 → 并发 INSERT 重复入库
         if self.import.as_ref().is_some_and(|im| im.running) {
-            self.toast_error("导入正在进行中".to_string());
+            self.toast_error(ui_kit::t!("Import in progress", "导入正在进行中").to_string());
             return;
         }
         // 打开系统文件选择框,读表结构填目标列
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("表格", &["csv", "txt", "xlsx"])
+            .add_filter(ui_kit::t!("Data files", "表格"), &["csv", "txt", "xlsx"])
             .pick_file()
         else {
             return;

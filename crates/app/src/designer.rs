@@ -30,9 +30,17 @@ pub fn draw_designer_view(
             ui.horizontal_centered(|ui| {
                 // 模式徽标
                 let (label, fg, bg) = if is_edit {
-                    ("编辑表", p.accent, theme::tint(p.accent, 30))
+                    (
+                        ui_kit::t!("Edit Table", "编辑表"),
+                        p.accent,
+                        theme::tint(p.accent, 30),
+                    )
                 } else {
-                    ("新建表", p.green, theme::tint(p.green, 30))
+                    (
+                        ui_kit::t!("New Table", "新建表"),
+                        p.green,
+                        theme::tint(p.green, 30),
+                    )
                 };
                 let badge_g = ui.painter().layout_no_wrap(
                     label.to_string(),
@@ -59,12 +67,19 @@ pub fn draw_designer_view(
                 let name_resp = ui.add_sized(
                     [200.0, 26.0],
                     egui::TextEdit::singleline(&mut d.table_name)
-                        .hint_text(RichText::new("表名").font(theme::mono(12.0)).color(p.muted))
+                        .hint_text(
+                            RichText::new(ui_kit::t!("Table Name", "表名"))
+                                .font(theme::mono(12.0))
+                                .color(p.muted),
+                        )
                         .font(theme::mono(12.5))
                         .interactive(!is_edit),
                 );
                 if is_edit {
-                    name_resp.on_hover_text("编辑模式下表名不可修改");
+                    name_resp.on_hover_text(ui_kit::t!(
+                        "Table name is read-only in edit mode",
+                        "编辑模式下表名不可修改"
+                    ));
                 }
                 if let Some(db) = &d.database {
                     icons::chip(ui, db, p.muted);
@@ -88,7 +103,11 @@ pub fn draw_designer_view(
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    let save_label = if is_edit { "保存修改" } else { "创建表" };
+                    let save_label = if is_edit {
+                        ui_kit::t!("Save Changes", "保存修改")
+                    } else {
+                        ui_kit::t!("Create Table", "创建表")
+                    };
                     if theme::button(ui, save_label, theme::BtnKind::Primary).clicked() && !d.saving
                     {
                         actions.push(TabAction::SaveDesigner {
@@ -116,7 +135,9 @@ pub fn draw_designer_view(
         .show(ctx, |ui| {
             if d.loading && d.columns.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("读取结构中…").size(12.0).color(p.muted));
+                    ui.label(RichText::new(ui_kit::t!("Loading structure…", "读取结构中…"))
+                        .size(12.0)
+                        .color(p.muted));
                 });
                 return;
             }
@@ -158,7 +179,7 @@ pub fn draw_designer_view(
                     ui.painter().text(
                         add_rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "＋ 添加字段",
+                        ui_kit::t!("+ Add Field", "＋ 添加字段"),
                         egui::FontId::proportional(12.0),
                         p.text2,
                     );
@@ -189,7 +210,7 @@ pub fn draw_designer_view(
 
             // SQL 预览
             ui.add_space(8.0);
-            section_label(ui, "SQL 预览");
+            section_label(ui, ui_kit::t!("SQL Preview", "SQL 预览"));
             ui.add_space(4.0);
             let sql = preview_sql(ctx, d);
             egui::Frame::new()
@@ -229,14 +250,14 @@ fn draw_grid_header(ui: &mut egui::Ui, _is_edit: bool) {
     let xs = col_x(&widths);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), Sense::hover());
     for (i, h) in [
-        "字段名",
-        "类型",
-        "长度",
+        ui_kit::t!("Name", "字段名"),
+        ui_kit::t!("Type", "类型"),
+        ui_kit::t!("Length", "长度"),
         "NOT NULL",
         "PK",
-        "自增",
-        "默认值",
-        "注释",
+        ui_kit::t!("Auto Increment", "自增"),
+        ui_kit::t!("Default", "默认值"),
+        ui_kit::t!("Comment", "注释"),
     ]
     .iter()
     .enumerate()
@@ -407,9 +428,12 @@ fn draw_column_row(
         icons::paint_minus(ui.painter(), dr.center(), 4.0, del_col);
         if del_enabled {
             del_resp.clone().on_hover_text(if lock_existing {
-                "编辑模式不删除已有字段(避免误删数据)"
+                ui_kit::t!(
+                    "Existing fields are kept in edit mode to avoid accidental data loss",
+                    "编辑模式不删除已有字段(避免误删数据)"
+                )
             } else {
-                "删除字段"
+                ui_kit::t!("Delete Field", "删除字段")
             });
             if del_resp.clicked() {
                 remove = true;
@@ -511,7 +535,7 @@ fn preview_sql(ctx: &egui::Context, d: &DesignerTab) -> String {
         parts.push(format!("-- {}", out.warnings.join("\n-- ")));
     }
     if parts.is_empty() {
-        "-- 暂无变更".to_string()
+        ui_kit::t!("-- No changes", "-- 暂无变更").to_string()
     } else {
         parts.join("\n\n")
     }

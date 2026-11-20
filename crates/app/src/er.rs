@@ -32,7 +32,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
         }))
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
-                let title = "ER 图";
+                let title = ui_kit::t!("ER Diagram", "ER 图");
                 let tr = ui.label(theme::strong(title, theme::FS_TABLE_TITLE).color(p.text));
                 let g = ui.painter().layout_no_wrap(
                     title.to_string(),
@@ -45,9 +45,14 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                     icons::chip_at_baseline(ui, db, p.text2, baseline);
                 }
                 ui.add_space(4.0);
+                let summary = if ui_kit::i18n::is_english() {
+                    format!("{} tables · {} relations", e.tables.len(), e.fks.len())
+                } else {
+                    format!("{} 表 · {} 关系", e.tables.len(), e.fks.len())
+                };
                 icons::label_at_baseline(
                     ui,
-                    format!("{} 表 · {} 关系", e.tables.len(), e.fks.len()),
+                    summary,
                     egui::FontId::proportional(theme::FS_AUX),
                     p.muted,
                     baseline,
@@ -68,12 +73,15 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    if theme::button(ui, "重置布局", theme::BtnKind::Secondary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Reset Layout", "重置布局"), theme::BtnKind::Secondary)
+                        .clicked()
+                    {
                         e.positions.clear();
                         e.refit = true;
                         e.fit_tries = 0;
                     }
-                    if theme::button(ui, "适配", theme::BtnKind::Secondary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Fit", "适配"), theme::BtnKind::Secondary).clicked()
+                    {
                         e.refit = true;
                         e.fit_tries = 0;
                     }
@@ -87,14 +95,18 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
         .show(ctx, |ui| {
             if e.tables.is_empty() && e.loading {
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("读取表与外键…").size(12.0).color(p.muted));
+                    ui.label(
+                        RichText::new(ui_kit::t!("Loading tables and foreign keys…", "读取表与外键…"))
+                            .size(12.0)
+                            .color(p.muted),
+                    );
                 });
                 return;
             }
             if e.tables.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.label(
-                        RichText::new(e.error.as_deref().unwrap_or("没有表"))
+                        RichText::new(e.error.as_deref().unwrap_or(ui_kit::t!("No tables", "没有表")))
                             .size(12.0)
                             .color(p.muted),
                     );
@@ -287,7 +299,10 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
             ui.painter().text(
                 egui::pos2(canvas.left() + 12.0, canvas.bottom() - 14.0),
                 egui::Align2::LEFT_CENTER,
-                "拖拽节点 · 滚轮缩放 · 空白平移 · 点击节点打开表",
+                ui_kit::t!(
+                    "Drag nodes · scroll to zoom · drag canvas to pan · click a node to open table",
+                    "拖拽节点 · 滚轮缩放 · 空白平移 · 点击节点打开表"
+                ),
                 egui::FontId::proportional(11.0),
                 p.muted,
             );
@@ -402,7 +417,7 @@ fn draw_node(
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            "(无结构信息)",
+            ui_kit::t!("(no structure info)", "(无结构信息)"),
             egui::FontId::proportional(11.0 * e.zoom.max(0.6)),
             p.muted,
         );
@@ -456,10 +471,15 @@ fn draw_node(
         }
     }
     if cols.len() > MAX_ROWS {
+        let more = if ui_kit::i18n::is_english() {
+            format!("+{} columns", cols.len() - MAX_ROWS)
+        } else {
+            format!("+{} 列", cols.len() - MAX_ROWS)
+        };
         painter.text(
             egui::pos2(rect.left() + 10.0 * e.zoom, rect.bottom() - 6.0 * e.zoom),
             egui::Align2::LEFT_CENTER,
-            format!("+{} 列", cols.len() - MAX_ROWS),
+            more.as_str(),
             egui::FontId::proportional(10.0 * e.zoom.max(0.6)),
             p.muted,
         );

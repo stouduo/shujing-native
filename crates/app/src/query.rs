@@ -41,8 +41,8 @@ pub fn draw_query_view(
                     .iter()
                     .find(|c| c.id == q.conn_id)
                     .map(|c| c.name.clone())
-                    .unwrap_or_else(|| "选择连接".into());
-                ui.label(RichText::new("连接").size(theme::FS_AUX).color(p.muted));
+                    .unwrap_or_else(|| ui_kit::t!("Select connection", "选择连接").into());
+                ui.label(RichText::new(ui_kit::t!("Connection", "连接")).size(theme::FS_AUX).color(p.muted));
                 if let Some(new_id) =
                     theme::select(ui, "query-conn-select", &sel_name, &opts, 180.0)
                 {
@@ -57,8 +57,8 @@ pub fn draw_query_view(
                     let sel_db = q
                         .database
                         .clone()
-                        .unwrap_or_else(|| "(连接默认库)".into());
-                    ui.label(RichText::new("库").size(theme::FS_AUX).color(p.muted));
+                        .unwrap_or_else(|| ui_kit::t!("(default db)", "(连接默认库)").into());
+                    ui.label(RichText::new(ui_kit::t!("DB", "库")).size(theme::FS_AUX).color(p.muted));
                     if let Some(new_db) =
                         theme::select(ui, "query-db-select", &sel_db, &db_opts, 150.0)
                     {
@@ -67,7 +67,7 @@ pub fn draw_query_view(
                 }
                 if q.running {
                     ui.add(egui::Spinner::new().size(11.0).color(p.muted));
-                    if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
                         actions.push(TabAction::CancelQuery {
                             tab_id: tab_id.to_string(),
                         });
@@ -90,7 +90,11 @@ pub fn draw_query_view(
                     let runnable = !q.running && !q.sql.trim().is_empty() && !q.conn_id.is_empty();
                     let run = theme::button_shortcut(
                         ui,
-                        if is_redis { "执行命令" } else { "运行" },
+                        if is_redis {
+                            ui_kit::t!("Execute", "执行命令")
+                        } else {
+                            ui_kit::t!("Run", "运行")
+                        },
                         "⌘↵",
                         if runnable {
                             theme::BtnKind::Primary
@@ -99,9 +103,9 @@ pub fn draw_query_view(
                         },
                     );
                     run.clone().on_hover_text(if is_redis {
-                        "执行 Redis 命令 (⌘↵)"
+                        ui_kit::t!("Execute Redis command (⌘↵)", "执行 Redis 命令 (⌘↵)")
                     } else {
-                        "运行 SQL (⌘↵)"
+                        ui_kit::t!("Run SQL (⌘↵)", "运行 SQL (⌘↵)")
                     });
                     if runnable && run.clicked() {
                         actions.push(if is_redis {
@@ -121,26 +125,32 @@ pub fn draw_query_view(
                         .unwrap_or(false);
                     // 导出按钮常驻(不可用时灰置):随结果集类型异步出现/消失会把
                     // 右侧的 格式化/片段/计划/优化/历史 整体平移,按压中的点击被吞
-                    let csv = theme::button(ui, "导出 CSV", theme::BtnKind::Secondary);
+                    let csv = theme::button(ui, ui_kit::t!("Export CSV", "导出 CSV"), theme::BtnKind::Secondary);
                     let csv_clicked = csv.clicked();
                     if !has_grid {
-                        csv.on_disabled_hover_text("当前结果集不可导出(无表格)");
+                        csv.on_disabled_hover_text(ui_kit::t!(
+                            "Nothing to export in this result set (no grid)",
+                            "当前结果集不可导出(无表格)"
+                        ));
                     }
                     if has_grid && csv_clicked {
                         actions.push(TabAction::ExportQueryCsv {
                             tab_id: tab_id.to_string(),
                         });
                     }
-                    let xlsx = theme::button(ui, "导出 Excel", theme::BtnKind::Secondary);
+                    let xlsx = theme::button(ui, ui_kit::t!("Export Excel", "导出 Excel"), theme::BtnKind::Secondary);
                     let xlsx_clicked = xlsx.clicked();
                     if !has_grid {
-                        xlsx.on_disabled_hover_text("当前结果集不可导出(无表格)");
+                        xlsx.on_disabled_hover_text(ui_kit::t!(
+                            "Nothing to export in this result set (no grid)",
+                            "当前结果集不可导出(无表格)"
+                        ));
                     }
                     if has_grid && xlsx_clicked {
                         if let Some(r) = q.results.get(q.active_set) {
                             if !r.columns.is_empty() {
                                 actions.push(TabAction::ExportXlsx {
-                                    suggest: "查询结果.xlsx".into(),
+                                    suggest: ui_kit::t!("query-results.xlsx", "查询结果.xlsx").into(),
                                     columns: r.columns.clone(),
                                     rows: r.rows.clone(),
                                 });
@@ -150,7 +160,10 @@ pub fn draw_query_view(
                     if !is_redis {
                         let ai = theme::button(ui, "AI", theme::BtnKind::Secondary);
                         let ai_clicked = ai.clicked();
-                        ai.on_hover_text("AI 助手:生成 SQL / 解释 / 优化建议(设置里配 API)");
+                        ai.on_hover_text(ui_kit::t!(
+                            "AI Assistant: generate SQL / explain / optimization tips (configure API in Settings)",
+                            "AI 助手:生成 SQL / 解释 / 优化建议(设置里配 API)"
+                        ));
                         if ai_clicked {
                             actions.push(TabAction::OpenAiAssist {
                                 tab_id: tab_id.to_string(),
@@ -159,17 +172,20 @@ pub fn draw_query_view(
                         }
                     }
                     if !is_redis
-                        && theme::button(ui, "格式化", theme::BtnKind::Secondary)
-                            .on_hover_text("美化 SQL(关键字大写+换行缩进)")
+                        && theme::button(ui, ui_kit::t!("Format", "格式化"), theme::BtnKind::Secondary)
+                            .on_hover_text(ui_kit::t!(
+                                "Beautify SQL (uppercase keywords + line breaks and indent)",
+                                "美化 SQL(关键字大写+换行缩进)"
+                            ))
                             .clicked()
                         && !q.sql.trim().is_empty()
                     {
                         q.sql = shujing_core::sql_format::format_sql(&q.sql);
                     }
-                    ui.menu_button(RichText::new("片段").size(12.5).color(p.text2), |ui| {
+                    ui.menu_button(RichText::new(ui_kit::t!("Snippets", "片段")).size(12.5).color(p.text2), |ui| {
                             ui.set_min_width(300.0);
                             if !is_redis && !q.sql.trim().is_empty() {
-                                if ui.button("☆ 保存当前 SQL 为片段").clicked() {
+                                if ui.button(ui_kit::t!("☆ Save Current SQL as Snippet", "☆ 保存当前 SQL 为片段")).clicked() {
                                     actions.push(TabAction::SnippetSave {
                                         sql: q.sql.clone(),
                                     });
@@ -178,7 +194,7 @@ pub fn draw_query_view(
                                 ui.separator();
                             }
                             if snippets.is_empty() {
-                                ui.label(RichText::new("暂无片段").size(12.0).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("No snippets", "暂无片段")).size(12.0).color(p.muted));
                             }
                             for (i, snip) in snippets.iter().enumerate() {
                                 let preview: String = snip.chars().take(56).collect();
@@ -194,7 +210,7 @@ pub fn draw_query_view(
                                         q.sql.push_str(snip);
                                         ui.close_menu();
                                     }
-                                    if ui.small_button(RichText::new("删").size(10.0)).clicked() {
+                                    if ui.small_button(RichText::new(ui_kit::t!("Del", "删")).size(10.0)).clicked() {
                                         actions.push(TabAction::SnippetDelete { idx: i });
                                         ui.close_menu();
                                     }
@@ -202,8 +218,11 @@ pub fn draw_query_view(
                             }
                         });
                     if !is_redis
-                        && theme::button(ui, "计划", theme::BtnKind::Secondary)
-                            .on_hover_text("EXPLAIN 执行计划(结果进结果区,不进历史)")
+                        && theme::button(ui, ui_kit::t!("Plan", "计划"), theme::BtnKind::Secondary)
+                            .on_hover_text(ui_kit::t!(
+                                "EXPLAIN plan (result goes to the results area, not history)",
+                                "EXPLAIN 执行计划(结果进结果区,不进历史)"
+                            ))
                             .clicked()
                     {
                         actions.push(TabAction::ExplainQuery {
@@ -211,8 +230,11 @@ pub fn draw_query_view(
                         });
                     }
                     if !is_redis
-                        && theme::button(ui, "优化", theme::BtnKind::Secondary)
-                            .on_hover_text("SQL 优化分析(EXPLAIN + 规则诊断)")
+                        && theme::button(ui, ui_kit::t!("Optimize", "优化"), theme::BtnKind::Secondary)
+                            .on_hover_text(ui_kit::t!(
+                                "SQL optimization analysis (EXPLAIN + rule diagnostics)",
+                                "SQL 优化分析(EXPLAIN + 规则诊断)"
+                            ))
                             .clicked()
                     {
                         q.optimize = Some(super::app::OptimizeState {
@@ -225,10 +247,10 @@ pub fn draw_query_view(
                     }
                     let history = q.history.clone();
                     let hist =
-                        ui.menu_button(RichText::new("历史").size(12.5).color(p.text2), |ui| {
+                        ui.menu_button(RichText::new(ui_kit::t!("History", "历史")).size(12.5).color(p.text2), |ui| {
                             ui.set_min_width(280.0);
                             if history.is_empty() {
-                                ui.label(RichText::new("暂无记录").size(12.0).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("No history", "暂无记录")).size(12.0).color(p.muted));
                             }
                             for (i, h) in history.iter().enumerate() {
                                 let preview: String = h.chars().take(52).collect();
@@ -245,7 +267,7 @@ pub fn draw_query_view(
                                 }
                             }
                         });
-                    hist.response.on_hover_text("执行历史");
+                    hist.response.on_hover_text(ui_kit::t!("Execution history", "执行历史"));
                 });
             });
             theme::hairline_bottom(ui);
@@ -319,9 +341,9 @@ pub fn draw_query_view(
                                     .margin(egui::Margin::ZERO)
                                     .hint_text(
                                         RichText::new(if is_redis {
-                                            "GET key    ⌘↵ 执行命令"
+                                            ui_kit::t!("GET key    ⌘↵ Execute", "GET key    ⌘↵ 执行命令")
                                         } else {
-                                            "SELECT / INSERT / UPDATE / DDL …    ⌘↵ 运行    ⌃Space 补全"
+                                            ui_kit::t!("SELECT / INSERT / UPDATE / DDL …    ⌘↵ Run    ⌃Space Complete", "SELECT / INSERT / UPDATE / DDL …    ⌘↵ 运行    ⌃Space 补全")
                                         })
                                         .font(theme::mono(12.0))
                                         .color(p.muted),
@@ -412,7 +434,7 @@ pub fn draw_query_view(
                 if q.results.len() > 1 {
                     let mut go: Option<usize> = None;
                     for i in 0..q.results.len() {
-                        let label = format!("结果 {}", i + 1);
+                        let label = format!("{} {}", ui_kit::t!("Result", "结果"), i + 1);
                         let selected = i == q.active_set;
                         let btn =
                             egui::Button::new(RichText::new(label).size(11.5).color(if selected {
@@ -446,16 +468,25 @@ pub fn draw_query_view(
                 }
                 if r.columns.is_empty() {
                     ui.label(
-                        RichText::new(format!("OK · 影响 {} 行", r.affected))
-                            .size(11.5)
-                            .color(p.green),
+                        RichText::new(if ui_kit::i18n::is_english() {
+                            format!("OK · {} rows affected", r.affected)
+                        } else {
+                            format!("OK · 影响 {} 行", r.affected)
+                        })
+                        .size(11.5)
+                        .color(p.green),
                     );
                 } else {
                     ui.label(
                         RichText::new(format!(
-                            "{} 行{} · {} ms",
+                            "{} {}{} · {} ms",
                             r.rows.len(),
-                            if r.truncated { " · 已截断" } else { "" },
+                            ui_kit::t!("rows", "行"),
+                            if r.truncated {
+                                ui_kit::t!(" · truncated", " · 已截断")
+                            } else {
+                                ""
+                            },
                             r.elapsed_ms
                         ))
                         .size(11.5)
@@ -482,21 +513,22 @@ pub fn draw_query_view(
                     if !q.q_changes.is_empty() {
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new(format!(
-                                    "{} 处修改(未保存)",
-                                    q.q_changes.len()
-                                ))
+                                RichText::new(if ui_kit::i18n::is_english() {
+                                    format!("{} changes (unsaved)", q.q_changes.len())
+                                } else {
+                                    format!("{} 处修改(未保存)", q.q_changes.len())
+                                })
                                 .size(11.5)
                                 .color(ORANGE),
                             );
-                            if theme::button(ui, "保存修改 ⌘S", theme::BtnKind::Primary)
+                            if theme::button(ui, ui_kit::t!("Commit Changes ⌘S", "保存修改 ⌘S"), theme::BtnKind::Primary)
                                 .clicked()
                             {
                                 actions.push(TabAction::SaveQueryChanges {
                                     tab_id: tab_id.to_string(),
                                 });
                             }
-                            if theme::button(ui, "放弃", theme::BtnKind::Secondary).clicked() {
+                            if theme::button(ui, ui_kit::t!("Discard", "放弃"), theme::BtnKind::Secondary).clicked() {
                                 q.q_changes.clear();
                                 q.q_editing = None;
                             }
@@ -574,7 +606,7 @@ pub fn draw_optimize_modal(
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(740.0);
-            theme::modal_title(ui, "SQL 优化分析");
+            theme::modal_title(ui, ui_kit::t!("SQL Optimization Analysis", "SQL 优化分析"));
             ui.spacing_mut().item_spacing.y = 8.0;
 
             // SQL 预览
@@ -597,7 +629,7 @@ pub fn draw_optimize_modal(
             if state.running {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(12.0).color(p.muted));
-                    ui.label(RichText::new("EXPLAIN 执行中…").size(12.0).color(p.muted));
+                    ui.label(RichText::new(ui_kit::t!("EXPLAIN running…", "EXPLAIN 执行中…")).size(12.0).color(p.muted));
                 });
             } else if let Some(err) = &state.error {
                 ui.label(
@@ -614,11 +646,11 @@ pub fn draw_optimize_modal(
                 let danger = findings.iter().filter(|f| f.level == shujing_core::sql_advisor::Level::Danger).count();
                 let warn = findings.iter().filter(|f| f.level == shujing_core::sql_advisor::Level::Warn).count();
                 let (grade, gcol) = if danger > 0 {
-                    ("需优化", p.red)
+                    (ui_kit::t!("Needs Optimization", "需优化"), p.red)
                 } else if warn > 0 {
-                    ("可改进", ORANGE)
+                    (ui_kit::t!("Needs Improvement", "可改进"), ORANGE)
                 } else {
-                    ("良好", p.green)
+                    (ui_kit::t!("Good", "良好"), p.green)
                 };
                 ui.horizontal(|ui| {
                     let g = ui.painter().layout_no_wrap(grade.to_string(), theme::bold(13.0), Color32::PLACEHOLDER);
@@ -634,10 +666,17 @@ pub fn draw_optimize_modal(
                         gcol,
                     );
                     ui.label(
-                        RichText::new(format!(
-                            "{danger} 项风险 · {warn} 项警告 · {} 项提示",
-                            findings.len() - danger - warn
-                        ))
+                        RichText::new(if ui_kit::i18n::is_english() {
+                            format!(
+                                "{danger} risks · {warn} warnings · {} suggestions",
+                                findings.len() - danger - warn
+                            )
+                        } else {
+                            format!(
+                                "{danger} 项风险 · {warn} 项警告 · {} 项提示",
+                                findings.len() - danger - warn
+                            )
+                        })
                         .size(11.5)
                         .color(p.muted),
                     );
@@ -651,7 +690,7 @@ pub fn draw_optimize_modal(
                     });
                 });
                 ui.add_space(2.0);
-                ui.label(theme::strong("诊断建议", 12.0).color(p.text2));
+                ui.label(theme::strong(ui_kit::t!("Recommendations", "诊断建议"), 12.0).color(p.text2));
                 // 建议列表有界滚动(按屏幕高度给足,小窗仍有界):原来无界,
                 // 计划行多时弹窗被撑得超出窗口、底部被硬裁(渲染巡检实测)
                 let scr_h = ui.ctx().screen_rect().height();
@@ -662,9 +701,9 @@ pub fn draw_optimize_modal(
                     .show(ui, |ui| {
                         for f in &findings {
                     let (badge, col) = match f.level {
-                        shujing_core::sql_advisor::Level::Danger => ("危险", p.red),
-                        shujing_core::sql_advisor::Level::Warn => ("警告", ORANGE),
-                        shujing_core::sql_advisor::Level::Info => ("提示", p.accent),
+                        shujing_core::sql_advisor::Level::Danger => (ui_kit::t!("Danger", "危险"), p.red),
+                        shujing_core::sql_advisor::Level::Warn => (ui_kit::t!("Warning", "警告"), ORANGE),
+                        shujing_core::sql_advisor::Level::Info => (ui_kit::t!("Info", "提示"), p.accent),
                     };
                     ui.horizontal(|ui| {
                         let b = ui.painter().layout_no_wrap(badge.to_string(), theme::bold(9.5), Color32::PLACEHOLDER);
@@ -692,7 +731,7 @@ pub fn draw_optimize_modal(
                 if let Some(plan) = &state.plan {
                     if !plan.columns.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(theme::strong("执行计划", 12.0).color(p.text2));
+                        ui.label(theme::strong(ui_kit::t!("Execution Plan", "执行计划"), 12.0).color(p.text2));
                         egui::ScrollArea::vertical()
                             .id_salt("optimize-plan-grid")
                             .max_height((scr_h * 0.3).clamp(120.0, 240.0))
@@ -716,7 +755,11 @@ pub fn draw_optimize_modal(
                 let runnable = !state.running && !sql.is_empty();
                 if theme::button(
                     ui,
-                    if state.running { "分析中…" } else { "运行分析" },
+                    if state.running {
+                        ui_kit::t!("Analyzing…", "分析中…")
+                    } else {
+                        ui_kit::t!("Run Analysis", "运行分析")
+                    },
                     if runnable { theme::BtnKind::Primary } else { theme::BtnKind::Secondary },
                 )
                 .clicked()
@@ -727,9 +770,12 @@ pub fn draw_optimize_modal(
                     });
                 }
                 ui.label(
-                    RichText::new("静态规则不执行;EXPLAIN 仅读取计划")
-                        .size(11.0)
-                        .color(p.muted),
+                    RichText::new(ui_kit::t!(
+                        "Static rules don't execute; EXPLAIN only reads the plan",
+                        "静态规则不执行;EXPLAIN 仅读取计划"
+                    ))
+                    .size(11.0)
+                    .color(p.muted),
                 );
             });
         });
@@ -845,7 +891,14 @@ fn build_candidates(
                     }
                 }
             }
-            _ => out.push((format!("{table}.*  列名加载中…"), "…")),
+            _ => out.push((
+                if ui_kit::i18n::is_english() {
+                    format!("{table}.*  loading columns…")
+                } else {
+                    format!("{table}.*  列名加载中…")
+                },
+                "…",
+            )),
         }
         return out;
     }
@@ -1094,11 +1147,17 @@ fn draw_autocomplete(
                                         g,
                                         color,
                                     );
-                                    // 右缘类别
+                                    // 右缘类别(kind 同时是内部比较标记,保持中文;仅渲染时按语言转换)
+                                    let kind_label = match *kind {
+                                        "表" => ui_kit::t!("table", "表"),
+                                        "列" => ui_kit::t!("column", "列"),
+                                        "关键字" => ui_kit::t!("keyword", "关键字"),
+                                        _ => *kind,
+                                    };
                                     ui.painter().text(
                                         egui::pos2(rect.right() - 10.0, rect.center().y),
                                         egui::Align2::RIGHT_CENTER,
-                                        *kind,
+                                        kind_label,
                                         egui::FontId::proportional(10.0),
                                         p.muted,
                                     );
@@ -1111,9 +1170,12 @@ fn draw_autocomplete(
                                 }
                             });
                         ui.label(
-                            RichText::new("↑↓ 选择 · Tab/Enter 插入 · Esc 关闭")
-                                .size(10.0)
-                                .color(p.muted),
+                            RichText::new(ui_kit::t!(
+                                "↑↓ Select · Tab/Enter Insert · Esc Close",
+                                "↑↓ 选择 · Tab/Enter 插入 · Esc 关闭"
+                            ))
+                            .size(10.0)
+                            .color(p.muted),
                         );
                     });
             });

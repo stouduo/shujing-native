@@ -518,6 +518,27 @@ fn render_data_table() {
 }
 
 #[test]
+fn render_english_mode() {
+    // i18n 冒烟:英文开关下渲染同一数据表场景,输出 data_table_en.png 供比对;
+    // 结束复位中文(语言是全局静态,渲染测试无文本断言,串扰无害但保持整洁)
+    assert_eq!(ui_kit::i18n::t("Tables", "表"), "表");
+    ui_kit::i18n::set_english(true);
+    assert_eq!(ui_kit::i18n::t("Tables", "表"), "Tables");
+    let mut tab = role_tab();
+    tab.changes
+        .push((1, "role_name".into(), Some("内容编辑".into())));
+    let cell = std::cell::RefCell::new(Some(tab));
+    let conns: Vec<shujing_core::ConnInfo> = vec![];
+    render("data_table_en", 1280.0, 780.0, true, move |ctx| {
+        let mut b = cell.borrow_mut();
+        let tab = b.as_mut().unwrap();
+        let _actions = table_view::draw_table_view(ctx, "t1", tab, &conns);
+    });
+    ui_kit::i18n::set_english(false);
+    assert_eq!(ui_kit::i18n::t("Tables", "表"), "表");
+}
+
+#[test]
 fn render_data_table_narrow() {
     // 窄视口 + 长 access_urls:验证表格整体溢出时底部出现横向滚动条
     let tab = role_tab();

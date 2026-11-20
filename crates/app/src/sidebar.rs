@@ -91,23 +91,43 @@ impl ShujingApp {
                         6.0,
                         if resp.hovered() { p.text } else { p.accent },
                     );
-                    resp.clone()
-                        .on_hover_text("新建连接(右键:导入 DBeaver/Navicat 连接)");
+                    resp.clone().on_hover_text(ui_kit::t!(
+                        "New Connection (right-click: import DBeaver/Navicat connections)",
+                        "新建连接(右键:导入 DBeaver/Navicat 连接)"
+                    ));
                     if resp.clicked() {
                         self.conn_modal = Some(ConnModal::new());
                     }
                     resp.context_menu(|ui| {
-                        if ui.button("导入连接(DBeaver/Navicat)…").clicked() {
+                        if ui
+                            .button(ui_kit::t!(
+                                "Import Connections (DBeaver/Navicat)…",
+                                "导入连接(DBeaver/Navicat)…"
+                            ))
+                            .clicked()
+                        {
                             ui.ctx()
                                 .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-import-conns"), true));
                             ui.close_menu();
                         }
-                        if ui.button("导出连接(加密备份)…").clicked() {
+                        if ui
+                            .button(ui_kit::t!(
+                                "Export Connections (Encrypted Backup)…",
+                                "导出连接(加密备份)…"
+                            ))
+                            .clicked()
+                        {
                             ui.ctx()
                                 .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-export-enc"), true));
                             ui.close_menu();
                         }
-                        if ui.button("导入连接(加密备份)…").clicked() {
+                        if ui
+                            .button(ui_kit::t!(
+                                "Import Connections (Encrypted Backup)…",
+                                "导入连接(加密备份)…"
+                            ))
+                            .clicked()
+                        {
                             ui.ctx()
                                 .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-import-enc"), true));
                             ui.close_menu();
@@ -154,7 +174,13 @@ impl ShujingApp {
         ui.add_space(5.0);
 
         // 表搜索(原型常驻)
-        theme::search_box(ui, "side-table-search", &mut self.table_filter, "搜索表", w);
+        theme::search_box(
+            ui,
+            "side-table-search",
+            &mut self.table_filter,
+            ui_kit::t!("Search tables", "搜索表"),
+            w,
+        );
         ui.add_space(10.0);
 
         // 底部栏(版本+主题)固定高度,滚动区让出空间
@@ -177,7 +203,10 @@ impl ShujingApp {
                 if self.conns.is_empty() {
                     ui.add_space(20.0);
                     ui.label(
-                        RichText::new("还没有连接\n点击右上角 ＋ 添加数据库")
+                        RichText::new(ui_kit::t!(
+                            "No connections yet\nClick ＋ at the top right to add a database",
+                            "还没有连接\n点击右上角 ＋ 添加数据库"
+                        ))
                             .size(12.0)
                             .color(p.muted),
                     );
@@ -192,7 +221,10 @@ impl ShujingApp {
             if let Some((tag, url)) = upd {
                 let btn = ui.button(RichText::new(format!("⬆ {tag}")).size(10.5));
                 let clicked = btn.clicked();
-                btn.on_hover_text("有新版本,点击打开下载页");
+                btn.on_hover_text(ui_kit::t!(
+                    "New version available, click to open the download page",
+                    "有新版本,点击打开下载页"
+                ));
                 if clicked {
                     let _ = ui.ctx().open_url(egui::output::OpenUrl::new_tab(url));
                 }
@@ -213,7 +245,10 @@ impl ShujingApp {
                     egui::FontId::proportional(15.0),
                     if resp.hovered() { p.text } else { p.text2 },
                 );
-                resp.clone().on_hover_text("切换深浅外观");
+                resp.clone().on_hover_text(ui_kit::t!(
+                    "Toggle light/dark appearance",
+                    "切换深浅外观"
+                ));
                 if resp.clicked() {
                     self.theme_toggle_requested = true;
                 }
@@ -268,7 +303,7 @@ impl ShujingApp {
             painter.text(
                 chip.center(),
                 egui::Align2::CENTER_CENTER,
-                "只读",
+                ui_kit::t!("Read-only", "只读"),
                 theme::bold(9.0),
                 AMBER,
             );
@@ -295,9 +330,15 @@ impl ShujingApp {
         );
         let name_resp = ui.allocate_rect(name_rect, Sense::click());
         let tip = if online {
-            "已连接 · 右键:断开/编辑/删除"
+            ui_kit::t!(
+                "Connected · right-click: disconnect/edit/delete",
+                "已连接 · 右键:断开/编辑/删除"
+            )
         } else {
-            "离线 · 点击连接,右键更多操作"
+            ui_kit::t!(
+                "Offline · click to connect, right-click for more actions",
+                "离线 · 点击连接,右键更多操作"
+            )
         };
         name_resp.clone().on_hover_text(tip);
         // 只有离线时点击才连接;在线时点击不做任何事(防止误触断开)
@@ -308,36 +349,52 @@ impl ShujingApp {
         // 连接操作收进名称的右键菜单(作用在名称上,不是整行空白)
         let mut menu_act: Option<&str> = None;
         let _ = name_resp.clone().context_menu(|ui| {
-            let conn_label = if online { "断开连接" } else { "连接" };
+            let conn_label = if online {
+                ui_kit::t!("Disconnect", "断开连接")
+            } else {
+                ui_kit::t!("Connect", "连接")
+            };
             if ui.button(conn_label).clicked() {
                 menu_act = Some("toggle");
                 ui.close_menu();
             }
             if online {
-                if ui.button("新建查询").clicked() {
+                if ui.button(ui_kit::t!("New Query", "新建查询")).clicked() {
                     menu_act = Some("query");
                     ui.close_menu();
                 }
-                if ui.button("筛选显示的库…").clicked() {
+                if ui
+                    .button(ui_kit::t!("Filter Databases…", "筛选显示的库…"))
+                    .clicked()
+                {
                     menu_act = Some("dbfilter");
                     ui.close_menu();
                 }
-                if ui.button("刷新").clicked() {
+                if ui.button(ui_kit::t!("Refresh", "刷新")).clicked() {
                     menu_act = Some("refresh");
                     ui.close_menu();
                 }
-                if ui.button("导入 SQL 文件…").clicked() {
+                if ui
+                    .button(ui_kit::t!("Import SQL File…", "导入 SQL 文件…"))
+                    .clicked()
+                {
                     menu_act = Some("importsql");
                     ui.close_menu();
                 }
                 ui.separator();
             }
-            if ui.button("编辑连接…").clicked() {
+            if ui
+                .button(ui_kit::t!("Edit Connection…", "编辑连接…"))
+                .clicked()
+            {
                 menu_act = Some("edit");
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button("删除连接…").clicked() {
+            if ui
+                .button(ui_kit::t!("Delete Connection…", "删除连接…"))
+                .clicked()
+            {
                 menu_act = Some("delete");
                 ui.close_menu();
             }
@@ -376,18 +433,28 @@ impl ShujingApp {
             Some("delete") => {
                 // 断开连接有脏标签确认,删除更应明示:会一并丢弃未保存修改
                 let dirty_hint = if self.conn_has_dirty_tabs(&c.id) {
-                    "\n注意:该连接有未保存的修改,删除后将一并丢弃。"
+                    ui_kit::t!(
+                        "\nNote: this connection has unsaved changes that will be discarded on delete.",
+                        "\n注意:该连接有未保存的修改,删除后将一并丢弃。"
+                    )
                 } else {
                     ""
                 };
                 self.open_confirm(
                     &c.id.clone(),
                     None,
-                    "删除连接",
-                    &format!(
-                        "删除连接「{}」及其配置?{}\n输入连接名以确认:",
-                        c.name, dirty_hint
-                    ),
+                    ui_kit::t!("Delete Connection", "删除连接"),
+                    &if ui_kit::i18n::is_english() {
+                        format!(
+                            "Delete connection \"{}\" and its configuration?{}\nEnter the connection name to confirm:",
+                            c.name, dirty_hint
+                        )
+                    } else {
+                        format!(
+                            "删除连接「{}」及其配置?{}\n输入连接名以确认:",
+                            c.name, dirty_hint
+                        )
+                    },
                     Some(c.name.clone()),
                     String::new(),
                 );
@@ -425,9 +492,9 @@ impl ShujingApp {
             };
             icons::funnel_glyph(ui.painter(), frec.center(), fcol);
             fres.clone().on_hover_text(if has_filter {
-                "已筛选库 · 点击调整"
+                ui_kit::t!("Databases filtered · click to adjust", "已筛选库 · 点击调整")
             } else {
-                "筛选显示的库"
+                ui_kit::t!("Filter Databases", "筛选显示的库")
             });
             if fres.clicked() {
                 self.open_db_filter(&c.id);
@@ -515,9 +582,12 @@ impl ShujingApp {
                 // 未展开的库表清单未加载,搜索够不到:明示而不是谎报"无匹配"
                 let unloaded = databases.iter().any(|d| !tables_by_db.contains_key(d));
                 let hint = if unloaded {
-                    "无匹配表(仅搜索已加载的库;在树中展开其余库可扩大范围)"
+                    ui_kit::t!(
+                        "No matching tables (only loaded databases are searched; expand other databases in the tree to widen the search)",
+                        "无匹配表(仅搜索已加载的库;在树中展开其余库可扩大范围)"
+                    )
                 } else {
-                    "无匹配表"
+                    ui_kit::t!("No matching tables", "无匹配表")
                 };
                 ui.label(RichText::new(hint).size(12.0).color(theme::c().muted));
             }
@@ -548,12 +618,12 @@ impl ShujingApp {
                 let groups: [(&str, &str, Box<dyn Fn(&shujing_core::TableMeta) -> bool>); 2] = [
                     (
                         "view",
-                        "视图",
+                        ui_kit::t!("Views", "视图"),
                         Box::new(|m: &shujing_core::TableMeta| m.kind == "view"),
                     ),
                     (
                         "prog",
-                        "程序对象",
+                        ui_kit::t!("Program Objects", "程序对象"),
                         Box::new(|m: &shujing_core::TableMeta| {
                             matches!(m.kind.as_str(), "trigger" | "function" | "procedure")
                         }),
@@ -648,10 +718,10 @@ impl ShujingApp {
                         ui.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
                         ui.menu_button(RichText::new("＋").size(13.0).color(p.muted), |ui| {
                             for (kind, label) in [
-                                ("trigger", "触发器"),
-                                ("procedure", "存储过程"),
-                                ("function", "函数"),
-                                ("view", "视图"),
+                                ("trigger", ui_kit::t!("Triggers", "触发器")),
+                                ("procedure", ui_kit::t!("Stored Procedures", "存储过程")),
+                                ("function", ui_kit::t!("Functions", "函数")),
+                                ("view", ui_kit::t!("Views", "视图")),
                             ] {
                                 if ui.button(label).clicked() {
                                     picked = Some(kind);
@@ -664,7 +734,7 @@ impl ShujingApp {
                 )
                 .inner;
             plus_clicked = plus_resp.clicked();
-            plus_resp.on_hover_text("新建对象(模板)");
+            plus_resp.on_hover_text(ui_kit::t!("New Object (template)", "新建对象(模板)"));
             if let Some(kind) = picked {
                 self.open_query_tab(Some(conn_id.to_string()));
                 let idx = self.tabs.len() - 1;
@@ -744,12 +814,15 @@ impl ShujingApp {
         );
         let menu_id = egui::Id::new(format!("progmenu-{conn_id}-{db}-{name}"));
         let _ = resp.clone().context_menu(|ui| {
-            if ui.button("查看 DDL").clicked() {
+            if ui.button(ui_kit::t!("View DDL", "查看 DDL")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "ddl".to_string()));
                 ui.close_menu();
             }
-            if ui.button("删除对象…").clicked() {
+            if ui
+                .button(ui_kit::t!("Delete Object…", "删除对象…"))
+                .clicked()
+            {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "drop".to_string()));
                 ui.close_menu();
@@ -772,7 +845,12 @@ impl ShujingApp {
                 // PG 的 DROP TRIGGER 强制要求 ON <所属表>
                 if kind == "trigger" && is_pg {
                     let Some(owner) = owner else {
-                        self.toast_error(format!("无法确定触发器 {name} 的所属表,不能生成 DROP"));
+                        let msg = if ui_kit::i18n::is_english() {
+                            format!("Cannot determine the owning table of trigger {name}, cannot generate DROP")
+                        } else {
+                            format!("无法确定触发器 {name} 的所属表,不能生成 DROP")
+                        };
+                        self.toast_error(msg);
                         return;
                     };
                     let mysql = crate::app::mysql_quote(&self.conns, conn_id);
@@ -781,8 +859,12 @@ impl ShujingApp {
                     self.open_confirm(
                         conn_id,
                         Some(db),
-                        "删除对象",
-                        &format!("删除触发器 {name}(所属表 {owner})?此操作不可恢复!\n输入对象名以确认:"),
+                        ui_kit::t!("Delete Object", "删除对象"),
+                        &if ui_kit::i18n::is_english() {
+                            format!("Delete trigger {name} (owned table {owner})? This action cannot be undone!\nEnter the object name to confirm:")
+                        } else {
+                            format!("删除触发器 {name}(所属表 {owner})?此操作不可恢复!\n输入对象名以确认:")
+                        },
                         Some(name.to_string()),
                         format!("DROP TRIGGER IF EXISTS {ident} ON {tbl};"),
                     );
@@ -803,8 +885,12 @@ impl ShujingApp {
                 self.open_confirm(
                     conn_id,
                     Some(db),
-                    "删除对象",
-                    &format!("删除 {name}?此操作不可恢复!\n输入对象名以确认:"),
+                    ui_kit::t!("Delete Object", "删除对象"),
+                    &if ui_kit::i18n::is_english() {
+                        format!("Delete {name}? This action cannot be undone!\nEnter the object name to confirm:")
+                    } else {
+                        format!("删除 {name}?此操作不可恢复!\n输入对象名以确认:")
+                    },
                     Some(name.to_string()),
                     stmt,
                 );
@@ -884,32 +970,53 @@ impl ShujingApp {
         let mut export_schema = false;
         let mut refresh_tables = false;
         let _ = resp.clone().context_menu(|ui| {
-            if ui.button("新建表…").clicked() {
+            if ui.button(ui_kit::t!("New Table…", "新建表…")).clicked() {
                 new_table = true;
                 ui.close_menu();
             }
-            if ui.button("新建查询").clicked() {
+            if ui.button(ui_kit::t!("New Query", "新建查询")).clicked() {
                 self.open_query_tab(Some(conn_id.to_string()));
                 ui.close_menu();
             }
-            if ui.button("查看 ER 图").clicked() {
+            if ui
+                .button(ui_kit::t!("View ER Diagram", "查看 ER 图"))
+                .clicked()
+            {
                 er = true;
                 ui.close_menu();
             }
-            if ui.button("导入 SQL 文件…").clicked() {
+            if ui
+                .button(ui_kit::t!("Import SQL File…", "导入 SQL 文件…"))
+                .clicked()
+            {
                 import_sql = true;
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button("导出数据库 SQL(结构+数据)").clicked() {
+            if ui
+                .button(ui_kit::t!(
+                    "Export Database SQL (Schema+Data)",
+                    "导出数据库 SQL(结构+数据)"
+                ))
+                .clicked()
+            {
                 export_full = true;
                 ui.close_menu();
             }
-            if ui.button("导出数据库 SQL(仅结构)").clicked() {
+            if ui
+                .button(ui_kit::t!(
+                    "Export Database SQL (Schema Only)",
+                    "导出数据库 SQL(仅结构)"
+                ))
+                .clicked()
+            {
                 export_schema = true;
                 ui.close_menu();
             }
-            if ui.button("刷新表列表").clicked() {
+            if ui
+                .button(ui_kit::t!("Refresh Table List", "刷新表列表"))
+                .clicked()
+            {
                 refresh_tables = true;
                 ui.close_menu();
             }
@@ -937,7 +1044,7 @@ impl ShujingApp {
         if resp.clicked() {
             self.toggle_database(conn_id, db);
         }
-        let _ = resp.on_hover_text("收起/展开");
+        let _ = resp.on_hover_text(ui_kit::t!("Collapse/Expand", "收起/展开"));
     }
 
     /// 收起的库:缩进对齐表行,chevron + 粗体库名
@@ -1006,28 +1113,46 @@ impl ShujingApp {
         let mut export_full = false;
         let mut export_schema = false;
         let _ = resp.clone().context_menu(|ui| {
-            if ui.button("新建表…").clicked() {
+            if ui.button(ui_kit::t!("New Table…", "新建表…")).clicked() {
                 new_table = true;
                 ui.close_menu();
             }
-            if ui.button("新建查询").clicked() {
+            if ui.button(ui_kit::t!("New Query", "新建查询")).clicked() {
                 self.open_query_tab(Some(conn_id.to_string()));
                 ui.close_menu();
             }
-            if ui.button("查看 ER 图").clicked() {
+            if ui
+                .button(ui_kit::t!("View ER Diagram", "查看 ER 图"))
+                .clicked()
+            {
                 er = true;
                 ui.close_menu();
             }
-            if ui.button("导入 SQL 文件…").clicked() {
+            if ui
+                .button(ui_kit::t!("Import SQL File…", "导入 SQL 文件…"))
+                .clicked()
+            {
                 import_sql = true;
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button("导出数据库 SQL(结构+数据)").clicked() {
+            if ui
+                .button(ui_kit::t!(
+                    "Export Database SQL (Schema+Data)",
+                    "导出数据库 SQL(结构+数据)"
+                ))
+                .clicked()
+            {
                 export_full = true;
                 ui.close_menu();
             }
-            if ui.button("导出数据库 SQL(仅结构)").clicked() {
+            if ui
+                .button(ui_kit::t!(
+                    "Export Database SQL (Schema Only)",
+                    "导出数据库 SQL(仅结构)"
+                ))
+                .clicked()
+            {
                 export_schema = true;
                 ui.close_menu();
             }
@@ -1132,82 +1257,104 @@ impl ShujingApp {
         let menu_id = egui::Id::new(format!("tblmenu-{conn_id}-{db}-{name}"));
         let clicked_resp = resp.clone();
         let _ = clicked_resp.context_menu(|ui| {
-            if ui.button("表统计…").clicked() {
+            if ui
+                .button(ui_kit::t!("Table Statistics…", "表统计…"))
+                .clicked()
+            {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "stats".to_string()));
                 ui.close_menu();
             }
-            if ui.button("导入表格(CSV/Excel)…").clicked() {
+            if ui
+                .button(ui_kit::t!("Import Table (CSV/Excel)…", "导入表格(CSV/Excel)…"))
+                .clicked()
+            {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "import".to_string()));
                 ui.close_menu();
             }
-            if ui.button("表结构").clicked() {
+            if ui.button(ui_kit::t!("Table Structure", "表结构")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "struct".to_string()));
                 ui.close_menu();
             }
-            if ui.button("设计表").clicked() {
+            if ui.button(ui_kit::t!("Design Table", "设计表")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "design".to_string()));
                 ui.close_menu();
             }
-            if ui.button("新建查询").clicked() {
+            if ui.button(ui_kit::t!("New Query", "新建查询")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "query".to_string()));
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button("复制表名").clicked() {
+            if ui.button(ui_kit::t!("Copy Table Name", "复制表名")).clicked() {
                 ui.ctx().copy_text(name.to_string());
                 ui.close_menu();
             }
-            if ui.button("复制 SELECT *").clicked() {
+            if ui.button(ui_kit::t!("Copy SELECT *", "复制 SELECT *")).clicked() {
                 let mysql = crate::app::mysql_quote(&self.conns, conn_id);
                 let ident = crate::app::quote_ident_by(name, mysql);
                 ui.ctx()
                     .copy_text(format!("SELECT * FROM {ident} LIMIT 100;"));
                 ui.close_menu();
             }
-            if ui.button("插入表名到查询").clicked() {
+            if ui
+                .button(ui_kit::t!("Insert Table Name into Query", "插入表名到查询"))
+                .clicked()
+            {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "insname".to_string()));
                 ui.close_menu();
             }
-            if ui.button("导出 SQL(结构+数据)").clicked() {
+            if ui
+                .button(ui_kit::t!("Export SQL (Schema+Data)", "导出 SQL(结构+数据)"))
+                .clicked()
+            {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "exportsql".to_string()));
                 ui.close_menu();
             }
-            if ui.button("复制表为…").clicked() {
+            if ui
+                .button(ui_kit::t!("Copy Table as…", "复制表为…"))
+                .clicked()
+            {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "copytable".to_string()));
                 ui.close_menu();
             }
-            if !is_view && ui.button("维护:更新统计 (ANALYZE)").clicked() {
+            if !is_view
+                && ui
+                    .button(ui_kit::t!(
+                        "Maintenance: Update Statistics (ANALYZE)",
+                        "维护:更新统计 (ANALYZE)"
+                    ))
+                    .clicked()
+            {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "analyze".to_string()));
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button("重命名…").clicked() {
+            if ui.button(ui_kit::t!("Rename…", "重命名…")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "rename".to_string()));
                 ui.close_menu();
             }
-            if !is_view && ui.button("清空表数据…").clicked() {
+            if !is_view && ui.button(ui_kit::t!("Truncate Table…", "清空表数据…")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "truncate".to_string()));
                 ui.close_menu();
             }
             if is_view {
                 // 视图没有数据可清空,DROP TABLE 对视图也报错:给专用的 DROP VIEW
-                if ui.button("删除视图…").clicked() {
+                if ui.button(ui_kit::t!("Delete View…", "删除视图…")).clicked() {
                     ui.ctx()
                         .memory_mut(|m| m.data.insert_temp(menu_id, "dropview".to_string()));
                     ui.close_menu();
                 }
-            } else if ui.button("删除表…").clicked() {
+            } else if ui.button(ui_kit::t!("Delete Table…", "删除表…")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "drop".to_string()));
                 ui.close_menu();
@@ -1234,8 +1381,12 @@ impl ShujingApp {
                     self.open_confirm(
                         conn_id,
                         Some(db),
-                        "复制表",
-                        &format!("把表 {name} 复制为新表(结构+数据)。输入新表名:"),
+                        ui_kit::t!("Copy Table", "复制表"),
+                        &if ui_kit::i18n::is_english() {
+                            format!("Copy table {name} to a new table (schema+data). Enter the new table name:")
+                        } else {
+                            format!("把表 {name} 复制为新表(结构+数据)。输入新表名:")
+                        },
                         None,
                         format!("CREATE TABLE {{v}} AS SELECT * FROM {ident};"),
                     );
@@ -1252,8 +1403,12 @@ impl ShujingApp {
                     self.open_confirm(
                         conn_id,
                         Some(db),
-                        "更新统计信息",
-                        &format!("对表 {name} 执行 ANALYZE 更新优化器统计?"),
+                        ui_kit::t!("Update Statistics", "更新统计信息"),
+                        &if ui_kit::i18n::is_english() {
+                            format!("Run ANALYZE on table {name} to update optimizer statistics?")
+                        } else {
+                            format!("对表 {name} 执行 ANALYZE 更新优化器统计?")
+                        },
                         None,
                         sql,
                     );
@@ -1269,8 +1424,12 @@ impl ShujingApp {
                     self.open_confirm(
                         conn_id,
                         Some(db),
-                        "重命名表",
-                        &format!("把表 {name} 重命名为(输入新表名):"),
+                        ui_kit::t!("Rename Table", "重命名表"),
+                        &if ui_kit::i18n::is_english() {
+                            format!("Rename table {name} to (enter the new table name):")
+                        } else {
+                            format!("把表 {name} 重命名为(输入新表名):")
+                        },
                         None,
                         sql,
                     );
@@ -1286,15 +1445,26 @@ impl ShujingApp {
                     self.open_confirm(
                         conn_id,
                         Some(db),
-                        "清空表数据",
-                        &format!(
-                            "确认清空表 {name} 的全部数据?不可恢复!\n输入表名以确认:{}",
-                            if mysql {
-                                ""
-                            } else {
-                                "(SQLite 用 DELETE 逐行清空)"
-                            }
-                        ),
+                        ui_kit::t!("Truncate Table", "清空表数据"),
+                        &if ui_kit::i18n::is_english() {
+                            format!(
+                                "Confirm truncating all data of table {name}? This cannot be undone!\nEnter the table name to confirm:{}",
+                                if mysql {
+                                    ""
+                                } else {
+                                    " (SQLite clears rows one by one with DELETE)"
+                                }
+                            )
+                        } else {
+                            format!(
+                                "确认清空表 {name} 的全部数据?不可恢复!\n输入表名以确认:{}",
+                                if mysql {
+                                    ""
+                                } else {
+                                    "(SQLite 用 DELETE 逐行清空)"
+                                }
+                            )
+                        },
                         Some(name.to_string()),
                         sql,
                     );
@@ -1310,8 +1480,12 @@ impl ShujingApp {
                     self.open_confirm(
                         conn_id,
                         Some(db),
-                        "删除视图",
-                        &format!("即将删除视图 {name},不可恢复!\n输入名称以确认:"),
+                        ui_kit::t!("Delete View", "删除视图"),
+                        &if ui_kit::i18n::is_english() {
+                            format!("View {name} will be deleted. This cannot be undone!\nEnter the name to confirm:")
+                        } else {
+                            format!("即将删除视图 {name},不可恢复!\n输入名称以确认:")
+                        },
                         Some(name.to_string()),
                         sql,
                     );
@@ -1322,8 +1496,12 @@ impl ShujingApp {
                     self.open_confirm(
                         conn_id,
                         Some(db),
-                        "删除表",
-                        &format!("即将删除表 {name} 及其全部数据,不可恢复!\n输入表名以确认:"),
+                        ui_kit::t!("Delete Table", "删除表"),
+                        &if ui_kit::i18n::is_english() {
+                            format!("Table {name} and all its data will be deleted. This cannot be undone!\nEnter the table name to confirm:")
+                        } else {
+                            format!("即将删除表 {name} 及其全部数据,不可恢复!\n输入表名以确认:")
+                        },
                         Some(name.to_string()),
                         format!("DROP TABLE {ident};"),
                     );
@@ -1430,10 +1608,14 @@ impl ShujingApp {
                 self.open_confirm(
                     &c.id.clone(),
                     None,
-                    "断开连接",
-                    &format!("连接「{}」下有 {n} 个标签存在未保存修改,断开将一并关闭并丢弃。\n继续?",
-                        c.name,
-                    ),
+                    ui_kit::t!("Disconnect", "断开连接"),
+                    &if ui_kit::i18n::is_english() {
+                        format!("{n} tab(s) under connection \"{}\" have unsaved changes; disconnecting will close them and discard the changes.\nContinue?", c.name)
+                    } else {
+                        format!("连接「{}」下有 {n} 个标签存在未保存修改,断开将一并关闭并丢弃。\n继续?",
+                            c.name,
+                        )
+                    },
                     None,
                     String::new(),
                 );

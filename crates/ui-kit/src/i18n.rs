@@ -13,6 +13,14 @@ pub fn is_english() -> bool {
     EN.load(Ordering::Relaxed)
 }
 
+/// t!("English", "中文"):按当前语言取文案,默认中文原文。
+#[macro_export]
+macro_rules! t {
+    ($en:expr, $zh:expr) => {
+        $crate::i18n::t($en, $zh)
+    };
+}
+
 /// 取文案:en 有英文用英文,否则原样(中文原文即默认语言)。
 /// 生命周期跟随入参(调用点都是 'static 字面量,直接使用无碍)
 pub fn t<'a>(en: &'a str, zh: &'a str) -> &'a str {

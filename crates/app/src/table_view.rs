@@ -614,12 +614,12 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 controls_ui.allocate_exact_size(egui::vec2(28.0, bar_h), Sense::click());
             let pcol = if presp.hovered() { p.text } else { p.muted };
             icons::paint_plus(controls_ui.painter(), prect.center(), 6.5, pcol);
-            presp.clone().on_hover_text("新建查询标签 (⌘T)");
+            presp.clone().on_hover_text(ui_kit::t!("New query tab (⌘T)", "新建查询标签 (⌘T)"));
             if presp.clicked() {
                 new_query = true;
             }
             controls_ui.menu_button(
-                RichText::new("▾ 全部标签").size(11.0).color(p.text2),
+                RichText::new(ui_kit::t!("▾ All tabs", "▾ 全部标签")).size(11.0).color(p.text2),
                 |ui| {
                     ui.set_min_width(220.0);
                     for (i, t) in app.tabs.iter().enumerate() {
@@ -772,20 +772,20 @@ fn draw_one_tab(
     let mut rename_cancel = false;
     let mut menu: Option<u8> = None;
     let _ = resp.clone().context_menu(|ui| {
-        if ui.button("关闭其他").clicked() {
+        if ui.button(ui_kit::t!("Close Others", "关闭其他")).clicked() {
             menu = Some(0);
             ui.close_menu();
         }
-        if ui.button("关闭左侧").clicked() {
+        if ui.button(ui_kit::t!("Close Left", "关闭左侧")).clicked() {
             menu = Some(1);
             ui.close_menu();
         }
-        if ui.button("关闭右侧").clicked() {
+        if ui.button(ui_kit::t!("Close Right", "关闭右侧")).clicked() {
             menu = Some(2);
             ui.close_menu();
         }
         // 重命名从双击迁来:双击易误触(快连点两下就弹输入框还取消切换)
-        if ui.button("重命名标签…").clicked() {
+        if ui.button(ui_kit::t!("Rename Tab…", "重命名标签…")).clicked() {
             menu = Some(3);
             ui.close_menu();
         }
@@ -962,13 +962,20 @@ pub(crate) fn draw_table_view(
                 }
                 let hint = if tab.pk_loaded && tab.pk_cols.is_empty() {
                     match tab.total {
-                        Some(t) => format!("共 {} 行", icons::thousands(t)),
-                        None => "只读".to_string(),
+                        Some(t) => {
+                            let msg = if ui_kit::i18n::is_english() {
+                                format!("{} rows", icons::thousands(t))
+                            } else {
+                                format!("共 {} 行", icons::thousands(t))
+                            };
+                            msg
+                        }
+                        None => ui_kit::t!("Read-only", "只读").to_string(),
                     }
                 } else if tab.pk_loaded {
-                    "双击编辑 · 有主键".to_string()
+                    ui_kit::t!("Double-click to edit · PK", "双击编辑 · 有主键").to_string()
                 } else {
-                    "读取结构中…".to_string()
+                    ui_kit::t!("Loading structure…", "读取结构中…").to_string()
                 };
                 if compact {
                     title_resp.clone().on_hover_text(&hint);
@@ -996,20 +1003,32 @@ pub(crate) fn draw_table_view(
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     if !tab.changes.is_empty() {
+                        let save_label = if ui_kit::i18n::is_english() {
+                            format!("Save {}", tab.changes.len())
+                        } else {
+                            format!("保存 {}", tab.changes.len())
+                        };
                         let save = theme::button_shortcut(
                             ui,
-                            &format!("保存 {}", tab.changes.len()),
+                            &save_label,
                             "⌘S",
                             theme::BtnKind::Success,
                         );
-                        save.clone().on_hover_text("保存全部未保存修改 (⌘S)");
+                        save.clone().on_hover_text(ui_kit::t!(
+                            "Save all unsaved changes (⌘S)",
+                            "保存全部未保存修改 (⌘S)"
+                        ));
                         if save.clicked() {
                             actions.push(TabAction::SaveChanges {
                                 tab_id: tab_id_s.clone(),
                             });
                         }
-                        let discard = theme::button(ui, "丢弃修改", theme::BtnKind::Danger);
-                        discard.clone().on_hover_text("丢弃未保存的单元格修改");
+                        let discard =
+                            theme::button(ui, ui_kit::t!("Discard Changes", "丢弃修改"), theme::BtnKind::Danger);
+                        discard.clone().on_hover_text(ui_kit::t!(
+                            "Discard unsaved cell changes",
+                            "丢弃未保存的单元格修改"
+                        ));
                         if discard.clicked() {
                             actions.push(TabAction::DiscardChanges {
                                 tab_id: tab_id_s.clone(),
@@ -1026,7 +1045,7 @@ pub(crate) fn draw_table_view(
                         ui.menu_button(RichText::new("···").size(15.0).color(p.text2), |ui| {
                             ui.set_min_width(180.0);
                             if compact {
-                                if ui.button("＋ 新增行").clicked() {
+                                if ui.button(ui_kit::t!("＋ Add Row", "＋ 新增行")).clicked() {
                                     tab.insert_form = Some(
                                         tab.columns
                                             .iter()
@@ -1036,11 +1055,11 @@ pub(crate) fn draw_table_view(
                                     ui.close_menu();
                                 }
                                 let adv_label = if tab.filter_bar_open {
-                                    "收起高级筛选"
+                                    ui_kit::t!("Hide Advanced Filter", "收起高级筛选")
                                 } else if tab.applied_where.is_some() {
-                                    "高级筛选(已应用)…"
+                                    ui_kit::t!("Advanced Filter (applied)…", "高级筛选(已应用)…")
                                 } else {
-                                    "高级筛选…"
+                                    ui_kit::t!("Advanced Filter…", "高级筛选…")
                                 };
                                 if ui.button(adv_label).clicked() {
                                     tab.filter_bar_open = !tab.filter_bar_open;
@@ -1048,18 +1067,18 @@ pub(crate) fn draw_table_view(
                                 }
                                 ui.separator();
                             }
-                            if ui.button("查看整行详情").clicked() {
+                            if ui.button(ui_kit::t!("View Row Details", "查看整行详情")).clicked() {
                                 tab.detail = true;
                                 ui.close_menu();
                             }
                             ui.separator();
-                            if ui.button("导出 CSV").clicked() {
+                            if ui.button(ui_kit::t!("Export CSV", "导出 CSV")).clicked() {
                                 actions.push(TabAction::ExportCsv {
                                     tab_id: tab_id_s.clone(),
                                 });
                                 ui.close_menu();
                             }
-                            if ui.button("导出 Excel(.xlsx)").clicked() {
+                            if ui.button(ui_kit::t!("Export Excel (.xlsx)", "导出 Excel(.xlsx)")).clicked() {
                                 actions.push(TabAction::ExportXlsx {
                                     suggest: format!("{}.xlsx", tab.table),
                                     columns: tab.columns.clone(),
@@ -1067,18 +1086,18 @@ pub(crate) fn draw_table_view(
                                 });
                                 ui.close_menu();
                             }
-                            if ui.button("导出 SQL").clicked() {
+                            if ui.button(ui_kit::t!("Export SQL", "导出 SQL")).clicked() {
                                 actions.push(TabAction::ExportSql {
                                     tab_id: tab_id_s.clone(),
                                 });
                                 ui.close_menu();
                             }
-                            if ui.button("预览 Parquet 文件…").clicked() {
+                            if ui.button(ui_kit::t!("Preview Parquet File…", "预览 Parquet 文件…")).clicked() {
                                 toolbar_menu = Some(TabAction::PreviewParquet);
                                 ui.close_menu();
                             }
                             if !conn_is_mongo && !conn_is_sqlite {
-                                if ui.button("数据传输到…").clicked() {
+                                if ui.button(ui_kit::t!("Transfer Data to…", "数据传输到…")).clicked() {
                                     actions.push(TabAction::OpenTransfer {
                                         conn_id: tab.conn_id.clone(),
                                         db: tab.database.clone(),
@@ -1088,7 +1107,7 @@ pub(crate) fn draw_table_view(
                                 }
                             }
                             if !conn_is_mongo {
-                                if ui.button("数据对比…").clicked() {
+                                if ui.button(ui_kit::t!("Compare Data…", "数据对比…")).clicked() {
                                     actions.push(TabAction::OpenDataDiff {
                                         conn_id: tab.conn_id.clone(),
                                         db: tab.database.clone(),
@@ -1097,7 +1116,7 @@ pub(crate) fn draw_table_view(
                                     ui.close_menu();
                                 }
                             }
-                            if ui.button("结构对比…").clicked() {
+                            if ui.button(ui_kit::t!("Compare Structure…", "结构对比…")).clicked() {
                                 actions.push(TabAction::OpenSchemaDiff {
                                     conn_id: tab.conn_id.clone(),
                                     db: tab.database.clone(),
@@ -1108,19 +1127,19 @@ pub(crate) fn draw_table_view(
                             // Mongo 文档操作(只读浏览之外的 v2 编辑)
                             if conn_is_mongo {
                                 ui.separator();
-                                if ui.button("插入文档(JSON)…").clicked() {
+                                if ui.button(ui_kit::t!("Insert Document (JSON)…", "插入文档(JSON)…")).clicked() {
                                     actions.push(TabAction::MongoInsertDoc {
                                         tab_id: tab_id_s.clone(),
                                     });
                                     ui.close_menu();
                                 }
-                                if ui.button("编辑选中文档…").clicked() {
+                                if ui.button(ui_kit::t!("Edit Selected Document…", "编辑选中文档…")).clicked() {
                                     actions.push(TabAction::MongoEditDoc {
                                         tab_id: tab_id_s.clone(),
                                     });
                                     ui.close_menu();
                                 }
-                                if ui.button("删除选中文档…").clicked() {
+                                if ui.button(ui_kit::t!("Delete Selected Documents…", "删除选中文档…")).clicked() {
                                     actions.push(TabAction::MongoDeleteDoc {
                                         tab_id: tab_id_s.clone(),
                                     });
@@ -1128,7 +1147,7 @@ pub(crate) fn draw_table_view(
                                 }
                             }
                             ui.separator();
-                            if ui.button("复制为 TSV").clicked() {
+                            if ui.button(ui_kit::t!("Copy as TSV", "复制为 TSV")).clicked() {
                                 toolbar_copy = Some(export_rows_text(
                                     tab.columns.as_slice(),
                                     tab.rows.as_slice(),
@@ -1136,21 +1155,21 @@ pub(crate) fn draw_table_view(
                                 ));
                                 ui.close_menu();
                             }
-                            if ui.button("复制为 Markdown").clicked() {
+                            if ui.button(ui_kit::t!("Copy as Markdown", "复制为 Markdown")).clicked() {
                                 toolbar_copy = Some(export_rows_markdown(
                                     tab.columns.as_slice(),
                                     tab.rows.as_slice(),
                                 ));
                                 ui.close_menu();
                             }
-                            if ui.button("复制为 JSON").clicked() {
+                            if ui.button(ui_kit::t!("Copy as JSON", "复制为 JSON")).clicked() {
                                 toolbar_copy = Some(export_rows_json(
                                     tab.columns.as_slice(),
                                     tab.rows.as_slice(),
                                 ));
                                 ui.close_menu();
                             }
-                            if ui.button("复制为 INSERT 语句").clicked() {
+                            if ui.button(ui_kit::t!("Copy as INSERT", "复制为 INSERT 语句")).clicked() {
                                 toolbar_copy = Some(export_rows_inserts(
                                     &tab.table,
                                     tab.columns.as_slice(),
@@ -1160,7 +1179,7 @@ pub(crate) fn draw_table_view(
                                 ui.close_menu();
                             }
                             ui.separator();
-                            ui.label(RichText::new("显示列").size(10.5).color(p.muted));
+                            ui.label(RichText::new(ui_kit::t!("Show Columns", "显示列")).size(10.5).color(p.muted));
                             for c in tab.columns.clone() {
                                 let mut shown = !tab.hidden_cols.contains(&c);
                                 if theme::checkbox(ui, &mut shown, &c).changed() {
@@ -1177,8 +1196,8 @@ pub(crate) fn draw_table_view(
                                     tab.editing = None;
                                 }
                             }
-                            theme::checkbox(ui, &mut tab.show_rowno, "行号");
-                            if ui.small_button("显示全部列").clicked() {
+                            theme::checkbox(ui, &mut tab.show_rowno, ui_kit::t!("Row Numbers", "行号"));
+                            if ui.small_button(ui_kit::t!("Show All Columns", "显示全部列")).clicked() {
                                 let had_hidden = !tab.hidden_cols.is_empty();
                                 tab.hidden_cols.clear();
                                 if had_hidden {
@@ -1192,27 +1211,27 @@ pub(crate) fn draw_table_view(
                             ui.separator();
                             if ui
                                 .button(if theme::is_dark() {
-                                    "浅色外观"
+                                    ui_kit::t!("Light Appearance", "浅色外观")
                                 } else {
-                                    "深色外观"
+                                    ui_kit::t!("Dark Appearance", "深色外观")
                                 })
                                 .clicked()
                             {
                                 actions.push(TabAction::ToggleTheme);
                                 ui.close_menu();
                             }
-                            if ui.button("外观设置…").clicked() {
+                            if ui.button(ui_kit::t!("Appearance Settings…", "外观设置…")).clicked() {
                                 // 经动作中转(draw_table_view 无 self)
                                 toolbar_menu = Some(TabAction::OpenSettings);
                                 ui.close_menu();
                             }
                             // 每页行数已移至底栏快捷设置
                         });
-                    more.response.on_hover_text("更多操作");
+                    more.response.on_hover_text(ui_kit::t!("More actions", "更多操作"));
 
                     if !tab.loading
                         && icons::refresh(ui, p.text2)
-                            .on_hover_text("刷新 (⌘R)")
+                            .on_hover_text(ui_kit::t!("Refresh (⌘R)", "刷新 (⌘R)"))
                             .clicked()
                     {
                         actions.push(TabAction::Reload {
@@ -1223,21 +1242,24 @@ pub(crate) fn draw_table_view(
                     if !compact {
                         // 高级筛选(字段/自由模式筛选栏)快捷开关
                         let adv_label = if tab.filter_bar_open {
-                            "收起筛选"
+                            ui_kit::t!("Hide Filter", "收起筛选")
                         } else if tab.applied_where.is_some() {
-                            "高级筛选*"
+                            ui_kit::t!("Advanced Filter*", "高级筛选*")
                         } else {
-                            "高级筛选"
+                            ui_kit::t!("Advanced Filter", "高级筛选")
                         };
                         if theme::button(ui, adv_label, theme::BtnKind::Secondary)
-                            .on_hover_text("字段/自由模式高级筛选栏")
+                            .on_hover_text(ui_kit::t!(
+                                "Field/free-mode advanced filter bar",
+                                "字段/自由模式高级筛选栏"
+                            ))
                             .clicked()
                         {
                             tab.filter_bar_open = !tab.filter_bar_open;
                         }
                         // 新增行(快捷栏直达)
-                        if theme::button(ui, "＋ 新增行", theme::BtnKind::Secondary)
-                            .on_hover_text("插入一行新数据")
+                        if theme::button(ui, ui_kit::t!("＋ Add Row", "＋ 新增行"), theme::BtnKind::Secondary)
+                            .on_hover_text(ui_kit::t!("Insert a new row", "插入一行新数据"))
                             .clicked()
                         {
                             tab.insert_form = Some(
@@ -1248,9 +1270,17 @@ pub(crate) fn draw_table_view(
                             );
                         }
                     }
-                    let fresp =
-                        theme::filter_box(ui, "table-filter", &mut tab.filter, "筛选行", 152.0);
-                    fresp.clone().on_hover_text("回车应用筛选(全列模糊匹配)");
+                    let fresp = theme::filter_box(
+                        ui,
+                        "table-filter",
+                        &mut tab.filter,
+                        ui_kit::t!("Filter rows", "筛选行"),
+                        152.0,
+                    );
+                    fresp.clone().on_hover_text(ui_kit::t!(
+                        "Press Enter to filter (fuzzy match across all columns)",
+                        "回车应用筛选(全列模糊匹配)"
+                    ));
                     let enter = fresp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if enter {
                         let new_filter =
@@ -1274,7 +1304,7 @@ pub(crate) fn draw_table_view(
     if toolbar_copy.is_some() {
         actions.push(TabAction::CopyToClipboard {
             text: toolbar_copy.take().unwrap_or_default(),
-            toast: "已复制到剪贴板".to_string(),
+            toast: ui_kit::t!("Copied to clipboard", "已复制到剪贴板").to_string(),
         });
     }
 
@@ -1298,8 +1328,14 @@ pub(crate) fn draw_table_view(
                 // 若随内容伸缩会把右侧「每页 N ▾/清除筛选」顶走几十 px——按压中的
                 // 点击落空。固定槽位,文本左对齐画在槽内
                 let total_text = match tab.total {
-                    Some(t) => format!("共 {} 行", icons::thousands(t)),
-                    None => "行数未知".to_string(),
+                    Some(t) => {
+                        if ui_kit::i18n::is_english() {
+                            format!("{} rows", icons::thousands(t))
+                        } else {
+                            format!("共 {} 行", icons::thousands(t))
+                        }
+                    }
+                    None => ui_kit::t!("Unknown rows", "行数未知").to_string(),
                 };
                 let (slot, _) = ui.allocate_exact_size(egui::vec2(120.0, 18.0), Sense::hover());
                 ui.painter().text(
@@ -1313,9 +1349,13 @@ pub(crate) fn draw_table_view(
                     vsep(ui);
                     let clip = if compact_footer { 10 } else { 20 };
                     ui.label(
-                        RichText::new(format!("已筛选「{}」", icons::clip(&f, clip)))
-                            .size(11.5)
-                            .color(p.accent),
+                        RichText::new(if ui_kit::i18n::is_english() {
+                            format!("Filtered \"{}\"", icons::clip(&f, clip))
+                        } else {
+                            format!("已筛选「{}」", icons::clip(&f, clip))
+                        })
+                        .size(11.5)
+                        .color(p.accent),
                     );
                     let (rect, resp) =
                         ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
@@ -1329,7 +1369,7 @@ pub(crate) fn draw_table_view(
                         3.2,
                         if resp.hovered() { p.text } else { p.muted },
                     );
-                    resp.clone().on_hover_text("清除筛选");
+                    resp.clone().on_hover_text(ui_kit::t!("Clear Filter", "清除筛选"));
                     if resp.clicked() {
                         clear_filter = true;
                     }
@@ -1341,14 +1381,23 @@ pub(crate) fn draw_table_view(
                 // 每页行数快捷设置(底栏直达)
                 vsep(ui);
                 let size_opts = [50usize, 100, 200, 500];
-                let size_label = format!("每页 {} ▾", tab.page_size);
+                let size_label = if ui_kit::i18n::is_english() {
+                    format!("{} / page ▾", tab.page_size)
+                } else {
+                    format!("每页 {} ▾", tab.page_size)
+                };
                 ui.menu_button(RichText::new(size_label).size(11.5).color(p.text2), |ui| {
                     ui.set_min_width(90.0);
                     for n in size_opts {
                         if ui
                             .selectable_label(
                                 tab.page_size == n,
-                                RichText::new(format!("{n} 行")).size(12.0),
+                                RichText::new(if ui_kit::i18n::is_english() {
+                                    format!("{n} rows")
+                                } else {
+                                    format!("{n} 行")
+                                })
+                                .size(12.0),
                             )
                             .clicked()
                         {
@@ -1364,9 +1413,13 @@ pub(crate) fn draw_table_view(
                 if !tab.changes.is_empty() {
                     vsep(ui);
                     ui.label(
-                        RichText::new(format!("{} 处未保存", tab.changes.len()))
-                            .size(11.5)
-                            .color(p.green),
+                        RichText::new(if ui_kit::i18n::is_english() {
+                            format!("{} unsaved", tab.changes.len())
+                        } else {
+                            format!("{} 处未保存", tab.changes.len())
+                        })
+                        .size(11.5)
+                        .color(p.green),
                     );
                 }
                 if let Some(r) = tab.sel_range {
@@ -1374,7 +1427,17 @@ pub(crate) fn draw_table_view(
                     if r2 > r1 || c2 > c1 {
                         vsep(ui);
                         let msg = if compact_footer {
-                            format!("已选 {}×{}", r2 - r1 + 1, c2 - c1 + 1)
+                            if ui_kit::i18n::is_english() {
+                                format!("Selected {}×{}", r2 - r1 + 1, c2 - c1 + 1)
+                            } else {
+                                format!("已选 {}×{}", r2 - r1 + 1, c2 - c1 + 1)
+                            }
+                        } else if ui_kit::i18n::is_english() {
+                            format!(
+                                "Selected {}×{} · Type and press Enter to fill · ⌘C copy · Delete for NULL",
+                                r2 - r1 + 1,
+                                c2 - c1 + 1
+                            )
                         } else {
                             format!(
                                 "已选 {}×{} · 输入值回车填充 · ⌘C 复制 · Delete 置 NULL",
@@ -1383,17 +1446,32 @@ pub(crate) fn draw_table_view(
                             )
                         };
                         ui.label(RichText::new(msg).size(11.5).color(p.accent))
-                            .on_hover_text("输入值回车填充 · ⌘C 复制 · Delete 置 NULL");
+                            .on_hover_text(ui_kit::t!(
+                                "Type and press Enter to fill · ⌘C copy · Delete for NULL",
+                                "输入值回车填充 · ⌘C 复制 · Delete 置 NULL"
+                            ));
                     }
                 } else if tab.multi_sel.len() > 1 {
                     vsep(ui);
                     let msg = if compact_footer {
-                        format!("已选 {} 行", tab.multi_sel.len())
+                        if ui_kit::i18n::is_english() {
+                            format!("Selected {} rows", tab.multi_sel.len())
+                        } else {
+                            format!("已选 {} 行", tab.multi_sel.len())
+                        }
+                    } else if ui_kit::i18n::is_english() {
+                        format!(
+                            "Selected {} rows · ⌘C copy · right-click a row for batch delete",
+                            tab.multi_sel.len()
+                        )
                     } else {
                         format!("已选 {} 行 · ⌘C 复制 · 行右键批量删除", tab.multi_sel.len())
                     };
                     ui.label(RichText::new(msg).size(11.5).color(p.accent))
-                        .on_hover_text("⌘C 复制 · 行右键批量删除");
+                        .on_hover_text(ui_kit::t!(
+                            "⌘C copy · right-click a row for batch delete",
+                            "⌘C 复制 · 行右键批量删除"
+                        ));
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
@@ -1456,7 +1534,8 @@ pub(crate) fn draw_table_view(
                         ui.allocate_exact_size(egui::vec2(mode_w, 26.0), Sense::hover());
                     ui.painter()
                         .rect_filled(mrect, egui::CornerRadius::same(7), p.bg);
-                    for (i, label) in ["字段模式", "自由 WHERE"].iter().enumerate() {
+                    let mode_labels = [ui_kit::t!("Field Mode", "字段模式"), ui_kit::t!("Free WHERE", "自由 WHERE")];
+                    for (i, label) in mode_labels.iter().enumerate() {
                         let seg = egui::Rect::from_min_size(
                             egui::pos2(mrect.left() + i as f32 * (mode_w / 2.0), mrect.top()),
                             egui::vec2(mode_w / 2.0, 26.0),
@@ -1488,12 +1567,12 @@ pub(crate) fn draw_table_view(
                         }
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::button(ui, "清除", theme::BtnKind::Secondary).clicked() {
+                        if theme::button(ui, ui_kit::t!("Clear", "清除"), theme::BtnKind::Secondary).clicked() {
                             actions.push(TabAction::ClearFilterBar {
                                 tab_id: tab_id_s.clone(),
                             });
                         }
-                        if theme::button(ui, "应用", theme::BtnKind::Primary).clicked() {
+                        if theme::button(ui, ui_kit::t!("Apply", "应用"), theme::BtnKind::Primary).clicked() {
                             actions.push(TabAction::ApplyFilterBar {
                                 tab_id: tab_id_s.clone(),
                             });
@@ -1502,7 +1581,7 @@ pub(crate) fn draw_table_view(
                             ui.label(RichText::new(icons::clip(err, 40)).size(11.0).color(p.red));
                         }
                         if tab.applied_where.is_some() {
-                            ui.label(RichText::new("已应用").size(11.0).color(p.green));
+                            ui.label(RichText::new(ui_kit::t!("Applied", "已应用")).size(11.0).color(p.green));
                         }
                     });
                 });
@@ -1556,7 +1635,7 @@ pub(crate) fn draw_table_view(
                                     if needs_value {
                                         theme::field(ui, &format!("fval-{i}"), val, 190.0, false);
                                     }
-                                    if theme::mini_text_button(ui, "删除", p.red).0 {
+                                    if theme::mini_text_button(ui, ui_kit::t!("Delete", "删除"), p.red).0 {
                                         remove = Some(i);
                                     }
                                 });
@@ -1567,7 +1646,7 @@ pub(crate) fn draw_table_view(
                             if ui
                                 .add(
                                     egui::Button::new(
-                                        RichText::new("＋ 添加条件").size(11.5).color(p.text2),
+                                        RichText::new(ui_kit::t!("＋ Add Condition", "＋ 添加条件")).size(11.5).color(p.text2),
                                     )
                                     .fill(Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::new(1.0, p.border))
@@ -1661,11 +1740,11 @@ pub(crate) fn draw_table_view(
             }
             if tab.rows.is_empty() {
                 let msg = if tab.loading {
-                    "加载中…"
+                    ui_kit::t!("Loading…", "加载中…")
                 } else if tab.active_filter.is_some() {
-                    "没有匹配的行"
+                    ui_kit::t!("No matching rows", "没有匹配的行")
                 } else {
-                    "无数据"
+                    ui_kit::t!("No data", "无数据")
                 };
                 centered_state(ui, tab.loading, Some(msg));
                 return;
@@ -2093,7 +2172,14 @@ pub(crate) fn draw_table_view(
             .backdrop_color(p.overlay)
             .show(ctx, |ui| {
                 ui.set_width(540.0);
-                theme::modal_title(ui, &format!("{col} · 完整内容"));
+                theme::modal_title(
+                    ui,
+                    &if ui_kit::i18n::is_english() {
+                        format!("{col} · Full Content")
+                    } else {
+                        format!("{col} · 完整内容")
+                    },
+                );
                 egui::ScrollArea::vertical()
                     .max_height(300.0)
                     .auto_shrink([false, false])
@@ -2109,11 +2195,11 @@ pub(crate) fn draw_table_view(
                         );
                     });
                 theme::modal_footer(ui, |ui| {
-                    if theme::button(ui, "复制", theme::BtnKind::Primary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Copy", "复制"), theme::BtnKind::Primary).clicked() {
                         copy_it = true;
                     }
                     ui.add_space(6.0);
-                    if theme::button(ui, "关闭", theme::BtnKind::Secondary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
                         close = true;
                     }
                 });
@@ -2135,9 +2221,16 @@ pub(crate) fn draw_table_view(
             .backdrop_color(p.overlay)
             .show(ctx, |ui| {
                 ui.set_width(440.0);
-                theme::modal_title(ui, &format!("{} · 新增行", tab.table));
+                theme::modal_title(
+                    ui,
+                    &if ui_kit::i18n::is_english() {
+                        format!("{} · Add Row", tab.table)
+                    } else {
+                        format!("{} · 新增行", tab.table)
+                    },
+                );
                 ui.label(
-                    RichText::new("留空的字段取数据库默认值 / NULL")
+                    RichText::new(ui_kit::t!("Empty fields use the database default / NULL", "留空的字段取数据库默认值 / NULL"))
                         .size(theme::FS_AUX)
                         .color(p.muted),
                 );
@@ -2154,11 +2247,11 @@ pub(crate) fn draw_table_view(
                         }
                     });
                 theme::modal_footer(ui, |ui| {
-                    if theme::button(ui, "插入", theme::BtnKind::Primary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Insert", "插入"), theme::BtnKind::Primary).clicked() {
                         submit = true;
                     }
                     ui.add_space(6.0);
-                    if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
                         close = true;
                     }
                 });
@@ -2204,9 +2297,9 @@ fn centered_state(ui: &mut egui::Ui, loading: bool, msg: Option<&str>) {
             if loading {
                 ui.add(egui::Spinner::new().size(18.0).color(p.muted));
                 ui.add_space(10.0);
-                ui.label(RichText::new("加载中…").size(12.0).color(p.muted));
+                ui.label(RichText::new(ui_kit::t!("Loading…", "加载中…")).size(12.0).color(p.muted));
             } else {
-                let text = msg.unwrap_or("无数据");
+                let text = msg.unwrap_or(ui_kit::t!("No data", "无数据"));
                 ui.label(RichText::new(text).size(12.0).color(p.muted));
             }
         });
@@ -2478,7 +2571,10 @@ fn draw_data_table(
                 let resp = ui.allocate_rect(rect, Sense::click());
                 let _ = resp
                     .clone()
-                    .on_hover_text("点击排序:升序 → 降序 → 取消;拖动列边缘调宽");
+                    .on_hover_text(ui_kit::t!(
+    "Click to sort: asc → desc → clear; drag column edge to resize",
+    "点击排序:升序 → 降序 → 取消;拖动列边缘调宽"
+));
                 if resp.clicked() {
                     *sc = Some(c.clone());
                 }
@@ -2969,7 +3065,10 @@ fn draw_frozen_overlay(
         let resp = ui.interact(rect, egui::Id::new(("fz-h", tab_id, vw)), Sense::click());
         let _ = resp
             .clone()
-            .on_hover_text("点击排序:升序 → 降序 → 取消;拖动列边缘调宽");
+            .on_hover_text(ui_kit::t!(
+    "Click to sort: asc → desc → clear; drag column edge to resize",
+    "点击排序:升序 → 降序 → 取消;拖动列边缘调宽"
+));
         if resp.clicked() {
             *sc = Some(c.clone());
         }
@@ -3187,42 +3286,51 @@ fn header_col_menu(
 ) {
     let mut col_menu: Option<u8> = None;
     let _ = resp.clone().context_menu(|ui| {
-        if ui.button("升序排序").clicked() {
+        if ui.button(ui_kit::t!("Sort Ascending", "升序排序")).clicked() {
             col_menu = Some(0);
             ui.close_menu();
         }
-        if ui.button("降序排序").clicked() {
+        if ui.button(ui_kit::t!("Sort Descending", "降序排序")).clicked() {
             col_menu = Some(1);
             ui.close_menu();
         }
-        if ui.button("取消排序").clicked() {
+        if ui.button(ui_kit::t!("Clear Sort", "取消排序")).clicked() {
             col_menu = Some(2);
             ui.close_menu();
         }
         ui.separator();
-        if ui.button("筛选此值(=当前页首行值)").clicked() {
+        if ui
+            .button(ui_kit::t!(
+                "Filter by This Value (= first row)",
+                "筛选此值(=当前页首行值)"
+            ))
+            .clicked()
+        {
             col_menu = Some(3);
             ui.close_menu();
         }
-        if ui.button("筛选 NULL 值").clicked() {
+        if ui.button(ui_kit::t!("Filter NULL Values", "筛选 NULL 值")).clicked() {
             col_menu = Some(4);
             ui.close_menu();
         }
-        if ui.button("筛选非空值").clicked() {
+        if ui.button(ui_kit::t!("Filter Non-NULL Values", "筛选非空值")).clicked() {
             col_menu = Some(5);
             ui.close_menu();
         }
         ui.separator();
-        if ui.button("列统计(当前页)").clicked() {
+        if ui
+            .button(ui_kit::t!("Column Stats (Current Page)", "列统计(当前页)"))
+            .clicked()
+        {
             col_menu = Some(6);
             ui.close_menu();
         }
         ui.separator();
-        if vw + 1 < vis_len && ui.button("冻结到此列").clicked() {
+        if vw + 1 < vis_len && ui.button(ui_kit::t!("Freeze to This Column", "冻结到此列")).clicked() {
             col_menu = Some(7);
             ui.close_menu();
         }
-        if frozen_vis > 0 && ui.button("取消冻结列").clicked() {
+        if frozen_vis > 0 && ui.button(ui_kit::t!("Unfreeze Columns", "取消冻结列")).clicked() {
             col_menu = Some(8);
             ui.close_menu();
         }
@@ -3390,11 +3498,15 @@ fn draw_data_cell(
     menu_resp.context_menu(|ui| {
         *selected = Some((ri, ci));
         // 快速筛选(把条件写入筛选栏)
-        ui.label(egui::RichText::new("快速筛选").size(10.5).color(p.muted));
+        ui.label(
+            egui::RichText::new(ui_kit::t!("Quick Filter", "快速筛选"))
+                .size(10.5)
+                .color(p.muted),
+        );
         if ui
             .add_enabled(
                 v.is_some(),
-                egui::Button::new(egui::RichText::new("= 此值").size(12.0)),
+                egui::Button::new(egui::RichText::new(ui_kit::t!("= This Value", "= 此值")).size(12.0)),
             )
             .clicked()
         {
@@ -3405,7 +3517,10 @@ fn draw_data_cell(
         if ui
             .add_enabled(
                 v.is_some(),
-                egui::Button::new(egui::RichText::new("包含此值 (LIKE)").size(12.0)),
+                egui::Button::new(
+                    egui::RichText::new(ui_kit::t!("Contains Value (LIKE)", "包含此值 (LIKE)"))
+                        .size(12.0),
+                ),
             )
             .clicked()
         {
@@ -3414,14 +3529,14 @@ fn draw_data_cell(
             ui.close_menu();
         }
         if ui
-            .button(egui::RichText::new("此列为 NULL").size(12.0))
+            .button(egui::RichText::new(ui_kit::t!("IS NULL", "此列为 NULL")).size(12.0))
             .clicked()
         {
             *col_where_out = Some((col_name.to_string(), "IS NULL".to_string(), String::new()));
             ui.close_menu();
         }
         if ui
-            .button(egui::RichText::new("此列非空").size(12.0))
+            .button(egui::RichText::new(ui_kit::t!("IS NOT NULL", "此列非空")).size(12.0))
             .clicked()
         {
             *col_where_out = Some((
@@ -3432,20 +3547,20 @@ fn draw_data_cell(
             ui.close_menu();
         }
         ui.separator();
-        if ui.button("查看完整内容…").clicked() {
+        if ui.button(ui_kit::t!("View Full Content…", "查看完整内容…")).clicked() {
             let text = v.as_deref().unwrap_or("").to_string();
             *view_cell = Some((col_name.to_string(), text));
             ui.close_menu();
         }
-        if ui.button("查看整行详情…").clicked() {
+        if ui.button(ui_kit::t!("View Row Details…", "查看整行详情…")).clicked() {
             *detail = true;
             ui.close_menu();
         }
-        if ui.button("复制单元格").clicked() {
+        if ui.button(ui_kit::t!("Copy Cell", "复制单元格")).clicked() {
             *copy_text = v.clone();
             ui.close_menu();
         }
-        if ui.button("复制整行 (TSV)").clicked() {
+        if ui.button(ui_kit::t!("Copy Row (TSV)", "复制整行 (TSV)")).clicked() {
             let tsv: Vec<String> = rowdata
                 .iter()
                 .map(|c| c.as_deref().unwrap_or("NULL"))
@@ -3456,7 +3571,7 @@ fn draw_data_cell(
         }
         ui.separator();
         if ui
-            .add_enabled(has_pk, egui::Button::new("编辑此格"))
+            .add_enabled(has_pk, egui::Button::new(ui_kit::t!("Edit Cell", "编辑此格")))
             .clicked()
         {
             *editing = Some((ri, ci));
@@ -3466,7 +3581,7 @@ fn draw_data_cell(
         if ui
             .add_enabled(
                 has_pk && !col_is_pk && v.is_some(),
-                egui::Button::new("设为 NULL"),
+                egui::Button::new(ui_kit::t!("Set NULL", "设为 NULL")),
             )
             .clicked()
         {
@@ -3475,13 +3590,12 @@ fn draw_data_cell(
         }
         if multi_sel.len() > 1 && multi_sel.binary_search(&ri).is_ok() {
             // 多选上下文:批量删除(直接操作)
-            if ui
-                .add_enabled(
-                    has_pk,
-                    egui::Button::new(format!("删除选中 {} 行…", multi_sel.len())),
-                )
-                .clicked()
-            {
+            let del_label = if ui_kit::i18n::is_english() {
+                format!("Delete Selected {} Rows…", multi_sel.len())
+            } else {
+                format!("删除选中 {} 行…", multi_sel.len())
+            };
+            if ui.add_enabled(has_pk, egui::Button::new(del_label)).clicked() {
                 *menu_action = Some(TabAction::DeleteRows {
                     tab_id: tab_id.to_string(),
                     ris: multi_sel.to_vec(),
@@ -3489,7 +3603,7 @@ fn draw_data_cell(
                 ui.close_menu();
             }
         } else if ui
-            .add_enabled(has_pk, egui::Button::new("删除此行…"))
+            .add_enabled(has_pk, egui::Button::new(ui_kit::t!("Delete Row…", "删除此行…")))
             .clicked()
         {
             *menu_action = Some(TabAction::DeleteRow {
@@ -3500,8 +3614,9 @@ fn draw_data_cell(
         }
         ui.label(
             egui::RichText::new(format!(
-                "{} · 行 {}",
+                "{} · {} {}",
                 columns.get(ci).map(|s| s.as_str()).unwrap_or("?"),
+                ui_kit::t!("Row", "行"),
                 ri + 1
             ))
             .size(11.0)
@@ -3616,11 +3731,23 @@ pub(crate) fn run_delete_rows(app: &mut ShujingApp, tab_id: &str, gen: u64, ris:
         return;
     };
     if t.rows_gen != gen {
-        app.toast_error("数据已刷新,请重新选择要删除的行".to_string());
+        app.toast_error(
+            ui_kit::t!(
+                "Data refreshed, please reselect the rows to delete",
+                "数据已刷新,请重新选择要删除的行"
+            )
+            .to_string(),
+        );
         return;
     }
     if t.pk_cols.is_empty() {
-        app.toast_error("该表没有主键,无法删除行".to_string());
+        app.toast_error(
+            ui_kit::t!(
+                "This table has no primary key, cannot delete rows",
+                "该表没有主键,无法删除行"
+            )
+            .to_string(),
+        );
         return;
     }
     let pk_idxs: Vec<usize> = t
@@ -3647,7 +3774,13 @@ pub(crate) fn run_delete_rows(app: &mut ShujingApp, tab_id: &str, gen: u64, ris:
         deletes.push(pk);
     }
     if deletes.is_empty() {
-        app.toast_error("选中行均无有效主键,无法删除".to_string());
+        app.toast_error(
+            ui_kit::t!(
+                "Selected rows have no valid primary key, cannot delete",
+                "选中行均无有效主键,无法删除"
+            )
+            .to_string(),
+        );
         return;
     }
     let conn_id = t.conn_id.clone();
@@ -3667,7 +3800,12 @@ pub(crate) fn run_delete_rows(app: &mut ShujingApp, tab_id: &str, gen: u64, ris:
         });
     });
     if skipped > 0 {
-        app.toast_error(format!("跳过 {skipped} 行(主键值为空)"));
+        let msg = if ui_kit::i18n::is_english() {
+            format!("Skipped {skipped} rows (empty primary key)")
+        } else {
+            format!("跳过 {skipped} 行(主键值为空)")
+        };
+        app.toast_error(msg);
     }
 }
 
@@ -3719,7 +3857,14 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
         TabAction::ExportCsv { tab_id } => {
             if let Some(t) = app.table_tab(&tab_id) {
                 match export_csv_to_file(t) {
-                    Ok(path) => app.toast_error(format!("已导出到 {path}")),
+                    Ok(path) => {
+                    let msg = if ui_kit::i18n::is_english() {
+                        format!("Exported to {path}")
+                    } else {
+                        format!("已导出到 {path}")
+                    };
+                    app.toast_error(msg);
+                }
                     Err(e) => app.toast_error(e),
                 }
             }
@@ -3750,7 +3895,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                     Ok((sql, _rows)) => tokio::fs::write(&path, sql)
                         .await
                         .map(|_| path.display().to_string())
-                        .map_err(|e| format!("写入失败: {e}")),
+                        .map_err(|e| {
+                            if ui_kit::i18n::is_english() {
+                                format!("Write failed: {e}")
+                            } else {
+                                format!("写入失败: {e}")
+                            }
+                        }),
                     Err(e) => Err(e),
                 };
                 let _ = tx.send(BgEvent::ExportDone { result });
@@ -3761,7 +3912,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                 return;
             };
             if t.pk_cols.is_empty() {
-                app.toast_error("该表没有主键,无法回写".to_string());
+                app.toast_error(
+                    ui_kit::t!(
+                        "This table has no primary key, cannot write back",
+                        "该表没有主键,无法回写"
+                    )
+                    .to_string(),
+                );
                 return;
             }
             let pk_idxs: Vec<usize> = t
@@ -3770,7 +3927,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                 .filter_map(|p| t.columns.iter().position(|c| c == p))
                 .collect();
             if pk_idxs.len() != t.pk_cols.len() {
-                app.toast_error("主键列不在结果集中,无法回写".to_string());
+                app.toast_error(
+                    ui_kit::t!(
+                        "Primary key columns not in result set, cannot write back",
+                        "主键列不在结果集中,无法回写"
+                    )
+                    .to_string(),
+                );
                 return;
             }
             // 按行合批:同一行的多列改动合并成一条 UPDATE;
@@ -3804,11 +3967,16 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             let table = t.table.clone();
             let database = t.database.clone();
             if skipped_empty_pk > 0 {
-                app.toast_error(format!("跳过 {skipped_empty_pk} 行(主键值为空,无法定位)"));
+                let msg = if ui_kit::i18n::is_english() {
+                    format!("Skipped {skipped_empty_pk} rows (empty primary key, cannot locate)")
+                } else {
+                    format!("跳过 {skipped_empty_pk} 行(主键值为空,无法定位)")
+                };
+                app.toast_error(msg);
             }
             if updates.is_empty() {
                 if skipped_empty_pk == 0 {
-                    app.toast_error("没有可保存的修改".to_string());
+                    app.toast_error(ui_kit::t!("No changes to save", "没有可保存的修改").to_string());
                 }
                 return;
             }
@@ -3831,12 +3999,20 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                     .ok()
                 });
                 if let Some(stmts) = stmts {
-                    app.confirm = Some(crate::app::ConfirmState {
-                        title: "保存前 SQL 预览".into(),
-                        message: format!(
+                    let preview_msg = if ui_kit::i18n::is_english() {
+                        format!(
+                            "The following {} statements will be executed (single transaction, rollback on failure):",
+                            stmts.len()
+                        )
+                    } else {
+                        format!(
                             "将执行以下 {} 条语句(单事务,失败整体回滚):",
                             stmts.len()
-                        ),
+                        )
+                    };
+                    app.confirm = Some(crate::app::ConfirmState {
+                        title: ui_kit::t!("SQL Preview Before Save", "保存前 SQL 预览").into(),
+                        message: preview_msg,
                         expect: None,
                         input: String::new(),
                         conn_id: conn_id.clone(),
@@ -3879,11 +4055,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             // 删除需确认:复用 ConfirmState(action mongo-del),expect=文档 _id
             let Some(t) = app.table_tab(&tab_id) else { return };
             let Some((ri, _)) = t.selected else {
-                app.toast_error("先点选一行文档".to_string());
+                app.toast_error(ui_kit::t!("Select a document row first", "先点选一行文档").to_string());
                 return;
             };
             let Some(id_col) = t.columns.iter().position(|c| c == "_id") else {
-                app.toast_error("结果集中没有 _id 列".to_string());
+                app.toast_error(
+                    ui_kit::t!("Result set has no _id column", "结果集中没有 _id 列").to_string(),
+                );
                 return;
             };
             let Some(id) = t
@@ -3893,12 +4071,17 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                 .cloned()
                 .flatten()
             else {
-                app.toast_error("该行 _id 为空".to_string());
+                app.toast_error(ui_kit::t!("This row's _id is empty", "该行 _id 为空").to_string());
                 return;
             };
+            let del_msg = if ui_kit::i18n::is_english() {
+                format!("Confirm deleting document _id={id}? Type the _id to confirm:")
+            } else {
+                format!("确认删除 _id={id} 的文档?输入 _id 以确认:")
+            };
             app.confirm = Some(crate::app::ConfirmState {
-                title: "删除 Mongo 文档".into(),
-                message: format!("确认删除 _id={id} 的文档?输入 _id 以确认:"),
+                title: ui_kit::t!("Delete Mongo Document", "删除 Mongo 文档").into(),
+                message: del_msg,
                 expect: Some(id.clone()),
                 input: String::new(),
                 conn_id: String::new(),
@@ -4113,11 +4296,11 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             };
             // 校验(与 dbclient saveDesigner 一致)
             let err = if d.table_name.trim().is_empty() {
-                Some("请填写表名")
+                Some(ui_kit::t!("Table name is required", "请填写表名"))
             } else if d.columns.is_empty() {
-                Some("至少需要一个字段")
+                Some(ui_kit::t!("At least one column is required", "至少需要一个字段"))
             } else if d.columns.iter().any(|c| c.name.trim().is_empty()) {
-                Some("存在未命名字段")
+                Some(ui_kit::t!("Some columns are unnamed", "存在未命名字段"))
             } else {
                 None
             };
@@ -4149,7 +4332,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             stmts.extend(out.alters.iter().cloned());
             let warnings = out.warnings.clone();
             let info = if d.is_create() {
-                format!("表 {} 创建成功", d.table_name)
+                if ui_kit::i18n::is_english() {
+                    format!("Table {} created", d.table_name)
+                } else {
+                    format!("表 {} 创建成功", d.table_name)
+                }
+            } else if ui_kit::i18n::is_english() {
+                format!("Executed {} ALTER statements", stmts.len())
             } else {
                 format!("已执行 {} 条 ALTER 语句", stmts.len())
             };
@@ -4158,7 +4347,7 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                 if let Some(t) = app.tabs.iter_mut().find(|t| t.id == tid) {
                     if let crate::app::TabKind::Designer(d) = &mut t.kind {
                         d.info = Some(if warnings.is_empty() {
-                            "没有可保存的变更".to_string()
+                            ui_kit::t!("No changes to save", "没有可保存的变更").to_string()
                         } else {
                             warnings.join(";")
                         });
@@ -4214,7 +4403,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             };
             let database = q.result_db.clone();
             if q.q_changes_set != q.active_set {
-                app.toast_error("未保存修改属于其他结果集,请切回后再保存".to_string());
+                app.toast_error(
+                    ui_kit::t!(
+                        "Unsaved changes belong to another result set, switch back before saving",
+                        "未保存修改属于其他结果集,请切回后再保存"
+                    )
+                    .to_string(),
+                );
                 return;
             }
             let Some(r) = q.results.get(q.active_set) else {
@@ -4222,7 +4417,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             };
             let pk_cols = q.result_pk.clone();
             if pk_cols.is_empty() {
-                app.toast_error("该表没有主键,无法回写".to_string());
+                app.toast_error(
+                    ui_kit::t!(
+                        "This table has no primary key, cannot write back",
+                        "该表没有主键,无法回写"
+                    )
+                    .to_string(),
+                );
                 return;
             }
             let pk_idxs: Vec<usize> = pk_cols
@@ -4230,7 +4431,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                 .filter_map(|p| r.columns.iter().position(|c| c == p))
                 .collect();
             if pk_idxs.len() != pk_cols.len() {
-                app.toast_error("结果集未包含全部主键列,无法回写".to_string());
+                app.toast_error(
+                    ui_kit::t!(
+                        "Result set does not contain all primary key columns, cannot write back",
+                        "结果集未包含全部主键列,无法回写"
+                    )
+                    .to_string(),
+                );
                 return;
             }
             // 按行合批:查询页 rows 不被覆写,pk 恒为旧值;
@@ -4256,7 +4463,7 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                 updates.push(shujing_core::edits::CellUpdate { pk, sets });
             }
             if updates.is_empty() {
-                app.toast_error("没有可保存的修改".to_string());
+                app.toast_error(ui_kit::t!("No changes to save", "没有可保存的修改").to_string());
                 return;
             }
             let conn_id = q.conn_id.clone();
@@ -4334,7 +4541,14 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                 return;
             }
             match export_rows_csv(&r.columns, &r.rows) {
-                Ok(path) => app.toast_error(format!("已导出到 {path}")),
+                Ok(path) => {
+                    let msg = if ui_kit::i18n::is_english() {
+                        format!("Exported to {path}")
+                    } else {
+                        format!("已导出到 {path}")
+                    };
+                    app.toast_error(msg);
+                }
                 Err(e) => app.toast_error(e),
             }
         }
@@ -4345,9 +4559,16 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
                 return;
             };
             let n = ris.len();
+            let del_msg = if ui_kit::i18n::is_english() {
+                format!(
+                    "Confirm deleting the selected {n} rows? DELETE will be executed directly on the database, this cannot be undone."
+                )
+            } else {
+                format!("确认删除选中的 {n} 行?将直接对数据库执行 DELETE,不可撤销。")
+            };
             app.confirm = Some(crate::app::ConfirmState {
-                title: "删除选中行".into(),
-                message: format!("确认删除选中的 {n} 行?将直接对数据库执行 DELETE,不可撤销。"),
+                title: ui_kit::t!("Delete Selected Rows", "删除选中行").into(),
+                message: del_msg,
                 expect: None,
                 input: String::new(),
                 conn_id: String::new(),
@@ -4369,12 +4590,20 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             let Some(t) = app.table_tab_mut(&tab_id) else {
                 return;
             };
-            app.confirm = Some(crate::app::ConfirmState {
-                title: "删除行".into(),
-                message: format!(
+            let del_msg = if ui_kit::i18n::is_english() {
+                format!(
+                    "Confirm deleting row {}? DELETE will be executed directly on the database, this cannot be undone.",
+                    ri + 1
+                )
+            } else {
+                format!(
                     "确认删除第 {} 行?将直接对数据库执行 DELETE,不可撤销。",
                     ri + 1
-                ),
+                )
+            };
+            app.confirm = Some(crate::app::ConfirmState {
+                title: ui_kit::t!("Delete Row", "删除行").into(),
+                message: del_msg,
                 expect: None,
                 input: String::new(),
                 conn_id: String::new(),
@@ -4386,7 +4615,9 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
         }
         TabAction::InsertRow { tab_id, values } => {
             if values.is_empty() {
-                app.toast_error("请至少填写一个字段".to_string());
+                app.toast_error(
+                    ui_kit::t!("Please fill in at least one field", "请至少填写一个字段").to_string(),
+                );
                 return;
             }
             let Some(t) = app.table_tab(&tab_id) else {
@@ -4437,7 +4668,13 @@ pub fn export_rows_csv(columns: &[String], rows: &[Vec<Option<String>>]) -> Resu
             .map(|d| d.as_millis())
             .unwrap_or(0)
     ));
-    std::fs::write(&path, out).map_err(|e| format!("导出失败: {e}"))?;
+    std::fs::write(&path, out).map_err(|e| {
+        if ui_kit::i18n::is_english() {
+            format!("Export failed: {e}")
+        } else {
+            format!("导出失败: {e}")
+        }
+    })?;
     Ok(path.display().to_string())
 }
 
@@ -4460,12 +4697,12 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(440.0);
-            theme::modal_title(ui, "连接配置");
+            theme::modal_title(ui, ui_kit::t!("Connection Settings", "连接配置"));
             ui.spacing_mut().item_spacing.y = 12.0;
 
-            theme::form_field(ui, "名称", "conn-name", &mut m.name, 440.0, false);
+            theme::form_field(ui, ui_kit::t!("Name", "名称"), "conn-name", &mut m.name, 440.0, false);
 
-            ui.label(RichText::new("类型").size(11.0).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Type", "类型")).size(11.0).color(p.muted));
             ui.add_space(4.0);
             if segmented_db_type(ui, &mut m.db_type, 440.0) {
                 // 切换类型:端口为空或等于其它类型默认值时带出新默认
@@ -4486,31 +4723,52 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
             ui.add_space(2.0);
 
             if m.db_type == shujing_core::DbType::Sqlite {
-                theme::form_field(ui, "文件路径", "conn-file", &mut m.file_path, 440.0, false);
+                theme::form_field(
+                    ui,
+                    ui_kit::t!("File Path", "文件路径"),
+                    "conn-file",
+                    &mut m.file_path,
+                    440.0,
+                    false,
+                );
             } else {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        theme::form_field(ui, "主机", "conn-host", &mut m.host, 314.0, false);
+                        theme::form_field(ui, ui_kit::t!("Host", "主机"), "conn-host", &mut m.host, 314.0, false);
                     });
                     ui.add_space(4.0);
                     ui.vertical(|ui| {
-                        theme::form_field(ui, "端口", "conn-port", &mut m.port, 122.0, false);
+                        theme::form_field(ui, ui_kit::t!("Port", "端口"), "conn-port", &mut m.port, 122.0, false);
                     });
                 });
                 if m.db_type == shujing_core::DbType::Redis {
-                    theme::form_field(ui, "密码(可选)", "conn-pwd", &mut m.password, 440.0, true);
                     theme::form_field(
                         ui,
-                        "DB 编号(0-15)",
+                        ui_kit::t!("Password (optional)", "密码(可选)"),
+                        "conn-pwd",
+                        &mut m.password,
+                        440.0,
+                        true,
+                    );
+                    theme::form_field(
+                        ui,
+                        ui_kit::t!("DB Number (0-15)", "DB 编号(0-15)"),
                         "conn-db",
                         &mut m.database,
                         440.0,
                         false,
                     );
                 } else {
-                    theme::form_field(ui, "用户", "conn-user", &mut m.user, 440.0, false);
-                    theme::form_field(ui, "密码", "conn-pwd", &mut m.password, 440.0, true);
-                    theme::form_field(ui, "默认库(可选)", "conn-db", &mut m.database, 440.0, false);
+                    theme::form_field(ui, ui_kit::t!("User", "用户"), "conn-user", &mut m.user, 440.0, false);
+                    theme::form_field(ui, ui_kit::t!("Password", "密码"), "conn-pwd", &mut m.password, 440.0, true);
+                    theme::form_field(
+                        ui,
+                        ui_kit::t!("Default Database (optional)", "默认库(可选)"),
+                        "conn-db",
+                        &mut m.database,
+                        440.0,
+                        false,
+                    );
                 }
             }
 
@@ -4531,7 +4789,11 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                 ui.painter().text(
                     egui::pos2(sec.left() + 2.0, sec.center().y),
                     egui::Align2::LEFT_CENTER,
-                    if on { "▾ SSH 隧道" } else { "▸ SSH 隧道(可选)" },
+                    if on {
+                        ui_kit::t!("▾ SSH Tunnel", "▾ SSH 隧道")
+                    } else {
+                        ui_kit::t!("▸ SSH Tunnel (optional)", "▸ SSH 隧道(可选)")
+                    },
                     egui::FontId::proportional(11.5),
                     if on { p.text } else { p.muted },
                 );
@@ -4540,7 +4802,7 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                         ui.vertical(|ui| {
                             theme::form_field(
                                 ui,
-                                "跳板机主机",
+                                ui_kit::t!("Jump Host", "跳板机主机"),
                                 "conn-ssh-host",
                                 &mut m.ssh_host,
                                 314.0,
@@ -4551,7 +4813,7 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                         ui.vertical(|ui| {
                             theme::form_field(
                                 ui,
-                                "端口",
+                                ui_kit::t!("Port", "端口"),
                                 "conn-ssh-port",
                                 &mut m.ssh_port,
                                 122.0,
@@ -4559,15 +4821,22 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                             );
                         });
                     });
-                    theme::form_field(ui, "用户", "conn-ssh-user", &mut m.ssh_user, 440.0, false);
+                    theme::form_field(
+                        ui,
+                        ui_kit::t!("User", "用户"),
+                        "conn-ssh-user",
+                        &mut m.ssh_user,
+                        440.0,
+                        false,
+                    );
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             theme::form_field(
                                 ui,
                                 if m.ssh_key_path.is_empty() {
-                                    "密码"
+                                    ui_kit::t!("Password", "密码")
                                 } else {
-                                    "密码(私钥口令)"
+                                    ui_kit::t!("Password (key passphrase)", "密码(私钥口令)")
                                 },
                                 "conn-ssh-pwd",
                                 &mut m.ssh_password,
@@ -4579,7 +4848,7 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                         ui.vertical(|ui| {
                             theme::form_field(
                                 ui,
-                                "私钥路径(可选,优先)",
+                                ui_kit::t!("Private Key Path (optional, preferred)", "私钥路径(可选,优先)"),
                                 "conn-ssh-key",
                                 &mut m.ssh_key_path,
                                 224.0,
@@ -4588,15 +4857,18 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                         });
                     });
                     ui.label(
-                        RichText::new("开启后,上方主机/端口视为从跳板机可达的数据库地址")
-                            .size(10.5)
-                            .color(p.muted),
+                        RichText::new(ui_kit::t!(
+                            "When enabled, the host/port above is treated as the database address reachable from the jump host",
+                            "开启后,上方主机/端口视为从跳板机可达的数据库地址"
+                        ))
+                        .size(10.5)
+                        .color(p.muted),
                     );
                 }
             }
 
             // 标识色
-            ui.label(RichText::new("标识色").size(11.0).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Label Color", "标识色")).size(11.0).color(p.muted));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
@@ -4634,13 +4906,17 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let _ = theme::checkbox(ui, &mut m.read_only, "只读模式(仅允许查询)");
+                    let _ = theme::checkbox(
+                        ui,
+                        &mut m.read_only,
+                        ui_kit::t!("Read-only mode (queries only)", "只读模式(仅允许查询)"),
+                    );
                 });
             });
 
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                if theme::button(ui, "测试连接", theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Test Connection", "测试连接"), theme::BtnKind::Secondary).clicked() {
                     test = true;
                 }
                 // spinner/结果恒占一行固定高度:Modal 居中锚定,内容高度随异步结果
@@ -4670,11 +4946,11 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
             });
 
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, "保存", theme::BtnKind::Primary).clicked() {
+                if theme::button(ui, ui_kit::t!("Save", "保存"), theme::BtnKind::Primary).clicked() {
                     save = true;
                 }
                 ui.add_space(6.0);
-                if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
                     cancel = true;
                 }
             });
@@ -5198,7 +5474,12 @@ impl eframe::App for ShujingApp {
                     }
                     Err(e) => {
                         self.conn_modal = Some(modal);
-                        self.toast_error(format!("保存失败: {e}"));
+                        let msg = if ui_kit::i18n::is_english() {
+                            format!("Save failed: {e}")
+                        } else {
+                            format!("保存失败: {e}")
+                        };
+                        self.toast_error(msg);
                     }
                 },
                 Some(ConnAction::Test(info)) => {
@@ -5208,7 +5489,13 @@ impl eframe::App for ShujingApp {
                     let tx = self.event_tx.clone();
                     net::spawn(async move {
                         let r = Service::test_connection(info).await;
-                        let payload = r.map(|ok| format!("连接成功: {}", ok.version));
+                        let payload = r.map(|ok| {
+                            if ui_kit::i18n::is_english() {
+                                format!("Connection successful: {}", ok.version)
+                            } else {
+                                format!("连接成功: {}", ok.version)
+                            }
+                        });
                         let _ = tx.send(BgEvent::TestDone { result: payload });
                     });
                 }
@@ -5223,10 +5510,12 @@ impl eframe::App for ShujingApp {
             let mut resolved: Option<bool> = None;
             let p = theme::c();
             let desc = match &pending {
-                Some(crate::app::PendingAction::CloseTab(_)) => "关闭该标签".to_string(),
+                Some(crate::app::PendingAction::CloseTab(_)) => {
+                    ui_kit::t!("closing this tab", "关闭该标签").to_string()
+                }
                 Some(crate::app::PendingAction::Proceed(a)) => match &**a {
-                    TabAction::SetPage { .. } => "翻页/刷新".to_string(),
-                    _ => "刷新数据".to_string(),
+                    TabAction::SetPage { .. } => ui_kit::t!("paging/refreshing", "翻页/刷新").to_string(),
+                    _ => ui_kit::t!("refreshing data", "刷新数据").to_string(),
                 },
                 None => unreachable!(),
             };
@@ -5234,18 +5523,19 @@ impl eframe::App for ShujingApp {
                 .frame(theme::modal_frame())
                 .show(ctx, |ui| {
                     ui.set_width(380.0);
-                    theme::modal_title(ui, "未保存的修改");
-                    ui.label(
-                        RichText::new(format!("有未保存的单元格修改,继续{desc}将丢弃它们。"))
-                            .size(12.5)
-                            .color(p.text2),
-                    );
+                    theme::modal_title(ui, ui_kit::t!("Unsaved Changes", "未保存的修改"));
+                    let body = if ui_kit::i18n::is_english() {
+                        format!("There are unsaved cell changes, {desc} will discard them.")
+                    } else {
+                        format!("有未保存的单元格修改,继续{desc}将丢弃它们。")
+                    };
+                    ui.label(RichText::new(body).size(12.5).color(p.text2));
                     theme::modal_footer(ui, |ui| {
-                        if theme::button(ui, "丢弃并继续", theme::BtnKind::Danger).clicked() {
+                        if theme::button(ui, ui_kit::t!("Discard and Continue", "丢弃并继续"), theme::BtnKind::Danger).clicked() {
                             resolved = Some(true);
                         }
                         ui.add_space(6.0);
-                        if theme::button(ui, "取消", theme::BtnKind::Secondary).clicked() {
+                        if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
                             resolved = Some(false);
                         }
                     });
@@ -5297,12 +5587,15 @@ pub(crate) fn draw_empty_state(ui: &mut egui::Ui) {
         );
         icons::paint_table(&ui.painter().clone(), rect.shrink(17.0), p.muted);
         ui.add_space(18.0);
-        ui.label(theme::strong("没有打开的标签", 15.0).color(p.text));
+        ui.label(theme::strong(ui_kit::t!("No Open Tabs", "没有打开的标签"), 15.0).color(p.text));
         ui.add_space(6.0);
         ui.label(
-            RichText::new("在左侧选择一个表开始浏览\n或按 ⌘T 新建查询标签 · ⌘⇧L 切换外观")
-                .size(12.0)
-                .color(p.muted),
+            RichText::new(ui_kit::t!(
+                "Select a table on the left to start browsing\nor press ⌘T for a new query tab · ⌘⇧L to toggle appearance",
+                "在左侧选择一个表开始浏览\n或按 ⌘T 新建查询标签 · ⌘⇧L 切换外观"
+            ))
+            .size(12.0)
+            .color(p.muted),
         );
     });
 }
@@ -5441,8 +5734,10 @@ fn detail_body(
     let p = theme::c();
     let mut close = false;
     ui.horizontal(|ui| {
-        ui.label(theme::strong(format!("行 #{row_no}"), 14.0).color(p.text));
-        ui.label(RichText::new("详情").size(11.0).color(p.muted));
+        ui.label(
+            theme::strong(format!("{} #{}", ui_kit::t!("Row", "行"), row_no), 14.0).color(p.text),
+        );
+        ui.label(RichText::new(ui_kit::t!("Details", "详情")).size(11.0).color(p.muted));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
             if resp.hovered() {
@@ -5455,7 +5750,7 @@ fn detail_body(
                 4.0,
                 if resp.hovered() { p.text } else { p.muted },
             );
-            let _ = resp.clone().on_hover_text("关闭");
+            let _ = resp.clone().on_hover_text(ui_kit::t!("Close", "关闭"));
             if resp.clicked() {
                 close = true;
             }

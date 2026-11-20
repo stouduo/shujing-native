@@ -41,7 +41,7 @@ pub fn draw_structure_view(
                 ui.add_space(4.0);
                 icons::label_at_baseline(
                     ui,
-                    "表结构",
+                    ui_kit::t!("Structure", "表结构"),
                     egui::FontId::proportional(theme::FS_AUX),
                     p.muted,
                     title_baseline,
@@ -64,14 +64,16 @@ pub fn draw_structure_view(
                     ui.spacing_mut().item_spacing.x = 6.0;
                     if !s.loading
                         && icons::refresh(ui, p.text2)
-                            .on_hover_text("刷新 (⌘R)")
+                            .on_hover_text(ui_kit::t!("Refresh (⌘R)", "刷新 (⌘R)"))
                             .clicked()
                     {
                         actions.push(TabAction::Reload {
                             tab_id: tab_id.to_string(),
                         });
                     }
-                    if !s.loading && theme::button(ui, "设计", theme::BtnKind::Secondary).clicked()
+                    if !s.loading
+                        && theme::button(ui, ui_kit::t!("Design", "设计"), theme::BtnKind::Secondary)
+                            .clicked()
                     {
                         actions.push(TabAction::OpenDesigner {
                             conn_id: s.conn_id.clone(),
@@ -80,7 +82,9 @@ pub fn draw_structure_view(
                         });
                     }
                     if let Some(d) = &s.data {
-                        if theme::button(ui, "复制 DDL", theme::BtnKind::Secondary).clicked() {
+                        if theme::button(ui, ui_kit::t!("Copy DDL", "复制 DDL"), theme::BtnKind::Secondary)
+                            .clicked()
+                        {
                             ui.ctx().copy_text(d.ddl.clone());
                         }
                     }
@@ -99,9 +103,9 @@ pub fn draw_structure_view(
             let Some(data) = &s.data else {
                 ui.centered_and_justified(|ui| {
                     let msg = if s.loading {
-                        "加载中…"
+                        ui_kit::t!("Loading…", "加载中…")
                     } else {
-                        s.error.as_deref().unwrap_or("无数据")
+                        s.error.as_deref().unwrap_or(ui_kit::t!("No data", "无数据"))
                     };
                     ui.label(RichText::new(msg).size(12.0).color(p.muted));
                 });
@@ -111,27 +115,39 @@ pub fn draw_structure_view(
                 .id_salt(format!("struct-scroll-{tab_id}"))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    section_title(ui, "字段", data.columns.len());
+                    section_title(ui, ui_kit::t!("Fields", "字段"), data.columns.len());
                     ui.add_space(8.0);
                     draw_columns(ui, data, tab_id);
                     ui.add_space(20.0);
 
-                    section_title(ui, "索引", data.indexes.len());
+                    section_title(ui, ui_kit::t!("Indexes", "索引"), data.indexes.len());
                     ui.add_space(8.0);
                     draw_indexes(ui, data);
                     ui.add_space(20.0);
 
                     // 外键(本表作为子表引用他表;失败/无 FK 则不显示区)
                     if !s.fks.is_empty() {
-                        section_title(ui, "外键", s.fks.len());
+                        section_title(ui, ui_kit::t!("Foreign Keys", "外键"), s.fks.len());
                         ui.add_space(8.0);
                         egui::Grid::new(format!("fk-grid-{tab_id}"))
                             .num_columns(3)
                             .spacing([12.0, 6.0])
                             .show(ui, |ui| {
-                                ui.label(RichText::new("列").size(11.0).color(theme::c().muted));
-                                ui.label(RichText::new("引用表").size(11.0).color(theme::c().muted));
-                                ui.label(RichText::new("引用列").size(11.0).color(theme::c().muted));
+                                ui.label(
+                                    RichText::new(ui_kit::t!("Column", "列"))
+                                        .size(11.0)
+                                        .color(theme::c().muted),
+                                );
+                                ui.label(
+                                    RichText::new(ui_kit::t!("Ref Table", "引用表"))
+                                        .size(11.0)
+                                        .color(theme::c().muted),
+                                );
+                                ui.label(
+                                    RichText::new(ui_kit::t!("Ref Column", "引用列"))
+                                        .size(11.0)
+                                        .color(theme::c().muted),
+                                );
                                 ui.end_row();
                                 for f in &s.fks {
                                     ui.label(
@@ -177,10 +193,15 @@ pub fn draw_structure_view(
                         ddl_open,
                         p.text2,
                     );
+                    let ddl_label = if ui_kit::i18n::is_english() {
+                        format!("DDL ({} chars)", data.ddl.len())
+                    } else {
+                        format!("建表语句({} 字符)", data.ddl.len())
+                    };
                     ui.painter().text(
                         egui::pos2(hrect.left() + 30.0, hrect.center().y),
                         egui::Align2::LEFT_CENTER,
-                        format!("建表语句({} 字符)", data.ddl.len()),
+                        ddl_label.as_str(),
                         egui::FontId::proportional(11.5),
                         p.muted,
                     );
@@ -283,7 +304,15 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
         )
         .column(Column::remainder().clip(true));
     tb.header(theme::HEADER_H, |mut header| {
-        for h in ["名称", "类型", "可空", "键", "默认值", "额外", "注释"] {
+        for h in [
+            ui_kit::t!("Name", "名称"),
+            ui_kit::t!("Type", "类型"),
+            ui_kit::t!("Nullable", "可空"),
+            ui_kit::t!("Key", "键"),
+            ui_kit::t!("Default", "默认值"),
+            ui_kit::t!("Extra", "额外"),
+            ui_kit::t!("Comment", "注释"),
+        ] {
             header.col(|ui| {
                 let rect = ui.max_rect();
                 ui.painter().rect_filled(rect, 0, p.panel);
@@ -584,7 +613,9 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
                     }
                     if let Some(ddl) = &d.ddl {
                         let ddl2 = ddl.clone();
-                        if theme::button(ui, "复制 DDL", theme::BtnKind::Secondary).clicked() {
+                        if theme::button(ui, ui_kit::t!("Copy DDL", "复制 DDL"), theme::BtnKind::Secondary)
+                            .clicked()
+                        {
                             ui.ctx().copy_text(ddl2);
                         }
                     }
@@ -603,9 +634,9 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
             let Some(ddl) = &d.ddl else {
                 ui.centered_and_justified(|ui| {
                     let msg = if d.loading {
-                        "读取 DDL…"
+                        ui_kit::t!("Loading DDL…", "读取 DDL…")
                     } else {
-                        d.error.as_deref().unwrap_or("无数据")
+                        d.error.as_deref().unwrap_or(ui_kit::t!("No data", "无数据"))
                     };
                     ui.label(RichText::new(msg).size(12.0).color(p.muted));
                 });
@@ -628,10 +659,10 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
 
 fn kind_label(kind: &str) -> &str {
     match kind {
-        "trigger" => "触发器",
-        "procedure" => "存储过程",
-        "function" => "函数",
-        "view" => "视图",
+        "trigger" => ui_kit::t!("Trigger", "触发器"),
+        "procedure" => ui_kit::t!("Procedure", "存储过程"),
+        "function" => ui_kit::t!("Function", "函数"),
+        "view" => ui_kit::t!("View", "视图"),
         _ => "DDL",
     }
 }

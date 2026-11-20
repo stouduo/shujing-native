@@ -596,11 +596,11 @@ fn grid_header_freeze_menu(
 ) {
     let mut act: Option<u8> = None;
     let _ = resp.clone().context_menu(|ui| {
-        if vw + 1 < vis_len && ui.button("冻结到此列").clicked() {
+        if vw + 1 < vis_len && ui.button(ui_kit::t!("Freeze to This Column", "冻结到此列")).clicked() {
             act = Some(0);
             ui.close_menu();
         }
-        if *frozen > 0 && ui.button("取消冻结列").clicked() {
+        if *frozen > 0 && ui.button(ui_kit::t!("Unfreeze Columns", "取消冻结列")).clicked() {
             act = Some(1);
             ui.close_menu();
         }
