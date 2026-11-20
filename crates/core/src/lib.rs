@@ -288,6 +288,42 @@ impl Service {
         }
     }
 
+    /// Kafka:新建 topic
+    pub async fn kafka_create_topic(
+        &self,
+        id: &str,
+        name: &str,
+        partitions: i32,
+        replication: i32,
+    ) -> Result<(), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        if guard.info.read_only {
+            return Err("只读连接不允许建 topic".into());
+        }
+        match &mut guard.backend {
+            crate::model::Backend::Kafka(st) => {
+                crate::kafka::create_topic(st, name, partitions, replication).await
+            }
+            _ => Err("非 Kafka 连接".into()),
+        }
+    }
+
+    /// Kafka:删除 topic(破坏性)
+    pub async fn kafka_delete_topic(&self, id: &str, name: &str) -> Result<(), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        if guard.info.read_only {
+            return Err("只读连接不允许删 topic".into());
+        }
+        match &mut guard.backend {
+            crate::model::Backend::Kafka(st) => {
+                crate::kafka::delete_topic(st, name).await
+            }
+            _ => Err("非 Kafka 连接".into()),
+        }
+    }
+
     /// Kafka:消费组列表
     pub async fn kafka_groups(
         &self,

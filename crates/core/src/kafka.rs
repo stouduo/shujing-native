@@ -191,6 +191,51 @@ pub async fn produce(
     }
 }
 
+/// 新建 topic(分区/副本为服务端语义;副本受 broker 集群规模约束)
+pub async fn create_topic(
+    st: &KafkaState,
+    name: &str,
+    partitions: i32,
+    replication: i32,
+) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("topic 名不能为空".into());
+    }
+    use rdkafka::admin::{AdminOptions, NewTopic, TopicReplication};
+    let spec = NewTopic::new(
+        name,
+        partitions.max(1),
+        TopicReplication::Fixed(replication.max(1)),
+    );
+    let opts = AdminOptions::new().request_timeout(Some(Duration::from_secs(8)));
+    match st.admin.create_topics(&[spec], &opts).await {
+        Ok(mut v) => match v.pop() {
+            Some(Ok(_)) => Ok(()),
+            Some(Err((e, _))) => Err(format!("创建失败: {e}")),
+            None => Ok(()),
+        },
+        Err(e) => Err(format!("创建失败: {e}")),
+    }
+}
+
+/// 删除 topic(破坏性;调用方须二次确认)
+pub async fn delete_topic(st: &KafkaState, name: &str) -> Result<(), String> {
+    use rdkafka::admin::AdminOptions;
+    let opts = AdminOptions::new().request_timeout(Some(Duration::from_secs(8)));
+    match st
+        .admin
+        .delete_topics(&[name], &opts)
+        .await
+    {
+        Ok(mut v) => match v.pop() {
+            Some(Ok(_)) => Ok(()),
+            Some(Err((e, _))) => Err(format!("删除失败: {e}")),
+            None => Ok(()),
+        },
+        Err(e) => Err(format!("删除失败: {e}")),
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupInfo {

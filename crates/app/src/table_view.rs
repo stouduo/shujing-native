@@ -293,6 +293,17 @@ pub enum TabAction {
     KafkaLoadGroups {
         tab_id: String,
     },
+    /// Kafka:新建 topic
+    KafkaCreateTopic {
+        tab_id: String,
+        name: String,
+        parts: String,
+        repl: String,
+    },
+    /// Kafka:删除选中 topic
+    KafkaDeleteTopic {
+        tab_id: String,
+    },
     OpenAiAssist {
         tab_id: String,
         mode: u8,
@@ -4125,6 +4136,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
         TabAction::KafkaLoadMsgs { tab_id: _ } => app.kafka_load_msgs(),
         TabAction::KafkaSend { tab_id: _, topic: _ } => app.kafka_send(),
         TabAction::KafkaLoadGroups { tab_id: _ } => app.kafka_load_groups(),
+        TabAction::KafkaCreateTopic {
+            tab_id: _,
+            name,
+            parts,
+            repl,
+        } => app.kafka_create_topic_commit(&name, &parts, &repl),
+        TabAction::KafkaDeleteTopic { tab_id: _ } => app.kafka_delete_topic_commit(),
         TabAction::MongoEditDoc { tab_id } => app.open_mongo_edit(&tab_id),
         TabAction::MongoDeleteDoc { tab_id } => {
             // 删除需确认:复用 ConfirmState(action mongo-del),expect=文档 _id

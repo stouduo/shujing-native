@@ -589,6 +589,42 @@ fn render_mongo_v2_modals() {
         crate::modals::draw_mongo_indexes_modal(&mut b, ctx);
     });
 
+    // 1b) Kafka 控制台空态(topic 下拉+发送区+空消息提示)
+    let mut app = test_app(vec![], 0);
+    app.kafka_tab = Some(crate::app::KafkaTab {
+        conn_id: "c1".into(),
+        topics: vec!["orders".into(), "payments".into()],
+        selected: Some("orders".into()),
+        msgs: Vec::new(),
+        loading: false,
+        error: None,
+        send_key: String::new(),
+        send_payload: String::new(),
+        sending: false,
+        groups: None,
+        groups_open: false,
+        frozen: 0,
+        new_open: false,
+        new_name: String::new(),
+        new_parts: "1".into(),
+        new_repl: "1".into(),
+        drop_arm: false,
+        topic_busy: false,
+    });
+    let tabs = vec![Tab {
+        id: "k1".into(),
+        title: "Kafka 控制台".into(),
+        kind: TabKind::Kafka(
+            app.kafka_tab.as_ref().unwrap().clone_shell("k1"),
+        ),
+    }];
+    let app2 = test_app(tabs, 0);
+    let app2 = std::cell::RefCell::new(app2);
+    render("kafka_console", 900.0, 620.0, true, move |ctx| {
+        let mut b = app2.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+
     // 2) 批量导入:预填 JSON 数组
     let mut app = test_app(vec![], 0);
     app.mongo_import = Some(crate::app::MongoImportState {

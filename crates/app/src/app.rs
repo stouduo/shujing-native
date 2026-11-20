@@ -87,6 +87,12 @@ pub enum BgEvent {
         op: u8, // 0 插入 1 替换 3 批量导入
         result: Result<String, String>,
     },
+    KafkaTopicCreated {
+        result: Result<(), String>,
+    },
+    KafkaTopicDeleted {
+        result: Result<(), String>,
+    },
     KafkaTopicsLoaded {
         conn_id: String,
         result: Result<Vec<shujing_core::kafka::TopicInfo>, String>,
@@ -737,6 +743,15 @@ pub struct KafkaTab {
     pub groups: Option<Vec<shujing_core::kafka::GroupInfo>>,
     pub groups_open: bool,
     pub frozen: usize,
+    /// 新建 topic 表单打开态
+    pub new_open: bool,
+    pub new_name: String,
+    pub new_parts: String,
+    pub new_repl: String,
+    /// 删除选中 topic 的二次确认
+    pub drop_arm: bool,
+    /// topic 操作在途
+    pub topic_busy: bool,
 }
 
 impl KafkaTab {
@@ -756,6 +771,12 @@ impl KafkaTab {
             groups: None,
             groups_open: false,
             frozen: 0,
+            new_open: false,
+            new_name: String::new(),
+            new_parts: "1".into(),
+            new_repl: "1".into(),
+            drop_arm: false,
+            topic_busy: false,
         }
     }
 }
@@ -1809,6 +1830,12 @@ impl ShujingApp {
             groups: None,
             groups_open: false,
             frozen: 0,
+            new_open: false,
+            new_name: String::new(),
+            new_parts: "1".into(),
+            new_repl: "1".into(),
+            drop_arm: false,
+            topic_busy: false,
         });
         let tx = self.event_tx.clone();
         let service = self.service.clone();
@@ -1828,6 +1855,80 @@ impl ShujingApp {
             ),
         });
         self.active_tab = self.tabs.len() - 1;
+    }
+
+    /// 重拉 topic 列表(建/删后)
+    pub fn kafka_reload_topics(&mut self) {
+        let Some(k) = self.kafka_tab.as_ref() else {
+            return;
+        };
+        let conn_id = k.conn_id.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.kafka_tab.as_mut().unwrap().topic_busy = true;
+        net::spawn(async move {
+            let result = service.kafka_list_topics(&conn_id).await;
+            let _ = tx.send(BgEvent::KafkaTopicsLoaded { conn_id, result });
+        });
+    }
+
+    /// 确认新建 topic(表名校验)
+    pub fn kafka_create_topic_commit(&mut self, name: &str, parts: &str, repl: &str) {
+        let Some(k) = self.kafka_tab.as_ref() else {
+            return;
+        };
+        if k.topic_busy {
+            return;
+        }
+        let name = name.trim().to_string();
+        let valid = !name.is_empty()
+            && !name.chars().next().unwrap().is_ascii_digit()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.');
+        if !valid {
+            self.toast_error(
+                ui_kit::t!(
+                    "Topic name: letters/digits/underscore/dash/dot only, must not start with a digit",
+                    "topic 名仅限字母/数字/下划线/中划线/点,不能以数字开头"
+                )
+                .to_string(),
+            );
+            return;
+        }
+        let conn_id = k.conn_id.clone();
+        let parts_n: i32 = parts.trim().parse().unwrap_or(1).max(1);
+        let repl_n: i32 = repl.trim().parse().unwrap_or(1).max(1);
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.kafka_tab.as_mut().unwrap().topic_busy = true;
+        net::spawn(async move {
+            let result = service
+                .kafka_create_topic(&conn_id, &name, parts_n, repl_n)
+                .await;
+            let _ = tx.send(BgEvent::KafkaTopicCreated { result });
+        });
+    }
+
+    /// 删除选中 topic(armed 二次确认后调用)
+    pub fn kafka_delete_topic_commit(&mut self) {
+        let Some(k) = self.kafka_tab.as_ref() else {
+            return;
+        };
+        if k.topic_busy {
+            return;
+        }
+        let Some(topic) = k.selected.clone() else {
+            return;
+        };
+        let conn_id = k.conn_id.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.kafka_tab.as_mut().unwrap().topic_busy = true;
+        net::spawn(async move {
+            let result = service.kafka_delete_topic(&conn_id, &topic).await;
+            let _ = tx.send(BgEvent::KafkaTopicDeleted { result });
+        });
     }
 
     /// Kafka:从头读取选中 topic 的 200 条消息
@@ -4828,6 +4929,49 @@ impl ShujingApp {
                         error: err_res,
                         ..state
                     });
+                    continue;
+                }
+                BgEvent::KafkaTopicCreated { result } => {
+                    if let Some(k) = self.kafka_tab.as_mut() {
+                        k.topic_busy = false;
+                        k.new_open = false;
+                        k.drop_arm = false;
+                    }
+                    match &result {
+                        Ok(_) => {
+                            self.toast_error(ui_kit::t!("Topic created", "已创建 topic").to_string());
+                            self.kafka_reload_topics();
+                        }
+                        Err(e) => self.toast_error(e.clone()),
+                    }
+                    continue;
+                }
+                BgEvent::KafkaTopicDeleted { result } => {
+                    let keep = self
+                        .kafka_tab
+                        .as_ref()
+                        .and_then(|k| k.selected.clone())
+                        .unwrap_or_default();
+                    if let Some(k) = self.kafka_tab.as_mut() {
+                        k.topic_busy = false;
+                        k.drop_arm = false;
+                    }
+                    match &result {
+                        Ok(_) => {
+                            self.toast_error(format!(
+                                "{} {keep}",
+                                ui_kit::t!("Topic deleted", "已删除 topic")
+                            ));
+                            if let Some(k) = self.kafka_tab.as_mut() {
+                                if k.selected.as_deref() == Some(keep.as_str()) {
+                                    k.selected = None;
+                                    k.msgs.clear();
+                                }
+                            }
+                            self.kafka_reload_topics();
+                        }
+                        Err(e) => self.toast_error(e.clone()),
+                    }
                     continue;
                 }
                 BgEvent::KafkaTopicsLoaded { conn_id, result } => {

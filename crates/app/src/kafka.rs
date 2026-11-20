@@ -68,7 +68,77 @@ pub fn draw_kafka_view(
                         tab_id: tab_id.to_string(),
                     });
                 }
+                let nb = theme::button(
+                    ui,
+                    ui_kit::t!("＋ New Topic", "＋ 新建 Topic"),
+                    theme::BtnKind::Secondary,
+                );
+                if nb.clicked() {
+                    k.new_open = !k.new_open;
+                }
+                // 删除选中 topic:同按钮二次确认
+                if k.selected.is_some() {
+                    let dlabel = if k.drop_arm {
+                        ui_kit::t!("Click again to delete", "再点一次确认删除")
+                    } else {
+                        ui_kit::t!("Delete Topic", "删除 Topic")
+                    };
+                    let color = if k.drop_arm { p.red } else { p.text2 };
+                    let db2 = theme::button(ui, dlabel, theme::BtnKind::Secondary);
+                    if db2.clicked() && !k.topic_busy {
+                        if k.drop_arm {
+                            actions.push(TabAction::KafkaDeleteTopic {
+                                tab_id: tab_id.to_string(),
+                            });
+                        } else {
+                            k.drop_arm = true;
+                        }
+                    }
+                    if !k.drop_arm {
+                        db2.on_disabled_hover_text(ui_kit::t!(
+                            "Destructive: removes the topic and its messages",
+                            "破坏性操作:topic 及其消息一并删除"
+                        ));
+                    }
+                }
             });
+            // 新建 topic 表单行
+            if k.new_open {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(ui_kit::t!("Name", "名称"))
+                            .size(11.0)
+                            .color(p.muted),
+                    );
+                    theme::field(ui, &format!("kafka-new-name-{tab_id}"), &mut k.new_name, 200.0, false);
+                    ui.label(
+                        RichText::new(ui_kit::t!("Partitions", "分区"))
+                            .size(11.0)
+                            .color(p.muted),
+                    );
+                    theme::field(ui, &format!("kafka-new-parts-{tab_id}"), &mut k.new_parts, 50.0, false);
+                    ui.label(
+                        RichText::new(ui_kit::t!("Replication", "副本"))
+                            .size(11.0)
+                            .color(p.muted),
+                    );
+                    theme::field(ui, &format!("kafka-new-repl-{tab_id}"), &mut k.new_repl, 50.0, false);
+                    let cb = theme::button(ui, ui_kit::t!("Create", "创建"), theme::BtnKind::Primary);
+                    if cb.clicked() && !k.topic_busy {
+                        actions.push(TabAction::KafkaCreateTopic {
+                            tab_id: tab_id.to_string(),
+                            name: k.new_name.clone(),
+                            parts: k.new_parts.clone(),
+                            repl: k.new_repl.clone(),
+                        });
+                    }
+                    if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary)
+                        .clicked()
+                    {
+                        k.new_open = false;
+                    }
+                });
+            }
         });
 
     egui::TopBottomPanel::bottom(format!("kafka-send-{tab_id}"))
@@ -84,8 +154,8 @@ pub fn draw_kafka_view(
                         .size(11.0)
                         .color(p.muted),
                 );
-                theme::field(ui, &format!("kafka-key-{tab_id}"), &mut k.send_key, 180.0, false);
                 ui.label(RichText::new(ui_kit::t!("key", "key")).size(10.5).color(p.muted));
+                theme::field(ui, &format!("kafka-key-{tab_id}"), &mut k.send_key, 180.0, false);
             });
             ui.horizontal(|ui| {
                 theme::field(
