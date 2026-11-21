@@ -547,11 +547,14 @@ pub enum Backend {
     MySql(MySqlPool),
     Pg(PgPool),
     Redis(RedisState),
+    #[cfg(feature = "heavy-mw")]
     Mongo(MongoState),
     Mssql(MssqlState),
     ClickHouse(ClickHouseState),
+    #[cfg(feature = "heavy-mw")]
     Kafka(crate::kafka::KafkaState),
     Rabbit(crate::rabbit::RabbitState),
+    #[cfg(feature = "heavy-mw")]
     Mqtt(crate::mqtt::MqttState),
     /// 配置中心三件(Nacos/Consul/Etcd)共用一个 KV 后端
     Kv(crate::kv::KvState),
@@ -592,6 +595,7 @@ pub struct SessionInfo {
 }
 
 /// MongoDB 连接状态(驱动自带连接池与重连)
+#[cfg(feature = "heavy-mw")]
 pub struct MongoState {
     pub client: mongodb::Client,
     /// count_rows 等无库参数的调用从结构加载时记住的当前库

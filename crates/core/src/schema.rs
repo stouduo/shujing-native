@@ -150,10 +150,13 @@ pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<V
             Ok(out)
         }
         Backend::Redis(_) => Ok(vec![]),
+        #[cfg(feature = "heavy-mw")]
         Backend::Mongo(st) => crate::mongo::list_databases(st).await,
         Backend::ClickHouse(st) => crate::clickhouse::list_databases(st).await,
+        #[cfg(feature = "heavy-mw")]
         Backend::Kafka(_) => Ok(vec![]),
         Backend::Rabbit(_) => Ok(vec![]),
+        #[cfg(feature = "heavy-mw")]
         Backend::Mqtt(_) => Ok(vec![]),
         Backend::Kv(_) => Ok(vec![]),
         Backend::Mssql(st) => {
@@ -725,6 +728,7 @@ impl Backend {
                     })
                     .collect()
             }),
+            #[cfg(feature = "heavy-mw")]
             Backend::Mongo(st) => {
                 let cur_db = st.cur_db.try_lock().ok().and_then(|g| g.clone());
                 let db = database
@@ -746,6 +750,7 @@ impl Backend {
                     .ok_or_else(|| "未指定数据库".to_string())?;
                 crate::clickhouse::list_tables(st, db).await
             }
+            #[cfg(feature = "heavy-mw")]
             Backend::Kafka(st) => {
                 // 单个伪条目:点击打开 Kafka 控制台(topic 浏览在 tab 内,树过滤 kind=="table"
                 // 不认识 kafka-console 前缀会滤掉——sidebar 三处过滤条件同步放行)
@@ -764,6 +769,7 @@ impl Backend {
                     owner: None,
                 }])
             }
+            #[cfg(feature = "heavy-mw")]
             Backend::Mqtt(_) => {
                 // MQTT 无主题枚举语义:伪条目进控制台(浏览=订阅 # 采样)
                 Ok(vec![crate::model::TableMeta {
@@ -861,6 +867,7 @@ async fn resolve_mysql_db(
                 let client = Backend::pg_client(mp).await?;
                 struct_pg(&client, table).await
             }
+            #[cfg(feature = "heavy-mw")]
             Backend::Mongo(st) => {
                 let cur_db = st.cur_db.try_lock().ok().and_then(|g| g.clone());
                 let db = database
@@ -872,10 +879,10 @@ async fn resolve_mysql_db(
             Backend::ClickHouse(st) => crate::clickhouse::structure(st, database, table).await,
             // 中间件族无表结构语义(能力位 schema=false)
             Backend::Redis(_)
-            | Backend::Kafka(_)
             | Backend::Rabbit(_)
-            | Backend::Mqtt(_)
             | Backend::Kv(_) => Err("该数据源无表结构".into()),
+            #[cfg(feature = "heavy-mw")]
+            Backend::Kafka(_) | Backend::Mqtt(_) => Err("该数据源无表结构".into()),
         }
     }
 
@@ -890,14 +897,17 @@ async fn resolve_mysql_db(
                 let client = Backend::pg_client(mp).await?;
                 count_pg(&client, table).await
             }
+            #[cfg(feature = "heavy-mw")]
             Backend::Mongo(st) => crate::mongo::backend_count(st, table).await,
             Backend::Mssql(st) => crate::mssql::count(st, table).await,
             Backend::ClickHouse(st) => crate::clickhouse::count(st, None, table).await,
             Backend::Redis(_)
-            | Backend::Kafka(_)
             | Backend::Rabbit(_)
-            | Backend::Mqtt(_)
             | Backend::Kv(_) => Err("该数据源无表计数(中间件请用专属控制台)".into()),
+            #[cfg(feature = "heavy-mw")]
+            Backend::Kafka(_) | Backend::Mqtt(_) => {
+                Err("该数据源无表计数(中间件请用专属控制台)".into())
+            }
         }
     }
 
@@ -918,11 +928,14 @@ async fn resolve_mysql_db(
                 fk_pg(&client).await
             }
             Backend::Redis(_) => Ok(vec![]),
+            #[cfg(feature = "heavy-mw")]
             Backend::Mongo(_) => Ok(vec![]),
             Backend::Mssql(_) => Ok(vec![]),
             Backend::ClickHouse(_) => Ok(vec![]),
+            #[cfg(feature = "heavy-mw")]
             Backend::Kafka(_) => Ok(vec![]),
             Backend::Rabbit(_) => Ok(vec![]),
+            #[cfg(feature = "heavy-mw")]
             Backend::Mqtt(_) => Ok(vec![]),
             Backend::Kv(_) => Ok(vec![]),
         Backend::Rabbit(_) => Ok(vec![]),

@@ -1,3 +1,5 @@
+#![cfg(feature = "heavy-mw")]
+
 //! MQTT 连接器(中间件对齐第三批):rumqttc 纯 Rust 客户端。
 //! MQTT 无"列出全部主题"的协议语义——浏览 = 订阅 # 通配符采样 N 秒收集
 //! 出现过的主题(含 retained 载荷);发布 = 单条 QoS1(等 PubAck)。

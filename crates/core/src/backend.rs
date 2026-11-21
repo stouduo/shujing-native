@@ -56,6 +56,7 @@ pub async fn connect(
             let st = crate::rabbit::connect(base, auth).await?;
             Ok(Backend::Rabbit(st))
         }
+        #[cfg(feature = "heavy-mw")]
         DbType::Mqtt => {
             let host = req(&info.host, "缺少 MQTT broker 地址")?;
             let port = info.port.unwrap_or(1883);
@@ -114,6 +115,7 @@ pub async fn connect(
             .await?;
             Ok(Backend::Kv(st))
         }
+        #[cfg(feature = "heavy-mw")]
         DbType::Kafka => {
             let host = req(&info.host, "缺少 Kafka bootstrap 地址")?;
             let port = info.port.unwrap_or(9092);
@@ -366,6 +368,7 @@ pub async fn connect(
             }
             Ok(Backend::ClickHouse(st))
         }
+        #[cfg(feature = "heavy-mw")]
         DbType::Mongo => {
             let host = req(&info.host, "缺少 MongoDB 主机地址")?;
             // 主机栏直接粘完整连接串(含 Atlas 的 mongodb+srv://)即 URL 模式
@@ -429,6 +432,11 @@ pub async fn connect(
                 client,
                 cur_db: tokio::sync::Mutex::new(auth_db.map(str::to_string)),
             }))
+        }
+        // 精简构建(no heavy-mw):Kafka/MongoDB/MQTT 三类连接不可用
+        #[cfg(not(feature = "heavy-mw"))]
+        DbType::Mqtt | DbType::Mongo | DbType::Kafka => {
+            Err("此构建未包含 Kafka/MongoDB/MQTT 支持(桌面完整版包含)".into())
         }
     }
 }
@@ -754,6 +762,7 @@ impl Backend {
                 }
                 Ok("PostgreSQL".into())
             }
+            #[cfg(feature = "heavy-mw")]
             Backend::Mongo(m) => {
                 let info = m
                     .client
@@ -793,6 +802,7 @@ impl Backend {
                     .unwrap_or_default();
                 Ok(format!("ClickHouse {ver}"))
             }
+            #[cfg(feature = "heavy-mw")]
             Backend::Kafka(st) => {
                 let topics = crate::kafka::list_topics(st).await?;
                 Ok(format!("Kafka · {} topics", topics.len()))
@@ -804,6 +814,7 @@ impl Backend {
                     o.version, o.queue_count, o.msg_total
                 ))
             }
+            #[cfg(feature = "heavy-mw")]
             Backend::Mqtt(_) => Ok("MQTT broker".into()),
             Backend::Kv(st) => {
                 let entries = crate::kv::list(st, "").await?;

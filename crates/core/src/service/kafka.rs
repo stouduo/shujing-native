@@ -1,3 +1,5 @@
+#![cfg(feature = "heavy-mw")]
+
 use crate::backend_dispatch;
 use crate::{model, Service};
 

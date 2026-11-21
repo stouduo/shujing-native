@@ -5,9 +5,11 @@ pub mod ai;
 pub mod backend;
 pub mod clickhouse;
 pub mod composite;
+#[cfg(feature = "heavy-mw")]
 pub mod kafka;
 pub mod kv;
 pub mod lineage;
+#[cfg(feature = "heavy-mw")]
 pub mod mqtt;
 pub mod rabbit;
 pub mod designer;
@@ -18,6 +20,7 @@ mod model;
 pub mod redis_ops;
 pub mod config_crypto;
 pub mod conn_import;
+#[cfg(feature = "heavy-mw")]
 pub mod mongo;
 pub mod mssql;
 pub mod parquet_preview;
@@ -742,10 +745,15 @@ impl Service {
         {
             let live = self.state.live(id);
             if let Some(lc) = live {
+                #[cfg(feature = "heavy-mw")]
                 if matches!(lc.lock().await.backend, crate::model::Backend::Mongo(_)) {
                     return Err(
                         "MongoDB 不支持 SQL(浏览集合用数据页;过滤输入 JSON 对象)".into(),
                     );
+                }
+                #[cfg(not(feature = "heavy-mw"))]
+                {
+                    let _ = lc;
                 }
             }
         }

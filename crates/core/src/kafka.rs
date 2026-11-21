@@ -1,3 +1,5 @@
+#![cfg(feature = "heavy-mw")]
+
 //! Kafka 连接器(v1,消息队列方向第一批):元数据(topic 列表)/消息浏览/
 //! 生产消息。rdkafka(cmake-build 编译 librdkafka),无 SQL 语义,
 //! 连接走 ConnInfo(host=bootstrap 地址,port=9092)。

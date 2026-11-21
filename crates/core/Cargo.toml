@@ -12,7 +12,7 @@ tokio-postgres = { workspace = true }
 mysql_async = { workspace = true }
 rusqlite = { workspace = true }
 russh = { workspace = true }
-mongodb = { workspace = true }
+mongodb = { workspace = true, optional = true }
 tiberius = { workspace = true }
 tokio-util = { workspace = true }
 aes-gcm = { workspace = true }
@@ -22,11 +22,16 @@ rand = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
-rdkafka = { workspace = true }
-rumqttc = { workspace = true }
+rdkafka = { workspace = true, optional = true }
+rumqttc = { workspace = true, optional = true }
 reqwest = { workspace = true }
 parquet = { workspace = true }
 redis = { workspace = true }
 rust_xlsxwriter = { workspace = true }
 calamine = { workspace = true }
 wasmi = { workspace = true }
+
+[features]
+default = ["heavy-mw"]
+# MCP/CLI 精简构建:不含 Kafka(rdkafka)/MongoDB(mongodb)/MQTT(rumqttc)重型驱动
+heavy-mw = ["dep:rdkafka", "dep:rumqttc", "dep:mongodb"]

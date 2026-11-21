@@ -194,6 +194,7 @@ pub async fn apply_changes(
             affected
         }
         Backend::Redis(_) => return Err("Redis 请使用专门的命令通道".into()),
+        #[cfg(feature = "heavy-mw")]
         Backend::Mongo(_) => return Err("MongoDB 不支持 SQL 回写".into()),
         Backend::Mssql(st) => {
             // 与 PG 同构:BEGIN/逐条/COMMIT(simple_query 支持多语句包)
@@ -234,10 +235,13 @@ pub async fn apply_changes(
         // 中间件族统一无 SQL 回写(此臂实际不可达:build_change_stmts 已拒;
         // 保留为穷举兜底,防止未来新类型漏检)
         Backend::Redis(_)
-        | Backend::Kafka(_)
         | Backend::Rabbit(_)
-        | Backend::Mqtt(_)
         | Backend::Kv(_) => {
+            let _e: String = "该数据源无 SQL 回写".into();
+            0u64
+        }
+        #[cfg(feature = "heavy-mw")]
+        Backend::Kafka(_) | Backend::Mqtt(_) => {
             let _e: String = "该数据源无 SQL 回写".into();
             0u64
         }

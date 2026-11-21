@@ -495,6 +495,7 @@ impl Backend {
                 r
             }
             Backend::Redis(_) => Err("Redis 请使用专门的命令通道".into()),
+            #[cfg(feature = "heavy-mw")]
             Backend::Mongo(_) => {
                 Err("MongoDB 不支持 SQL 查询(浏览集合用数据页;过滤输入 JSON 对象)".into())
             }
@@ -507,10 +508,13 @@ impl Backend {
                 Ok(vec![r])
             }
             // 中间件族(Kafka/Rabbit/Mqtt/后续新增)统一无 SQL 执行面
-            Backend::Kafka(_)
-            | Backend::Rabbit(_)
-            | Backend::Mqtt(_)
+            Backend::Rabbit(_)
+            | Backend::Redis(_)
             | Backend::Kv(_) => Err("该数据源无 SQL 执行面(浏览请用专属控制台)".into()),
+            #[cfg(feature = "heavy-mw")]
+            Backend::Kafka(_) | Backend::Mqtt(_) => {
+                Err("该数据源无 SQL 执行面(浏览请用专属控制台)".into())
+            }
         }
     }
 

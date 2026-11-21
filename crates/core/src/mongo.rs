@@ -1,3 +1,5 @@
+#![cfg(feature = "heavy-mw")]
+
 //! MongoDB 浏览(v1 只读):集合列表/采样文档展平为网格/结构推断/计数。
 //! 编辑留 v2(BSON 文档的 JSON 编辑器 + 替换写)。
 
