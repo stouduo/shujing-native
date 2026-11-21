@@ -2824,6 +2824,58 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 }
             });
             ui.add_space(6.0);
+            ui.label(RichText::new(ui_kit::t!("Theme Preset", "主题预设")).size(11.0).color(p.muted));
+            ui.add_space(4.0);
+            // 3×3 预设色卡:整卡=背景色,上条=面板色,圆点=当前强调色在该基调下的样子
+            egui::Grid::new("theme-presets")
+                .num_columns(3)
+                .spacing([8.0, 8.0])
+                .show(ui, |ui| {
+                    for (i, pr) in theme::PRESETS.iter().enumerate() {
+                        let (rect, resp) =
+                            ui.allocate_exact_size(egui::vec2(104.0, 56.0), egui::Sense::click());
+                        ui.painter().rect_filled(rect, egui::CornerRadius::same(6), pr.palette.bg);
+                        let bar = egui::Rect::from_min_size(
+                            rect.left_top() + egui::vec2(6.0, 6.0),
+                            egui::vec2(rect.width() - 12.0, 16.0),
+                        );
+                        ui.painter().rect_filled(bar, egui::CornerRadius::same(4), pr.palette.panel);
+                        let dot_c = if pr.dark {
+                            theme::accent_color_dark(theme::accent_idx())
+                        } else {
+                            theme::accent_color_light(theme::accent_idx())
+                        };
+                        ui.painter().circle_filled(
+                            egui::pos2(rect.left() + 14.0, rect.bottom() - 13.0),
+                            4.0,
+                            dot_c,
+                        );
+                        ui.painter().text(
+                            egui::pos2(rect.right() - 8.0, rect.bottom() - 13.0),
+                            egui::Align2::RIGHT_CENTER,
+                            ui_kit::t!(pr.name_en, pr.name_zh),
+                            egui::FontId::proportional(10.0),
+                            if pr.dark { theme::DARK.text2 } else { theme::LIGHT.text2 },
+                        );
+                        if theme::preset_idx() == i {
+                            ui.painter().rect_stroke(
+                                rect.expand(1.5),
+                                egui::CornerRadius::same(7),
+                                egui::Stroke::new(1.5, p.text),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                        if resp.clicked() {
+                            theme::set_preset(i);
+                            app.dark_mode = pr.dark;
+                            app.save_theme_settings();
+                        }
+                        if (i + 1) % 3 == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            ui.add_space(6.0);
             ui.label(RichText::new(ui_kit::t!("Theme", "主题")).size(11.0).color(p.muted));
             ui.horizontal(|ui| {
                 // 跟随系统开关(手动点 ☀/☾ 会自动解除跟随)

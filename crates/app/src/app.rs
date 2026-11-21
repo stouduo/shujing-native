@@ -516,7 +516,20 @@ impl ShujingApp {
             ui_kit::i18n::set_english(true);
         }
         crate::theme::set_accent(accent);
-        crate::theme::set_dark(dark);
+        // 预设显式持久化优先;旧配置只有 dark 布尔 → 基调默认预设;
+        // 跟随系统时明暗由系统外观决定(忽略持久化预设,取该基调默认)
+        if !follow_system {
+            let preset = settings
+                .as_ref()
+                .and_then(|v| v.get("preset").and_then(|x| x.as_u64()))
+                .map(|x| x as usize);
+            match preset {
+                Some(i) => crate::theme::set_preset(i),
+                None => crate::theme::set_dark(dark),
+            }
+        } else {
+            crate::theme::set_dark(dark);
+        }
         crate::theme::apply(&cc.egui_ctx);
         #[cfg(target_os = "macos")]
         crate::force_appearance(dark);
@@ -844,6 +857,7 @@ impl ShujingApp {
         let path = self.config_dir.join("settings.json");
         let json = serde_json::json!({
             "dark": self.dark_mode,
+            "preset": crate::theme::preset_idx(),
             "accent": crate::theme::accent_idx(),
             "followSystem": self.follow_system_theme,
             "ai": &self.ai_config,

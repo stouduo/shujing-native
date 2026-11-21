@@ -77,7 +77,7 @@ pub struct Palette {
     pub sql_comment: Color32,
 }
 
-pub static DARK: Palette = Palette {
+pub const DARK: Palette = Palette {
     // 石墨蓝:比纯黑柔和,卡片与背景有层次但不生硬
     bg: Color32::from_rgb(0x0c, 0x0e, 0x12),
     panel: Color32::from_rgb(0x15, 0x18, 0x1e),
@@ -109,7 +109,7 @@ pub static DARK: Palette = Palette {
     sql_comment: Color32::from_rgb(0x6a, 0x70, 0x7a),
 };
 
-pub static LIGHT: Palette = Palette {
+pub const LIGHT: Palette = Palette {
     // 雾白:冷调浅灰底 + 纯白卡片,选中用低饱和蓝
     bg: Color32::from_rgb(0xf4, 0xf6, 0xf9),
     panel: Color32::from_rgb(0xff, 0xff, 0xff),
@@ -141,7 +141,124 @@ pub static LIGHT: Palette = Palette {
     sql_comment: Color32::from_rgb(0x8a, 0x92, 0x9e),
 };
 
-static DARK_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// 主题预设:每个 = 明暗基调 + 表面配色(文字/语义色随基底派生)。
+/// 0/1 是历史默认(石墨蓝/雾白);☀/☾ 手动切换在两个基调的默认预设间往返
+pub struct ThemePreset {
+    pub name_en: &'static str,
+    pub name_zh: &'static str,
+    pub dark: bool,
+    pub palette: Palette,
+}
+
+const AMOLED: Palette = Palette {
+    bg: Color32::from_rgb(0x00, 0x00, 0x00),
+    panel: Color32::from_rgb(0x0b, 0x0d, 0x10),
+    elevated: Color32::from_rgb(0x15, 0x17, 0x1b),
+    hover: Color32::from_rgb(0x1b, 0x1e, 0x23),
+    border: Color32::from_rgb(0x20, 0x24, 0x29),
+    row_line: Color32::from_rgb(0x0e, 0x10, 0x13),
+    stripe: Color32::from_rgb(0x05, 0x06, 0x08),
+    input_bg: Color32::from_rgb(0x0b, 0x0d, 0x10),
+    active_row: Color32::from_rgb(0x0e, 0x1a, 0x2a),
+    selected_row: Color32::from_rgb(0x0c, 0x14, 0x20),
+    change_bg: Color32::from_rgb(0x06, 0x1a, 0x10),
+    ..DARK
+};
+
+const JADE: Palette = Palette {
+    bg: Color32::from_rgb(0x0a, 0x0f, 0x0c),
+    panel: Color32::from_rgb(0x12, 0x1a, 0x15),
+    elevated: Color32::from_rgb(0x1a, 0x24, 0x1d),
+    hover: Color32::from_rgb(0x20, 0x2c, 0x25),
+    border: Color32::from_rgb(0x25, 0x30, 0x28),
+    row_line: Color32::from_rgb(0x0f, 0x17, 0x12),
+    stripe: Color32::from_rgb(0x0c, 0x12, 0x0e),
+    active_row: Color32::from_rgb(0x12, 0x27, 0x1b),
+    selected_row: Color32::from_rgb(0x0f, 0x1f, 0x16),
+    change_bg: Color32::from_rgb(0x0f, 0x24, 0x18),
+    ..DARK
+};
+
+const OCEAN: Palette = Palette {
+    bg: Color32::from_rgb(0x0a, 0x0e, 0x14),
+    panel: Color32::from_rgb(0x10, 0x17, 0x20),
+    elevated: Color32::from_rgb(0x18, 0x22, 0x2e),
+    hover: Color32::from_rgb(0x1e, 0x2a, 0x37),
+    border: Color32::from_rgb(0x23, 0x2f, 0x3c),
+    row_line: Color32::from_rgb(0x0f, 0x15, 0x1d),
+    stripe: Color32::from_rgb(0x0c, 0x11, 0x18),
+    active_row: Color32::from_rgb(0x0e, 0x21, 0x30),
+    selected_row: Color32::from_rgb(0x0c, 0x1a, 0x27),
+    ..DARK
+};
+
+const WINE: Palette = Palette {
+    bg: Color32::from_rgb(0x0f, 0x0b, 0x10),
+    panel: Color32::from_rgb(0x17, 0x12, 0x1b),
+    elevated: Color32::from_rgb(0x1f, 0x19, 0x26),
+    hover: Color32::from_rgb(0x26, 0x1f, 0x2e),
+    border: Color32::from_rgb(0x2b, 0x23, 0x34),
+    row_line: Color32::from_rgb(0x14, 0x0f, 0x18),
+    stripe: Color32::from_rgb(0x0e, 0x0a, 0x12),
+    active_row: Color32::from_rgb(0x22, 0x15, 0x30),
+    selected_row: Color32::from_rgb(0x1a, 0x11, 0x23),
+    ..DARK
+};
+
+const WARM_SAND: Palette = Palette {
+    bg: Color32::from_rgb(0xf6, 0xf3, 0xee),
+    panel: Color32::from_rgb(0xff, 0xff, 0xff),
+    elevated: Color32::from_rgb(0xef, 0xe9, 0xe0),
+    hover: Color32::from_rgb(0xe7, 0xe0, 0xd5),
+    border: Color32::from_rgb(0xde, 0xd6, 0xc9),
+    row_line: Color32::from_rgb(0xec, 0xe6, 0xdc),
+    stripe: Color32::from_rgb(0xf1, 0xec, 0xe4),
+    input_bg: Color32::from_rgb(0xff, 0xff, 0xff),
+    active_row: Color32::from_rgb(0xf2, 0xe7, 0xd6),
+    selected_row: Color32::from_rgb(0xf7, 0xef, 0xe3),
+    ..LIGHT
+};
+
+const ROSE_GRAY: Palette = Palette {
+    bg: Color32::from_rgb(0xf3, 0xf2, 0xf5),
+    panel: Color32::from_rgb(0xff, 0xff, 0xff),
+    elevated: Color32::from_rgb(0xe9, 0xe8, 0xee),
+    hover: Color32::from_rgb(0xe0, 0xdf, 0xe6),
+    border: Color32::from_rgb(0xd8, 0xd6, 0xe0),
+    row_line: Color32::from_rgb(0xe6, 0xe5, 0xec),
+    stripe: Color32::from_rgb(0xef, 0xed, 0xf3),
+    active_row: Color32::from_rgb(0xe6, 0xe0, 0xf5),
+    selected_row: Color32::from_rgb(0xef, 0xea, 0xf7),
+    ..LIGHT
+};
+
+const MINT: Palette = Palette {
+    bg: Color32::from_rgb(0xf0, 0xf5, 0xf3),
+    panel: Color32::from_rgb(0xff, 0xff, 0xff),
+    elevated: Color32::from_rgb(0xe2, 0xec, 0xe8),
+    hover: Color32::from_rgb(0xd8, 0xe5, 0xe0),
+    border: Color32::from_rgb(0xcd, 0xdb, 0xd6),
+    row_line: Color32::from_rgb(0xe1, 0xeb, 0xe7),
+    stripe: Color32::from_rgb(0xea, 0xf2, 0xef),
+    active_row: Color32::from_rgb(0xd8, 0xec, 0xdf),
+    selected_row: Color32::from_rgb(0xe6, 0xf3, 0xea),
+    ..LIGHT
+};
+
+/// 主题预设表(index 即持久化 id;0=石墨蓝深 1=雾白浅 为历史默认)
+pub const PRESETS: [ThemePreset; 9] = [
+    ThemePreset { name_en: "Graphite", name_zh: "石墨蓝", dark: true, palette: DARK },
+    ThemePreset { name_en: "Fog White", name_zh: "雾白", dark: false, palette: LIGHT },
+    ThemePreset { name_en: "AMOLED Black", name_zh: "纯黑", dark: true, palette: AMOLED },
+    ThemePreset { name_en: "Jade", name_zh: "墨玉", dark: true, palette: JADE },
+    ThemePreset { name_en: "Deep Ocean", name_zh: "深海", dark: true, palette: OCEAN },
+    ThemePreset { name_en: "Wine", name_zh: "绛紫", dark: true, palette: WINE },
+    ThemePreset { name_en: "Warm Sand", name_zh: "暖沙", dark: false, palette: WARM_SAND },
+    ThemePreset { name_en: "Rose Gray", name_zh: "玫瑰灰", dark: false, palette: ROSE_GRAY },
+    ThemePreset { name_en: "Mint", name_zh: "薄荷", dark: false, palette: MINT },
+];
+
+static PRESET_IDX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static ACCENT_IDX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// 强调色板(与 dbclient 外观设置一致;index 0 = 默认)
@@ -163,12 +280,26 @@ const ACCENT_LIGHT: [Color32; 6] = [
     Color32::from_rgb(0xD8, 0x3B, 0x54),
 ];
 
+/// 切换预设(index 越界取模保护);持久化 id 即 PRESETS 下标
+pub fn set_preset(i: usize) {
+    PRESET_IDX.store(i.min(PRESETS.len() - 1), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn preset_idx() -> usize {
+    PRESET_IDX.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// ☀/☾ 语义的明暗切换:目标基调与其当前预设不符时,切到该基调的默认预设
+/// (0=石墨蓝深 / 1=雾白浅)。预设不换基调时是 no-op
 pub fn set_dark(dark: bool) {
-    DARK_MODE.store(dark, std::sync::atomic::Ordering::Relaxed);
+    let cur = PRESETS[preset_idx()].dark;
+    if cur != dark {
+        set_preset(if dark { 0 } else { 1 });
+    }
 }
 
 pub fn is_dark() -> bool {
-    DARK_MODE.load(std::sync::atomic::Ordering::Relaxed)
+    PRESETS[preset_idx()].dark
 }
 
 pub fn accent_color_dark(i: usize) -> Color32 {
@@ -192,7 +323,7 @@ pub fn accent_idx() -> usize {
 
 /// 当前调色板(即时模式每帧读取,切换即时生效;按值返回以支持强调色替换)
 pub fn c() -> Palette {
-    let mut pal = if is_dark() { DARK } else { LIGHT };
+    let mut pal = PRESETS[preset_idx()].palette;
     let idx = ACCENT_IDX.load(std::sync::atomic::Ordering::Relaxed);
     if idx > 0 {
         pal.accent = if is_dark() {
