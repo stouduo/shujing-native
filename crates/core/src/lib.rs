@@ -40,6 +40,21 @@ pub use model::{
 use model::CancelState;
 use std::path::PathBuf;
 
+/// Service 数据源方法样板收敛(模板方法模式):取连接锁 → match backend 指定变体 →
+/// 执行体,其余变体统一「非 X 连接」。适用于"锁后立即 match"的同形包装;
+/// 含前置逻辑(会话库/只读门/cur_db)的方法保留手写。
+macro_rules! backend_dispatch {
+    ($self:expr, $id:expr, $variant:ident($st:ident) => $body:expr) => {{
+        let live = $self.state.live($id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::$variant($st) => $body,
+            _ => Err(format!("非 {} 连接", stringify!($variant)).into()),
+        }
+    }};
+}
+pub(crate) use backend_dispatch;
+
 /// 列值集合 → 建表列类型(方言无关的语义档位)
 fn infer_column_type<'a>(vals: impl Iterator<Item = Option<&'a str>>) -> &'static str {
     let mut seen = false;
@@ -96,17 +111,8 @@ pub fn build_save_table_stmts(
     if rows.is_empty() {
         return Err("结果集没有数据行".into());
     }
-    match info.db_type {
-        DbType::Redis
-        | DbType::Mongo
-        | DbType::Mssql
-        | DbType::ClickHouse
-        | DbType::Kafka
-        | DbType::Rabbit
-        | DbType::Mqtt => {
-            return Err("该数据库类型暂不支持结果存为新表".into());
-        }
-        _ => {}
+    if !info.db_type.caps().save_result {
+        return Err("该数据库类型暂不支持结果存为新表".into());
     }
     let mysql = matches!(info.db_type, DbType::MySql | DbType::ClickHouse);
     let q = |s: &str| crate::edits::quote(s, mysql);
@@ -250,12 +256,9 @@ impl Service {
 
     /// Kafka:topic 列表
     pub async fn kafka_list_topics(&self, id: &str) -> Result<Vec<crate::kafka::TopicInfo>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Kafka(st) => crate::kafka::list_topics(st).await,
-            _ => Err("非 Kafka 连接".into()),
-        }
+        backend_dispatch!(self, id, Kafka(st) => {
+crate::kafka::list_topics(st).await
+        })
     }
 
     /// Kafka:从头浏览消息
@@ -266,14 +269,9 @@ impl Service {
         count: usize,
         timeout_secs: u64,
     ) -> Result<Vec<crate::kafka::StreamMsg>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Kafka(st) => {
+        backend_dispatch!(self, id, Kafka(st) => {
                 crate::kafka::consume_recent(&st.addr, topic, count, timeout_secs).await
-            }
-            _ => Err("非 Kafka 连接".into()),
-        }
+        })
     }
 
     /// Kafka:生产消息
@@ -369,12 +367,9 @@ impl Service {
         &self,
         id: &str,
     ) -> Result<crate::rabbit::RabbitOverview, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Rabbit(st) => crate::rabbit::overview(st).await,
-            _ => Err("非 RabbitMQ 连接".into()),
-        }
+        backend_dispatch!(self, id, Rabbit(st) => {
+crate::rabbit::overview(st).await
+        })
     }
 
     /// RabbitMQ:单队列详情(统计准)
@@ -384,14 +379,9 @@ impl Service {
         vhost: &str,
         queue: &str,
     ) -> Result<crate::rabbit::RabbitQueue, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Rabbit(st) => {
+        backend_dispatch!(self, id, Rabbit(st) => {
                 crate::rabbit::queue_detail(st, vhost, queue).await
-            }
-            _ => Err("非 RabbitMQ 连接".into()),
-        }
+        })
     }
 
     /// RabbitMQ:队列列表
@@ -399,12 +389,9 @@ impl Service {
         &self,
         id: &str,
     ) -> Result<Vec<crate::rabbit::RabbitQueue>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Rabbit(st) => crate::rabbit::list_queues(st).await,
-            _ => Err("非 RabbitMQ 连接".into()),
-        }
+        backend_dispatch!(self, id, Rabbit(st) => {
+crate::rabbit::list_queues(st).await
+        })
     }
 
     /// RabbitMQ:从队列取回消息(requeue)
@@ -415,14 +402,9 @@ impl Service {
         queue: &str,
         count: usize,
     ) -> Result<Vec<crate::rabbit::StreamMsg>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Rabbit(st) => {
+        backend_dispatch!(self, id, Rabbit(st) => {
                 crate::rabbit::get_messages(st, vhost, queue, count).await
-            }
-            _ => Err("非 RabbitMQ 连接".into()),
-        }
+        })
     }
 
     /// RabbitMQ:发布消息到 exchange(默认交换机+routing_key=队列名)
@@ -452,12 +434,9 @@ impl Service {
         id: &str,
         secs: u64,
     ) -> Result<Vec<crate::mqtt::MqttMsg>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mqtt(st) => crate::mqtt::browse_snapshot(st, secs).await,
-            _ => Err("非 MQTT 连接".into()),
-        }
+        backend_dispatch!(self, id, Mqtt(st) => {
+crate::mqtt::browse_snapshot(st, secs).await
+        })
     }
 
     /// MQTT:发布一条(可 retain)
@@ -499,12 +478,9 @@ impl Service {
         &self,
         id: &str,
     ) -> Result<Vec<crate::kafka::GroupInfo>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Kafka(st) => crate::kafka::list_groups(st).await,
-            _ => Err("非 Kafka 连接".into()),
-        }
+        backend_dispatch!(self, id, Kafka(st) => {
+crate::kafka::list_groups(st).await
+        })
     }
 
     /// Redis:向 stream 追加消息(返回服务端生成的消息 id)
@@ -570,14 +546,9 @@ impl Service {
         collection: &str,
         doc_id: &str,
     ) -> Result<String, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::get_doc(st, database, collection, doc_id).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB:插入文档(返回 inserted _id 文本)
@@ -588,14 +559,9 @@ impl Service {
         collection: &str,
         json: &str,
     ) -> Result<String, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::insert_doc(st, database, collection, json).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB:替换文档(_id 不可变)
@@ -607,14 +573,9 @@ impl Service {
         doc_id: &str,
         json: &str,
     ) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::replace_doc(st, database, collection, doc_id, json).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB:删除文档
@@ -625,14 +586,9 @@ impl Service {
         collection: &str,
         doc_id: &str,
     ) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::delete_doc(st, database, collection, doc_id).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB:列出集合索引
@@ -642,14 +598,9 @@ impl Service {
         database: Option<&str>,
         collection: &str,
     ) -> Result<Vec<crate::mongo::IndexInfo>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::list_indexes(st, database, collection).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB:创建索引(返回索引名)
@@ -664,15 +615,10 @@ impl Service {
         ttl_secs: Option<i64>,
         name: Option<&str>,
     ) -> Result<String, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::create_index(st, database, collection, fields, unique, ttl_secs, name)
                     .await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB:删除索引
@@ -683,14 +629,9 @@ impl Service {
         collection: &str,
         name: &str,
     ) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::drop_index(st, database, collection, name).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB:批量导入文档(返回成功条数)
@@ -701,14 +642,9 @@ impl Service {
         collection: &str,
         json: &str,
     ) -> Result<usize, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::import_docs(st, database, collection, json).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// 服务器会话列表(MySQL/PG)
@@ -734,11 +670,8 @@ impl Service {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
-        match &mut guard.backend {
-            crate::model::Backend::Kafka(_) | crate::model::Backend::Redis(_) => {
-                return Err("该数据源无表结构,不支持数据字典".into());
-            }
-            _ => {}
+        if !info.db_type.caps().schema {
+            return Err("该数据源无表结构,不支持数据字典".into());
         }
         let tables = guard.backend.list_tables_in(&info, database).await?;
         let mut md = String::new();
@@ -817,14 +750,9 @@ impl Service {
         collection: &str,
         max: usize,
     ) -> Result<(String, bool), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::export_docs(st, database, collection, max).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB:批量导入 CSV(首行列名,类型自动推断)
@@ -835,14 +763,9 @@ impl Service {
         collection: &str,
         csv_raw: &str,
     ) -> Result<usize, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::import_docs_csv(st, database, collection, csv_raw).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB 集合计数(带库上下文)
@@ -852,14 +775,9 @@ impl Service {
         database: Option<&str>,
         collection: &str,
     ) -> Result<u64, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::count(st, database, collection).await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// MongoDB 采样浏览:返回(列,行)展平网格
@@ -872,15 +790,10 @@ impl Service {
         limit: usize,
         offset: u64,
     ) -> Result<(Vec<String>, Vec<Vec<Option<String>>>), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match &mut guard.backend {
-            crate::model::Backend::Mongo(st) => {
+        backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::sample(st, database, collection, filter_json, limit, offset)
                     .await
-            }
-            _ => Err("非 MongoDB 连接".into()),
-        }
+        })
     }
 
     /// 按 id 连接(从已保存配置查找;MCP/脚本场景)。已在线直接复用

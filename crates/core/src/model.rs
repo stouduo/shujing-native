@@ -19,8 +19,79 @@ pub enum DbType {
     Kafka,
     #[serde(rename = "rabbitmq")]
     Rabbit,
-    #[serde(rename = "mqtt")]
+        #[serde(rename = "mqtt")]
     Mqtt,
+}
+
+/// 数据源能力矩阵(策略模式+表驱动):新数据源只在此声明一次能力,
+/// 各功能面(exec/回写/传输/存表/字典/取消/会话)统一按位查询,
+/// 替代此前"每加一个 DbType 要改十余处拒绝臂"的散弹式修改。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capabilities {
+    /// 有 SQL 执行面(exec/回写走 SQL 文本)
+    pub sql: bool,
+    /// 有表结构语义(结构页/数据字典/字段来源)
+    pub schema: bool,
+    /// 支持跨连接数据传输(同类型)
+    pub transfer: bool,
+    /// 支持结果集存为新表
+    pub save_result: bool,
+    /// 支持取消运行中的查询
+    pub cancel: bool,
+    /// 支持服务器会话面板
+    pub sessions: bool,
+    /// 中间件型(走专属控制台,无 SQL/表结构语义)
+    pub middleware: bool,
+}
+
+impl Capabilities {
+    pub const fn none() -> Self {
+        Capabilities {
+            sql: false,
+            schema: false,
+            transfer: false,
+            save_result: false,
+            cancel: false,
+            sessions: false,
+            middleware: false,
+        }
+    }
+}
+
+impl DbType {
+    pub fn caps(self) -> Capabilities {
+        const SQL_DB: Capabilities = Capabilities {
+            sql: true,
+            schema: true,
+            transfer: false,
+            save_result: false,
+            cancel: false,
+            sessions: false,
+            middleware: false,
+        };
+        match self {
+            DbType::MySql | DbType::Postgres => Capabilities {
+                transfer: true,
+                save_result: true,
+                cancel: true,
+                sessions: true,
+                ..SQL_DB
+            },
+            DbType::Sqlite => Capabilities {
+                save_result: true,
+                ..SQL_DB
+            },
+            DbType::Mssql | DbType::ClickHouse => SQL_DB,
+            DbType::Mongo => Capabilities {
+                sql: false,
+                ..SQL_DB
+            },
+            DbType::Redis | DbType::Kafka | DbType::Rabbit | DbType::Mqtt => Capabilities {
+                middleware: true,
+                ..Capabilities::none()
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

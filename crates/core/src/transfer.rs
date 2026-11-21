@@ -38,26 +38,20 @@ pub async fn transfer_table(
     if src_info.db_type != dst_info.db_type {
         return Err("仅支持相同数据库类型之间的传输(跨类型需要类型映射)".into());
     }
-    if src_info.db_type == DbType::Sqlite {
-        return Err("SQLite 是单文件库,不支持网络传输;请用导出 SQL + 导入".into());
-    }
-    if src_info.db_type == DbType::Mongo {
-        return Err("Mongo 文档迁移暂不支持(集合结构无法用 SQL 表达)".into());
-    }
-    if src_info.db_type == DbType::Mssql {
-        return Err("SQL Server 传输暂不支持(建议导出 SQL + 导入)".into());
-    }
-    if src_info.db_type == DbType::ClickHouse {
-        return Err("ClickHouse 传输暂不支持(建议导出 SQL + 导入)".into());
-    }
-    if src_info.db_type == DbType::Kafka {
-        return Err("Kafka 不支持 SQL 传输".into());
-    }
-    if src_info.db_type == DbType::Rabbit {
-        return Err("RabbitMQ 不支持 SQL 传输".into());
-    }
-    if src_info.db_type == DbType::Mqtt {
-        return Err("MQTT 不支持 SQL 传输".into());
+    // 能力矩阵统一判定(此前七个散装 if;文案差异保留 SQLite/Mongo 特例)
+    if !src_info.db_type.caps().transfer {
+        return match src_info.db_type {
+            DbType::Sqlite => {
+                Err("SQLite 是单文件库,不支持网络传输;请用导出 SQL + 导入".into())
+            }
+            DbType::Mongo => {
+                Err("Mongo 文档迁移暂不支持(集合结构无法用 SQL 表达)".into())
+            }
+            DbType::Mssql | DbType::ClickHouse => {
+                Err("该类型传输暂不支持(建议导出 SQL + 导入)".into())
+            }
+            _ => Err("中间件数据源不支持 SQL 传输".into()),
+        };
     }
     service.connect_by_id(sc).await?;
     service.connect_by_id(dc).await?;

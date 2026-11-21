@@ -445,9 +445,10 @@ impl Backend {
                 let r = crate::clickhouse::query(st, sql, None, max).await?;
                 Ok(vec![r])
             }
-            Backend::Kafka(_) => Err("Kafka 无 SQL(消息浏览用数据页)".into()),
-            Backend::Rabbit(_) => Err("RabbitMQ 无 SQL(队列浏览用控制台)".into()),
-            Backend::Mqtt(_) => Err("MQTT 无 SQL(主题浏览用控制台)".into()),
+            // 中间件族(Kafka/Rabbit/Mqtt/后续新增)统一无 SQL 执行面
+            Backend::Kafka(_)
+            | Backend::Rabbit(_)
+            | Backend::Mqtt(_) => Err("该数据源无 SQL 执行面(浏览请用专属控制台)".into()),
         }
     }
 

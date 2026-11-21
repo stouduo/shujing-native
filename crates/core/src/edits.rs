@@ -231,8 +231,13 @@ pub async fn apply_changes(
             // mutation 异步生效,affected 不可得
             0u64
         }
-        Backend::Kafka(_) | Backend::Rabbit(_) | Backend::Mqtt(_) => {
-            let _e: String = "无 SQL 回写".into();
+        // 中间件族统一无 SQL 回写(此臂实际不可达:build_change_stmts 已拒;
+        // 保留为穷举兜底,防止未来新类型漏检)
+        Backend::Redis(_)
+        | Backend::Kafka(_)
+        | Backend::Rabbit(_)
+        | Backend::Mqtt(_) => {
+            let _e: String = "该数据源无 SQL 回写".into();
             0u64
         }
     };

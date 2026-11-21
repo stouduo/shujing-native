@@ -849,7 +849,6 @@ async fn resolve_mysql_db(
                 let client = Backend::pg_client(mp).await?;
                 struct_pg(&client, table).await
             }
-            Backend::Redis(_) => Err("Redis 无表结构".into()),
             Backend::Mongo(st) => {
                 let cur_db = st.cur_db.try_lock().ok().and_then(|g| g.clone());
                 let db = database
@@ -859,9 +858,11 @@ async fn resolve_mysql_db(
             }
             Backend::Mssql(st) => crate::mssql::structure(st, database, table).await,
             Backend::ClickHouse(st) => crate::clickhouse::structure(st, database, table).await,
-            Backend::Kafka(_) => Err("Kafka 无表结构".into()),
-            Backend::Rabbit(_) => Err("RabbitMQ 无表结构".into()),
-            Backend::Mqtt(_) => Err("MQTT 无表结构".into()),
+            // 中间件族无表结构语义(能力位 schema=false)
+            Backend::Redis(_)
+            | Backend::Kafka(_)
+            | Backend::Rabbit(_)
+            | Backend::Mqtt(_) => Err("该数据源无表结构".into()),
         }
     }
 
@@ -876,13 +877,13 @@ async fn resolve_mysql_db(
                 let client = Backend::pg_client(mp).await?;
                 count_pg(&client, table).await
             }
-            Backend::Redis(_) => Err("Redis 无表计数".into()),
             Backend::Mongo(st) => crate::mongo::backend_count(st, table).await,
             Backend::Mssql(st) => crate::mssql::count(st, table).await,
             Backend::ClickHouse(st) => crate::clickhouse::count(st, None, table).await,
-            Backend::Kafka(_) => Err("Kafka 计数请打开消息浏览".into()),
-            Backend::Rabbit(_) => Err("RabbitMQ 计数请打开队列控制台".into()),
-            Backend::Mqtt(_) => Err("MQTT 计数请打开主题控制台".into()),
+            Backend::Redis(_)
+            | Backend::Kafka(_)
+            | Backend::Rabbit(_)
+            | Backend::Mqtt(_) => Err("该数据源无表计数(中间件请用专属控制台)".into()),
         }
     }
 
