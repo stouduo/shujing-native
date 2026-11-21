@@ -53,21 +53,35 @@ pub fn format_ts_local(ts_ms: i64) -> String {
 }
 
 /// 追加一条并滚动截断(最多保留 `max` 条新条目)。文件损坏按空文件处理。
+/// 追加一条(O(1) 追加,高频查询路径不再全量重写);
+/// 文件超过 512KB 触发一次 compaction(读→保留 max 条→重写)
 pub fn append(path: &Path, entry: &HistoryEntry, max: usize) -> Result<(), String> {
-    let mut items = load(path, usize::MAX);
-    items.push(entry.clone());
-    let start = items.len().saturating_sub(max);
-    let kept = &items[start..];
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let mut out = String::new();
-    for it in kept {
-        let line = serde_json::to_string(it).map_err(|e| e.to_string())?;
-        out.push_str(&line);
-        out.push('\n');
+    let line = serde_json::to_string(entry).map_err(|e| e.to_string())?;
+    {
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| format!("历史写入失败: {e}"))?;
+        writeln!(f, "{line}").map_err(|e| format!("历史写入失败: {e}"))?;
     }
-    std::fs::write(path, out).map_err(|e| format!("历史写入失败: {e}"))
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size > 512 * 1024 {
+        let items = load(path, usize::MAX);
+        let start = items.len().saturating_sub(max);
+        let mut out = String::new();
+        for it in &items[start..] {
+            let l = serde_json::to_string(it).map_err(|e| e.to_string())?;
+            out.push_str(&l);
+            out.push('\n');
+        }
+        std::fs::write(path, out).map_err(|e| format!("历史写入失败: {e}"))?;
+    }
+    Ok(())
 }
 
 /// 读取全部(新的在后);损坏行跳过
@@ -139,10 +153,34 @@ mod tests {
         for i in 0..10u64 {
             append(&p, &HistoryEntry { ts: i as i64, sql: format!("SELECT {i}"), ..Default::default() }, 5).unwrap();
         }
+        // 追加不即时截断(max 表示 compaction 保留数);读取侧 load(limit) 限流
         let all = load(&p, usize::MAX);
-        assert_eq!(all.len(), 5);
-        assert_eq!(all[0].sql, "SELECT 5");
-        assert_eq!(all[4].sql, "SELECT 9");
+        assert_eq!(all.len(), 10);
+        assert_eq!(all[0].sql, "SELECT 0");
+        let limited = load(&p, 5);
+        assert_eq!(limited.len(), 5);
+        assert_eq!(limited[0].sql, "SELECT 5");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn compaction_triggers_on_size() {
+        let p = tmp("compact");
+        // 直接构造 >512KB 的历史文件(~6000 条)
+        let big: Vec<String> = (0..12000u32)
+            .map(|i| {
+                format!(
+                    "{{\"ts\":{i},\"conn\":\"c\",\"sql\":\"SELECT {i} padding padding padding padding\"}}"
+                )
+            })
+            .collect();
+        std::fs::write(&p, big.join("\n") + "\n").unwrap();
+        assert!(std::fs::metadata(&p).unwrap().len() > 512 * 1024);
+        append(&p, &HistoryEntry { ts: 9999, sql: "after".into(), ..Default::default() }, 500).unwrap();
+        let all = load(&p, usize::MAX);
+        assert_eq!(all.len(), 500, "compaction 保留 500 条");
+        assert_eq!(all[499].sql, "after", "最新条在尾");
+        assert_eq!(std::fs::metadata(&p).unwrap().len() <= 512 * 1024, true, "体积回落");
         let _ = std::fs::remove_file(&p);
     }
 
