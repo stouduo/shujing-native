@@ -407,7 +407,10 @@ impl DriverAgent {
         cmd.current_dir(&plugin.dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
+            .stderr(std::process::Stdio::null())
+            // 数镜退出/断开连接(LiveConn drop)时必须带走 agent 子进程:
+            // tokio Child 默认 drop 不杀 → 孤儿进程残留
+            .kill_on_drop(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -446,6 +449,23 @@ impl DriverAgent {
 
     /// 单次请求(串行;调用方负责持锁)。子进程已死时返回明确错误。
     pub async fn call(
+        &mut self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        /// 单请求上限:agent 卡死/死循环时兜底,不让 UI 永挂
+        const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+        let call = self.call_inner(method, params);
+        match tokio::time::timeout(CALL_TIMEOUT, call).await {
+            Ok(r) => r,
+            Err(_) => Err(format!(
+                "驱动插件 {} 请求超时(60s):方法 {method}",
+                self.plugin_name
+            )),
+        }
+    }
+
+    async fn call_inner(
         &mut self,
         method: &str,
         params: &serde_json::Value,
