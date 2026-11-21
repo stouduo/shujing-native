@@ -5463,6 +5463,15 @@ impl eframe::App for ShujingApp {
             self.open_query_tab(None);
         }
         self.screenshot_tick(ctx);
+        // 定时自动备份:每 60 帧检查一次;开启时保证空闲帧推进
+        if self.auto_backup.enabled {
+            if self.frame_count % 60 == 0 {
+                self.auto_backup_tick();
+            }
+            if self.auto_backup_queue.is_empty() && !self.auto_backup_running {
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            }
+        }
 
         if ui_input_new_query(ctx) {
             self.open_query_tab(None);

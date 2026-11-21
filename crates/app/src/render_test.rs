@@ -175,6 +175,9 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         backup: None,
         plugin_run: None,
         query_history: None,
+        auto_backup: Default::default(),
+        auto_backup_queue: Vec::new(),
+        auto_backup_running: false,
         plugins: std::sync::Arc::new(shujing_core::plugins::PluginManager::load_all(std::path::Path::new("/tmp/definitely-missing-plugins-dir"))),
         data_diff: None,
         conn_crypto: None,
@@ -1147,6 +1150,12 @@ fn render_modals_visual_sweep2() {
         total: 7,
         cur_table: "users".into(),
         result: None,
+        recent: vec![shujing_core::backup::BackupFileMeta {
+            name: "本地库-main-20261121-120000.sql".into(),
+            path: "/tmp/demo.sql".into(),
+            bytes: 12_345,
+            modified_ms: 1_763_700_000_000,
+        }],
     });
     let app = std::cell::RefCell::new(app);
     render("modal_backup", 700.0, 560.0, true, move |ctx| {

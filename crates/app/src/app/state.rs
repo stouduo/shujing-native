@@ -420,6 +420,29 @@ pub struct BackupState {
     pub cur_table: String,
     /// Ok = (tables, rows, path, bytes)
     pub result: Option<Result<(usize, u64, String, u64), String>>,
+    /// 备份目录最近文件(管理面板;打开弹窗时扫描)
+    pub recent: Vec<shujing_core::backup::BackupFileMeta>,
+}
+
+/// 定时自动备份配置(settings.json autoBackup)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AutoBackupCfg {
+    pub enabled: bool,
+    /// 间隔小时(6/12/24/72)
+    pub interval_hours: u32,
+    /// 上次自动备份 epoch ms
+    pub last_run_ms: i64,
+}
+
+impl Default for AutoBackupCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_hours: 24,
+            last_run_ms: 0,
+        }
+    }
 }
 
 /// 数据对比状态(按主键逐行对齐;目标侧同步 SQL)

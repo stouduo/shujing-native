@@ -90,6 +90,10 @@ pub enum BgEvent {
     BackupDone {
         result: Result<(usize, u64, String, u64), String>,
     },
+    AutoBackupDone {
+        conn_name: String,
+        result: Result<(usize, u64, String, u64), String>,
+    },
     PluginDone {
         result: Result<String, String>,
     },
@@ -374,6 +378,28 @@ pub enum BgEvent {
 }
 
 /// ⌘P 快速打开
+/// 文件名时间戳 YYYYMMDD-HHMMSS
+pub fn chrono_ts() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = secs / 86400;
+    let rem = secs % 86400;
+    let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days as i64 + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}{m:02}{d:02}-{h:02}{mi:02}{s:02}")
+}
+
 /// 字节数人性化(备份完成统计)
 pub fn fmt_bytes(n: u64) -> String {
     if n >= 1024 * 1024 * 1024 {
@@ -461,6 +487,9 @@ pub struct ShujingApp {
     /// 数据传输弹窗
     pub transfer: Option<TransferState>,
     pub backup: Option<crate::app::BackupState>,
+    pub auto_backup: crate::app::AutoBackupCfg,
+    pub auto_backup_queue: Vec<ConnInfo>,
+    pub auto_backup_running: bool,
     pub plugin_run: Option<crate::app::PluginRunState>,
     pub query_history: Option<crate::app::HistoryState>,
     pub plugins: std::sync::Arc<shujing_core::plugins::PluginManager>,
@@ -521,6 +550,11 @@ impl ShujingApp {
         let settings = std::fs::read_to_string(config_dir.join("settings.json"))
             .ok()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let auto_backup = settings
+            .as_ref()
+            .and_then(|v| v.get("autoBackup"))
+            .and_then(|a| serde_json::from_value::<crate::app::AutoBackupCfg>(a.clone()).ok())
+            .unwrap_or_default();
         let follow_system = settings
             .as_ref()
             .and_then(|v| v.get("followSystem").and_then(|f| f.as_bool()))
@@ -609,6 +643,9 @@ impl ShujingApp {
             mongo_import: None,
             transfer: None,
             backup: None,
+            auto_backup: auto_backup,
+            auto_backup_queue: Vec::new(),
+            auto_backup_running: false,
             plugin_run: None,
             query_history: None,
             plugins,
@@ -894,6 +931,7 @@ impl ShujingApp {
         let json = serde_json::json!({
             "dark": self.dark_mode,
             "preset": crate::theme::preset_idx(),
+            "autoBackup": &self.auto_backup,
             "accent": crate::theme::accent_idx(),
             "followSystem": self.follow_system_theme,
             "ai": &self.ai_config,
@@ -3181,6 +3219,13 @@ impl ShujingApp {
             ));
             return;
         }
+        let recent = {
+            let home = std::env::var("HOME").unwrap_or_default();
+            shujing_core::backup::list_recent(
+                std::path::Path::new(&format!("{home}/Documents/数镜备份")),
+                20,
+            )
+        };
         self.backup = Some(crate::app::BackupState {
             conn_id: c.id.clone(),
             conn_name: c.name.clone(),
@@ -3190,6 +3235,7 @@ impl ShujingApp {
             total: 0,
             cur_table: String::new(),
             result: None,
+            recent,
         });
     }
 
@@ -3269,6 +3315,86 @@ impl ShujingApp {
             output: None,
             error: None,
             running: false,
+        });
+    }
+
+    /// 每秒级检查:定时自动备份到期且空闲 → 收集在线三方言连接入队
+    pub fn auto_backup_tick(&mut self) {
+        if !self.auto_backup.enabled || self.auto_backup_running || !self.auto_backup_queue.is_empty() {
+            return;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let interval_ms = (self.auto_backup.interval_hours.max(1) as i64) * 3_600_000;
+        if now_ms - self.auto_backup.last_run_ms < interval_ms {
+            return;
+        }
+        let online: Vec<ConnInfo> = self
+            .conns
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.db_type,
+                    shujing_core::DbType::MySql | shujing_core::DbType::Postgres | shujing_core::DbType::Sqlite
+                )
+            })
+            .cloned()
+            .collect();
+        if online.is_empty() {
+            // 无在线连接:推迟到下一轮(不更新 last,避免空转吞掉周期)
+            return;
+        }
+        self.auto_backup.last_run_ms = now_ms;
+        self.save_theme_settings();
+        self.auto_backup_queue = online;
+        self.run_auto_backup_next();
+    }
+
+    /// 队列逐个执行(串行,防并发写备份目录)
+    pub fn run_auto_backup_next(&mut self) {
+        let Some(c) = self.auto_backup_queue.pop() else { return };
+        if !matches!(
+            c.db_type,
+            shujing_core::DbType::MySql | shujing_core::DbType::Postgres | shujing_core::DbType::Sqlite
+        ) {
+            self.run_auto_backup_next();
+            return;
+        }
+        self.auto_backup_running = true;
+        let conn_id = c.id.clone();
+        let conn_name = c.name.clone();
+        let db = c.database.clone();
+        let service = self.service.clone();
+        let tx = self.event_tx.clone();
+        net::spawn(async move {
+            let ts = chrono_ts();
+            let home = std::env::var("HOME").unwrap_or_default();
+            let dir = std::path::PathBuf::from(format!("{home}/Documents/数镜备份"));
+            let _ = std::fs::create_dir_all(&dir);
+            let safe = |s: &str| {
+                s.chars()
+                    .map(|ch| if ch.is_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' })
+                    .collect::<String>()
+            };
+            let db_part = db.as_deref().unwrap_or("");
+            let path = dir.join(format!(
+                "auto-{}-{}-{}.sql",
+                safe(&conn_name),
+                if db_part.is_empty() { safe(&conn_name) } else { safe(db_part) },
+                ts
+            ));
+            let result = shujing_core::backup::backup_database(
+                &service,
+                &conn_id,
+                db.as_deref(),
+                &path,
+                &|_, _, _| {},
+            )
+            .await
+            .map(|s| (s.tables, s.rows, s.path, s.bytes));
+            let _ = tx.send(BgEvent::AutoBackupDone { conn_name, result });
         });
     }
 
@@ -4968,6 +5094,31 @@ impl ShujingApp {
                         b.running = false;
                         b.result = Some(result);
                     }
+                    continue;
+                }
+                BgEvent::AutoBackupDone { conn_name, result } => {
+                    match &result {
+                        Ok((_, rows, path, bytes)) => {
+                            self.toast_error(format!(
+                                "{}: {} · {} {} · {}",
+                                ui_kit::t!("Auto backup done", "自动备份完成"),
+                                conn_name,
+                                rows,
+                                ui_kit::t!("rows", "行"),
+                                crate::app::fmt_bytes(*bytes)
+                            ));
+                            let _ = path;
+                        }
+                        Err(e) => {
+                            self.toast_error(format!(
+                                "{} {}: {e}",
+                                ui_kit::t!("Auto backup failed", "自动备份失败"),
+                                conn_name
+                            ));
+                        }
+                    }
+                    self.auto_backup_running = false;
+                    self.run_auto_backup_next();
                     continue;
                 }
                 BgEvent::PluginDone { result } => {

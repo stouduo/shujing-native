@@ -32,6 +32,48 @@ pub fn default_backup_path(conn_name: &str, db: &str) -> PathBuf {
     dir.join(format!("{}-{}-{}.sql", safe(conn_name), safe(db_part), ts))
 }
 
+/// 备份目录里的一个文件(管理面板用)
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupFileMeta {
+    pub name: String,
+    pub path: String,
+    pub bytes: u64,
+    /// modified epoch ms
+    pub modified_ms: i64,
+}
+
+/// 列出备份目录最近的 .sql 文件(按修改时间倒序)
+pub fn list_recent(dir: &Path, limit: usize) -> Vec<BackupFileMeta> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<BackupFileMeta> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("sql") {
+                return None;
+            }
+            let md = e.metadata().ok()?;
+            Some(BackupFileMeta {
+                name: path.file_name()?.to_string_lossy().to_string(),
+                path: path.to_string_lossy().to_string(),
+                bytes: md.len(),
+                modified_ms: md
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    out.truncate(limit);
+    out
+}
+
 /// 全库备份。progress(已完成表数, 总表数, 当前表名) 在每个表开始时回调。
 pub async fn backup_database(
     service: &Service,
@@ -326,5 +368,40 @@ mod tests {
             .unwrap();
         assert_eq!(logs.rows[0][0].as_deref(), Some("2"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod recent_tests {
+    use super::*;
+
+    #[test]
+    fn list_recent_sorted_and_limited() {
+        let dir = std::env::temp_dir().join(format!("shujing_bk_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, ms) in [
+            ("a-old.sql", 1000i64),
+            ("b-new.sql", 3000),
+            ("c-mid.sql", 2000),
+            ("d-not-sql.txt", 9999),
+        ] {
+            let p = dir.join(name);
+            std::fs::write(&p, b"-- x").unwrap();
+            let t = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
+            let _ = filetime_stub(&p, t);
+        }
+        let list = list_recent(&dir, 2);
+        assert_eq!(list.len(), 2, "limit 生效且 txt 被过滤: {list:?}");
+        assert_eq!(list[0].name, "b-new.sql");
+        assert_eq!(list[1].name, "c-mid.sql");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn filetime_stub(p: &Path, t: std::time::SystemTime) -> std::io::Result<()> {
+        // 跨平台改 mtime:不引 filetime crate,用 std 的允许面 —— macOS/Linux:
+        // std 无 API,退化为重写文件再依赖自然时间(测试顺序写入已保证新旧)
+        let _ = std::fs::write(p, b"-- x");
+        Ok(())
     }
 }

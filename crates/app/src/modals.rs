@@ -2007,6 +2007,47 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 }
             }
 
+            // 最近备份(打开弹窗时扫描,最多 20 条)
+            if !st.recent.is_empty() {
+                ui.add_space(6.0);
+                ui.label(RichText::new(ui_kit::t!("Recent Backups", "最近备份")).size(11.0).color(p.muted));
+                egui::ScrollArea::vertical()
+                    .id_salt("backup-recent")
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        for f in &st.recent {
+                            let (rect, resp) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 18.0),
+                                egui::Sense::click(),
+                            );
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::CornerRadius::same(4),
+                                if resp.hovered() { p.hover } else { egui::Color32::TRANSPARENT },
+                            );
+                            ui.painter().text(
+                                egui::pos2(rect.left() + 8.0, rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                f.name.clone(),
+                                egui::FontId::monospace(10.5),
+                                p.text2,
+                            );
+                            ui.painter().text(
+                                egui::pos2(rect.right() - 8.0, rect.center().y),
+                                egui::Align2::RIGHT_CENTER,
+                                crate::app::fmt_bytes(f.bytes),
+                                egui::FontId::proportional(10.0),
+                                p.muted,
+                            );
+                            if resp.clicked() {
+                                #[cfg(target_os = "macos")]
+                                let _ = std::process::Command::new("open").arg("-R").arg(&f.path).spawn();
+                            }
+                            resp.on_hover_text(&f.path);
+                        }
+                    });
+            }
+
             theme::modal_footer(ui, |ui| {
                 if theme::button(
                     ui,
@@ -3298,6 +3339,64 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     .color(p.text2),
                 );
             });
+            // 定时自动备份
+            ui.add_space(8.0);
+            ui.label(theme::strong(ui_kit::t!("Scheduled Backup", "定时备份"), 12.5).color(p.text2));
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "Periodically dump all online MySQL/PostgreSQL/SQLite connections to ~/Documents/数镜备份",
+                    "按周期对在线的 MySQL/PostgreSQL/SQLite 连接执行备份,写入 ~/Documents/数镜备份"
+                ))
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            ui.horizontal(|ui| {
+                let on = app.auto_backup.enabled;
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(38.0, 22.0), egui::Sense::click());
+                ui.painter().rect_filled(
+                    rect,
+                    egui::CornerRadius::same(11),
+                    if on { p.accent } else { p.input_bg },
+                );
+                let knob_x = if on { rect.right() - 11.0 } else { rect.left() + 11.0 };
+                ui.painter().circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, p.text);
+                if resp.clicked() {
+                    app.auto_backup.enabled = !on;
+                    app.save_theme_settings();
+                }
+                ui.label(
+                    RichText::new(if on {
+                        ui_kit::t!("On", "已开启")
+                    } else {
+                        ui_kit::t!("Off", "已关闭")
+                    })
+                        .size(12.0)
+                        .color(p.text2),
+                );
+                ui.separator();
+                ui.label(RichText::new(ui_kit::t!("Every", "间隔")).size(11.5).color(p.text2));
+                let hours = app.auto_backup.interval_hours.max(1);
+                egui::ComboBox::from_id_salt("auto-backup-interval")
+                    .width(90.0)
+                    .selected_text(format!("{}h", hours))
+                    .show_ui(ui, |ui| {
+                        for h in [6u32, 12, 24, 72] {
+                            ui.selectable_value(&mut app.auto_backup.interval_hours, h, format!("{}h", h));
+                        }
+                    });
+                if app.auto_backup.last_run_ms > 0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "{}: {}",
+                            ui_kit::t!("Last run", "上次"),
+                            shujing_core::history::format_ts_local(app.auto_backup.last_run_ms)
+                        ))
+                            .size(10.5)
+                            .color(p.muted),
+                    );
+                }
+            });
+
             // 插件(WASM 沙箱)
             ui.add_space(8.0);
             ui.label(theme::strong(ui_kit::t!("Plugins (WASM)", "插件(WASM)"), 12.5).color(p.text2));
