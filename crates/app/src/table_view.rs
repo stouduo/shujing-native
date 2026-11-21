@@ -4898,6 +4898,23 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
 
             ui.label(RichText::new(ui_kit::t!("Type", "类型")).size(11.0).color(p.muted));
             ui.add_space(4.0);
+            // 兼容库提示(协议兼容的国产/分布式库直接用同协议类型连)
+            {
+                let compat: &str = match m.db_type {
+                    shujing_core::DbType::MySql => ui_kit::t!(
+                        "Also connects MariaDB / TiDB / OceanBase / Doris / StarRocks",
+                        "兼容 MariaDB / TiDB / OceanBase / Doris / StarRocks"
+                    ),
+                    shujing_core::DbType::Postgres => ui_kit::t!(
+                        "Also connects KingbaseES / openGauss / GaussDB / CockroachDB",
+                        "兼容 KingbaseES / openGauss / GaussDB / CockroachDB"
+                    ),
+                    _ => "",
+                };
+                if !compat.is_empty() {
+                    ui.label(RichText::new(compat).size(10.5).color(p.muted));
+                }
+            }
             if segmented_db_type(ui, &mut m.db_type, 440.0) {
                 // 切换类型:端口为空或等于其它类型默认值时带出新默认
                 let dp = default_port(m.db_type);

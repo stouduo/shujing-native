@@ -137,6 +137,23 @@ pub async fn optimize_sql(
     chat(cfg, OPTIMIZE_SYSTEM, &user).await
 }
 
+const FIX_SYSTEM: &str = "你是数据库 SQL 专家。用户会给出一条执行报错的 SQL 和数据库返回的\
+错误信息,请定位原因(语法/字段不存在/类型不匹配/权限/方言差异等)并给出修正后的 SQL。\
+先一句话说明原因,再给修正 SQL(用 ```sql 围栏)。如果信息不足以定位,列出最可能的 2-3 个原因。简体中文。";
+
+pub async fn fix_sql(
+    cfg: &AiConfig,
+    dialect: &str,
+    schema_ctx: &str,
+    sql: &str,
+    error: &str,
+) -> Result<String, String> {
+    let user = format!(
+        "数据库方言: {dialect}\n\n数据库结构(参考):\n{schema_ctx}\n\nSQL:\n{sql}\n\n报错信息:\n{error}"
+    );
+    chat(cfg, FIX_SYSTEM, &user).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

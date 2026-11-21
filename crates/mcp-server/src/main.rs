@@ -4,7 +4,7 @@
 //! 列连接/库/表/结构、执行 SQL(默认只读白名单,写模式需显式开启)。
 //!
 //! 配置(环境变量):
-//! - SHUJING_MCP_MODE: read_only(默认)| write(write 才放行写语句)
+//! - SHUJING_MCP_MODE: read_only(默认)| safe_write(仅 DML)| high_risk_write(全放行;旧值 write 兼容映射)
 //! - SHUJING_MCP_CONNS: 逗号分隔的连接 id 白名单(空=全部)
 //! - SHUJING_CONFIG_DIR: 配置目录(默认 ~/.shujing-native,与桌面版一致)
 //!
@@ -26,7 +26,15 @@ fn main() {
     let config_dir = std::env::var("SHUJING_CONFIG_DIR")
         .unwrap_or_else(|_| format!("{home}/.shujing-native"));
     let _ = std::fs::create_dir_all(&config_dir);
-    let mode = std::env::var("SHUJING_MCP_MODE").unwrap_or_else(|_| "read_only".into());
+    let mut mode = std::env::var("SHUJING_MCP_MODE").unwrap_or_else(|_| "read_only".into());
+    // 旧配置兼容:write → high_risk_write
+    if mode == "write" {
+        mode = "high_risk_write".into();
+    }
+    if !matches!(mode.as_str(), "read_only" | "safe_write" | "high_risk_write") {
+        eprintln!("[shujing-mcp] 未知的 SHUJING_MCP_MODE={mode},按 read_only 处理");
+        mode = "read_only".into();
+    }
     let allow_conns: Vec<String> = std::env::var("SHUJING_MCP_CONNS")
         .unwrap_or_default()
         .split(',')
@@ -224,17 +232,30 @@ async fn call_tool(mcp: &Mcp, name: &str, args: &Value) -> (String, bool) {
                     let Some(sql) = s(args, "sql") else {
                         return text_err("缺少 sql 参数".into());
                     };
-                    if name == "execute" && mcp.mode != "write" {
+                    // 三档权限:read_only(只读) / safe_write(仅 DML) / high_risk_write(全放行)
+                    if name == "execute" && mcp.mode == "read_only" {
                         return text_err(
-                            "服务端为只读模式(SHUJING_MCP_MODE=read_only),写语句被拒绝".into(),
+                            "服务端为只读模式(SHUJING_MCP_MODE=read_only),写语句被拒绝;\
+                             需要 DML 以 safe_write 启动,需要 DDL 以 high_risk_write 启动"
+                                .into(),
+                        );
+                    }
+                    if name == "execute"
+                        && mcp.mode == "safe_write"
+                        && shujing_core::sql_write_kind(sql) != Some("dml")
+                    {
+                        return text_err(
+                            "safe_write 模式仅放行 DML(INSERT/UPDATE/DELETE/REPLACE);\
+                             DDL(CREATE/DROP/ALTER/TRUNCATE 等)需要 SHUJING_MCP_MODE=high_risk_write"
+                                .into(),
                         );
                     }
                     if name == "query"
-                        && mcp.mode != "write"
+                        && mcp.mode == "read_only"
                         && !shujing_core::is_readonly_sql(sql)
                     {
                         return text_err(
-                            "只读模式仅放行查询语句(SELECT/SHOW/DESC/PRAGMA 查询);写操作需要服务端以 SHUJING_MCP_MODE=write 启动并改用 execute 工具".into(),
+                            "只读模式仅放行查询语句(SELECT/SHOW/DESC/PRAGMA 查询);写操作需要服务端以 SHUJING_MCP_MODE=safe_write(DML)或 high_risk_write(全部)启动并改用 execute 工具".into(),
                         );
                     }
                     let max_rows = args.get("max_rows").and_then(|v| v.as_u64()).unwrap_or(50) as usize;

@@ -33,6 +33,7 @@ pub use search::SearchHit;
 pub use model::{
     AppState, ColumnDef, ConnInfo, ConnectResult, DbType, ExecResult, IndexDef, LiveConn,
     SessionInfo, SshConfig, TableMeta, TableStructure, is_readonly_redis, is_readonly_sql,
+    sql_write_kind,
 };
 
 use model::CancelState;

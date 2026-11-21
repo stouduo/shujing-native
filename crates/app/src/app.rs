@@ -4062,13 +4062,26 @@ impl ShujingApp {
         });
     }
 
-    /// 打开 AI 助手(mode:0 生成/1 解释/2 优化)
+    /// 打开 AI 助手(mode:0 生成/1 解释/2 优化/3 修复报错)
     pub fn open_ai_assist(&mut self, tab_id: &str, mode: u8) {
-        let init_input = if mode == 0 {
+        let mut init_input = if mode == 0 {
             String::new()
         } else {
             self.table_of_query(tab_id).unwrap_or_default()
         };
+        // 修复模式:SQL + 最近一次执行报错一起带出
+        if mode == 3 {
+            if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
+                if let TabKind::Query(q) = &tab.kind {
+                    if let Some(err) = &q.error {
+                        init_input = format!(
+                            "{}\n\n--- 报错 ---\n{}",
+                            init_input, err
+                        );
+                    }
+                }
+            }
+        }
         self.ai_assist = Some(AiAssistState {
             tab_id: tab_id.to_string(),
             mode,
@@ -4138,6 +4151,14 @@ impl ShujingApp {
             let result = match mode {
                 0 => shujing_core::ai::generate_sql(&cfg, &dialect, &schema_ctx, &input).await,
                 1 => shujing_core::ai::explain_sql(&cfg, &dialect, &schema_ctx, &input).await,
+                3 => {
+                    // 修复模式:输入=SQL\n\n--- 报错 ---\n错误文本
+                    let (sql, err) = match input.split_once("--- 报错 ---") {
+                        Some((a, b)) => (a.trim(), b.trim()),
+                        None => (input.as_str(), "(用户未提供报错信息)"),
+                    };
+                    shujing_core::ai::fix_sql(&cfg, &dialect, &schema_ctx, sql, err).await
+                }
                 _ => shujing_core::ai::optimize_sql(&cfg, &dialect, &schema_ctx, &input).await,
             };
             let _ = tx.send(BgEvent::AiDone {

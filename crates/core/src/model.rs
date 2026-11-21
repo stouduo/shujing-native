@@ -507,6 +507,29 @@ pub struct MySqlPool {
     pub(crate) gen: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
+/// SQL 写操作分档(MCP 三档权限):None=只读;Some("dml")=DML;Some("ddl")=DDL/其他写。
+/// WITH/EXPLAIN 内层写语句由 is_readonly_sql 判定后,此处按裸首词粗分——
+/// WITH 写 CTE 保守归 ddl(safe_write 拒,high_risk 放)。
+pub fn sql_write_kind(sql: &str) -> Option<&'static str> {
+    if is_readonly_sql(sql) {
+        return None;
+    }
+    let upper = sql.trim_start().to_ascii_uppercase();
+    let kw = |k: &str| {
+        upper.starts_with(k)
+            && upper[k.len()..]
+                .chars()
+                .next()
+                .map(|c| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(false)
+    };
+    if kw("INSERT") || kw("UPDATE") || kw("DELETE") || kw("REPLACE") {
+        Some("dml")
+    } else {
+        Some("ddl")
+    }
+}
+
 /// 从 USE / SET search_path 语句提取库名
 pub fn extract_use_db(sql: &str) -> Option<String> {
     // 扫全部语句取最后一次 USE/SET search_path(此前只看整串前缀,
@@ -641,6 +664,24 @@ pub fn es<E: std::fmt::Display>(e: E) -> String {
 #[cfg(test)]
 mod readonly_tests {
     use super::*;
+
+    #[test]
+    fn sql_write_kind_tiers() {
+        assert_eq!(sql_write_kind("SELECT * FROM t"), None);
+        assert_eq!(sql_write_kind("SHOW TABLES"), None);
+        assert_eq!(sql_write_kind("INSERT INTO t VALUES(1)"), Some("dml"));
+        assert_eq!(sql_write_kind("update t set a=1"), Some("dml"));
+        assert_eq!(sql_write_kind("DELETE FROM t"), Some("dml"));
+        assert_eq!(sql_write_kind("REPLACE INTO t VALUES(1)"), Some("dml"));
+        assert_eq!(sql_write_kind("CREATE TABLE t(a int)"), Some("ddl"));
+        assert_eq!(sql_write_kind("DROP TABLE t"), Some("ddl"));
+        assert_eq!(sql_write_kind("ALTER TABLE t ADD c int"), Some("ddl"));
+        assert_eq!(sql_write_kind("TRUNCATE TABLE t"), Some("ddl"));
+        // 写型 CTE 保守归 ddl(safe_write 拒)
+        assert_eq!(sql_write_kind("WITH x AS (SELECT 1) DELETE FROM t"), Some("ddl"));
+        // 前缀词不算(inserts 表名)
+        assert_eq!(sql_write_kind("SELECT * FROM inserts"), None);
+    }
 
     #[test]
     fn readonly_allows_reads() {

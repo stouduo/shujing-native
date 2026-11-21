@@ -2268,6 +2268,7 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     (0u8, ui_kit::t!("Generate SQL", "生成 SQL")),
                     (1, ui_kit::t!("Explain", "解释")),
                     (2, ui_kit::t!("Optimize", "优化建议")),
+                    (3, ui_kit::t!("Fix Error", "修复报错")),
                 ] {
                     if theme::button(
                         ui,
@@ -2320,7 +2321,11 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "描述需求,如:查最近 7 天下单超过 3 次的用户"
                 ),
                 1 => ui_kit::t!("SQL to explain (loaded from the editor)", "要解释的 SQL(已带出编辑器内容)"),
-                _ => ui_kit::t!("SQL to optimize (loaded from the editor)", "要优化的 SQL(已带出编辑器内容)"),
+                2 => ui_kit::t!("SQL to optimize (loaded from the editor)", "要优化的 SQL(已带出编辑器内容)"),
+                _ => ui_kit::t!(
+                    "SQL + error message (loaded from the editor's last error)",
+                    "SQL + 报错信息(已带出编辑器内容与最近报错)"
+                ),
             };
             theme::form_field_multiline(ui, hint, "ai-input", &mut st.input, 620.0, 4);
             ui.add_space(4.0);
