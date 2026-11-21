@@ -69,9 +69,14 @@ pub fn list_recent(dir: &Path, limit: usize) -> Vec<BackupFileMeta> {
             })
         })
         .collect();
-    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
-    out.truncate(limit);
+    sort_and_limit(&mut out, limit);
     out
+}
+
+/// 按 modified 倒序并截断(纯函数,便于确定性测试)
+fn sort_and_limit(items: &mut Vec<BackupFileMeta>, limit: usize) {
+    items.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    items.truncate(limit);
 }
 
 /// 全库备份。progress(已完成表数, 总表数, 当前表名) 在每个表开始时回调。
@@ -376,32 +381,29 @@ mod recent_tests {
     use super::*;
 
     #[test]
-    fn list_recent_sorted_and_limited() {
+    fn list_recent_filters_and_limits() {
         let dir = std::env::temp_dir().join(format!("shujing_bk_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for (name, ms) in [
-            ("a-old.sql", 1000i64),
-            ("b-new.sql", 3000),
-            ("c-mid.sql", 2000),
-            ("d-not-sql.txt", 9999),
-        ] {
-            let p = dir.join(name);
-            std::fs::write(&p, b"-- x").unwrap();
-            let t = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
-            let _ = filetime_stub(&p, t);
+        for name in ["a.sql", "b.sql", "c.txt"] {
+            std::fs::write(dir.join(name), b"-- x").unwrap();
         }
-        let list = list_recent(&dir, 2);
-        assert_eq!(list.len(), 2, "limit 生效且 txt 被过滤: {list:?}");
-        assert_eq!(list[0].name, "b-new.sql");
-        assert_eq!(list[1].name, "c-mid.sql");
+        let list = list_recent(&dir, 5);
+        assert_eq!(list.len(), 2, "txt 被过滤: {list:?}");
+        assert_eq!(list_recent(&dir, 1).len(), 1, "limit 生效");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn filetime_stub(p: &Path, t: std::time::SystemTime) -> std::io::Result<()> {
-        // 跨平台改 mtime:不引 filetime crate,用 std 的允许面 —— macOS/Linux:
-        // std 无 API,退化为重写文件再依赖自然时间(测试顺序写入已保证新旧)
-        let _ = std::fs::write(p, b"-- x");
-        Ok(())
+    #[test]
+    fn sort_and_limit_deterministic() {
+        let mut items = vec![
+            BackupFileMeta { name: "old".into(), path: String::new(), bytes: 1, modified_ms: 1000 },
+            BackupFileMeta { name: "new".into(), path: String::new(), bytes: 2, modified_ms: 3000 },
+            BackupFileMeta { name: "mid".into(), path: String::new(), bytes: 3, modified_ms: 2000 },
+        ];
+        sort_and_limit(&mut items, 2);
+        assert_eq!(items[0].name, "new");
+        assert_eq!(items[1].name, "mid");
+        assert_eq!(items.len(), 2);
     }
 }
