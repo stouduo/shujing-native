@@ -469,6 +469,29 @@ impl Service {
     }
 
 
+    /// SSH 隧道中断自动恢复:检测到该连接的隧道已死 → 用保存的连接配置重连
+    /// (ensure_tunnel 会重建隧道、connect 保留会话库记忆并替换连接池)。
+    /// 仅对 SSH 连接生效;恢复失败保持原状,随后的操作照常报错(不打断调用方语义)。
+    async fn auto_recover_ssh(&self, id: &str) {
+        let Some(saved) = self
+            .list_saved_connections()
+            .into_iter()
+            .find(|c| c.id == id)
+        else {
+            return;
+        };
+        if saved.ssh.is_none() {
+            return;
+        }
+        let dead = {
+            let tunnels = self.tunnels.lock().unwrap_or_else(|e| e.into_inner());
+            tunnels.get(id).map(|g| !g.alive()).unwrap_or(false)
+        };
+        if dead {
+            let _ = self.connect(saved).await;
+        }
+    }
+
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
         // 直接移出连接表,引用清零后 TCP 连接随之关闭;隧道一并关闭
         self.state.remove(id);
@@ -482,6 +505,7 @@ impl Service {
     /// 列出服务器上所有数据库
 
     pub async fn list_databases(&self, id: &str) -> Result<Vec<String>, String> {
+        self.auto_recover_ssh(id).await;
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
@@ -495,6 +519,7 @@ impl Service {
         id: &str,
         database: Option<String>,
     ) -> Result<Vec<TableMeta>, String> {
+        self.auto_recover_ssh(id).await;
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
@@ -506,6 +531,7 @@ impl Service {
 
 
     pub async fn list_tables_legacy(&self, id: &str) -> Result<Vec<TableMeta>, String> {
+        self.auto_recover_ssh(id).await;
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
@@ -519,6 +545,7 @@ impl Service {
         table: &str,
         database: Option<String>,
     ) -> Result<TableStructure, String> {
+        self.auto_recover_ssh(id).await;
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
@@ -534,6 +561,7 @@ impl Service {
         id: &str,
         database: Option<String>,
     ) -> Result<Vec<schema::FkMeta>, String> {
+        self.auto_recover_ssh(id).await;
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
@@ -545,6 +573,7 @@ impl Service {
 
 
     pub async fn count_rows(&self, id: &str, table: &str) -> Result<u64, String> {
+        self.auto_recover_ssh(id).await;
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         guard.backend.count_rows(table).await
@@ -637,6 +666,7 @@ impl Service {
         deletes: &[Vec<(String, String)>],
         inserts: &[Vec<(String, String)>],
     ) -> Result<ExecResult, String> {
+        self.auto_recover_ssh(id).await;
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
@@ -716,6 +746,7 @@ impl Service {
                 }
             }
         }
+        self.auto_recover_ssh(id).await;
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let cancel_state = self.state.cancel(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
@@ -1471,6 +1502,29 @@ mod tests {
         assert!(e3.contains("只读"), "只读应拒写: {e3}");
         svc.disconnect(&ro.id).await;
 
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn ssh_auto_recover_noop_for_plain_conns() {
+        // 非 SSH 连接:恢复检测必须是无副作用快路径(连接保持可用)
+        let dir = std::env::temp_dir().join(format!("shujing_native_rec_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = tmp_db("recover");
+        std::fs::write(&path, b"").unwrap();
+        let svc = crate::Service::new(&dir);
+        let info = sqlite_info(&path);
+        svc.connect(info.clone()).await.unwrap();
+        svc.auto_recover_ssh(&info.id).await;
+        let rs = svc
+            .run_sql(&info.id, "SELECT 1".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(rs[0].rows[0][0].as_deref(), Some("1"));
+        // 不存在的连接 id:同样 no-op 不 panic
+        svc.auto_recover_ssh("no-such-conn").await;
+        svc.disconnect(&info.id).await;
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&path);
     }
