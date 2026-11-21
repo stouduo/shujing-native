@@ -446,6 +446,7 @@ impl Backend {
                 Ok(vec![r])
             }
             Backend::Kafka(_) => Err("Kafka 无 SQL(消息浏览用数据页)".into()),
+            Backend::Rabbit(_) => Err("RabbitMQ 无 SQL(队列浏览用控制台)".into()),
         }
     }
 

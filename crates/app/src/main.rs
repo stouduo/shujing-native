@@ -9,6 +9,7 @@ mod kafka;
 mod modals;
 mod net;
 mod query;
+mod rabbit;
 mod redis;
 mod sessions;
 mod sidebar;

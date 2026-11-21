@@ -311,6 +311,30 @@ pub enum TabAction {
     OpenRedisInfo {
         conn_id: String,
     },
+    /// 打开 RabbitMQ 控制台
+    OpenRabbitConsole {
+        conn_id: String,
+    },
+    /// RabbitMQ:拉取队列/概览
+    RabbitLoadQueues {
+        tab_id: String,
+    },
+    /// RabbitMQ:取回选中队列消息
+    RabbitGetMsgs {
+        tab_id: String,
+        vhost: String,
+        queue: String,
+    },
+    /// RabbitMQ:发送到选中队列
+    RabbitSend {
+        tab_id: String,
+        queue: String,
+    },
+    /// RabbitMQ:清空选中队列
+    RabbitPurge {
+        tab_id: String,
+        queue: String,
+    },
     /// Kafka:新建 topic
     KafkaCreateTopic {
         tab_id: String,
@@ -494,6 +518,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Designer(_) => 3,
                                 TabKind::Redis(_) => 4,
                                 TabKind::Kafka(_) => 7,
+                                TabKind::Rabbit(_) => 9,
                                 TabKind::Session(_) => 8,
                                 TabKind::Er(_) => 5,
                                 TabKind::Ddl(_) => 6,
@@ -4160,6 +4185,15 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             query_only,
         } => app.session_kill(&sid, query_only),
         TabAction::OpenRedisInfo { conn_id } => app.open_redis_info(&conn_id),
+        TabAction::OpenRabbitConsole { conn_id } => app.open_rabbit(&conn_id),
+        TabAction::RabbitLoadQueues { tab_id: _ } => app.rabbit_load_queues(),
+        TabAction::RabbitGetMsgs {
+            tab_id: _,
+            vhost,
+            queue,
+        } => app.rabbit_fetch_msgs(&vhost, &queue),
+        TabAction::RabbitSend { tab_id: _, queue } => app.rabbit_send(&queue),
+        TabAction::RabbitPurge { tab_id: _, queue } => app.rabbit_purge(&queue),
         TabAction::KafkaLoadMsgs { tab_id: _ } => app.kafka_load_msgs(),
         TabAction::KafkaSend { tab_id: _, topic: _ } => app.kafka_send(),
         TabAction::KafkaLoadGroups { tab_id: _ } => app.kafka_load_groups(),
@@ -5153,6 +5187,7 @@ fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width:
         (shujing_core::DbType::Mssql, "SQLServer"),
         (shujing_core::DbType::ClickHouse, "ClickHouse"),
         (shujing_core::DbType::Kafka, "Kafka"),
+        (shujing_core::DbType::Rabbit, "RabbitMQ"),
     ];
     let seg_w = (width - 6.0) / opts.len() as f32;
     for (i, (t, label)) in opts.iter().enumerate() {
@@ -5206,6 +5241,7 @@ fn default_port(t: shujing_core::DbType) -> &'static str {
         shujing_core::DbType::Mssql => "1433",
         shujing_core::DbType::ClickHouse => "8123",
         shujing_core::DbType::Kafka => "9092",
+        shujing_core::DbType::Rabbit => "15672",
         shujing_core::DbType::Sqlite => "",
     }
 }
@@ -5608,6 +5644,7 @@ impl eframe::App for ShujingApp {
                 }
                 TabKind::Er(e) => crate::er::draw_er_view(ctx, &tab_id, e),
                 TabKind::Kafka(k) => crate::kafka::draw_kafka_view(ctx, &tab_id, k),
+                TabKind::Rabbit(r) => crate::rabbit::draw_rabbit_view(ctx, &tab_id, r),
                 TabKind::Session(s) => crate::sessions::draw_sessions_view(ctx, &tab_id, s),
                 TabKind::Ddl(d) => structure::draw_ddl_view(ctx, &tab_id, d),
             };

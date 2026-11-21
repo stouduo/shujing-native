@@ -51,6 +51,9 @@ pub async fn transfer_table(
     if src_info.db_type == DbType::Kafka {
         return Err("Kafka 不支持 SQL 传输".into());
     }
+    if src_info.db_type == DbType::Rabbit {
+        return Err("RabbitMQ 不支持 SQL 传输".into());
+    }
     service.connect_by_id(sc).await?;
     service.connect_by_id(dc).await?;
 

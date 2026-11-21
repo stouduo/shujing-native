@@ -29,6 +29,33 @@ pub async fn connect(
     gen: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<Backend, String> {
     match info.db_type {
+        DbType::Rabbit => {
+            let host = req(&info.host, "缺少 RabbitMQ management 地址")?;
+            let port = info.port.unwrap_or(15672);
+            // host 含 : 视为完整 management 地址;否则 host:port
+            let base = if host.starts_with("http://") || host.starts_with("https://") {
+                host.to_string()
+            } else if host.contains(':') {
+                format!("http://{host}")
+            } else {
+                format!("http://{host}:{port}")
+            };
+            let user = info
+                .user
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("guest")
+                .to_string();
+            let pass = info.password.clone().unwrap_or_default();
+            let auth = if user != "guest" || !pass.is_empty() {
+                Some((user, pass))
+            } else {
+                None
+            };
+            let st = crate::rabbit::connect(base, auth).await?;
+            Ok(Backend::Rabbit(st))
+        }
         DbType::Kafka => {
             let host = req(&info.host, "缺少 Kafka bootstrap 地址")?;
             let port = info.port.unwrap_or(9092);
@@ -669,6 +696,13 @@ impl Backend {
             Backend::Kafka(st) => {
                 let topics = crate::kafka::list_topics(st).await?;
                 Ok(format!("Kafka · {} topics", topics.len()))
+            }
+            Backend::Rabbit(st) => {
+                let o = crate::rabbit::overview(st).await?;
+                Ok(format!(
+                    "RabbitMQ {} · {} queues · {} msgs",
+                    o.version, o.queue_count, o.msg_total
+                ))
             }
         }
     }

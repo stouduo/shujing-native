@@ -6,6 +6,7 @@ pub mod backend;
 pub mod clickhouse;
 pub mod composite;
 pub mod kafka;
+pub mod rabbit;
 pub mod designer;
 pub mod edits;
 pub mod excel;
@@ -94,7 +95,12 @@ pub fn build_save_table_stmts(
         return Err("结果集没有数据行".into());
     }
     match info.db_type {
-        DbType::Redis | DbType::Mongo | DbType::Mssql | DbType::ClickHouse => {
+        DbType::Redis
+        | DbType::Mongo
+        | DbType::Mssql
+        | DbType::ClickHouse
+        | DbType::Kafka
+        | DbType::Rabbit => {
             return Err("该数据库类型暂不支持结果存为新表".into());
         }
         _ => {}
@@ -352,6 +358,101 @@ impl Service {
                 crate::redis_ops::slowlog(&mut guard.backend, n).await
             }
             _ => Err("非 Redis 连接".into()),
+        }
+    }
+
+    /// RabbitMQ:概览
+    pub async fn rabbit_overview(
+        &self,
+        id: &str,
+    ) -> Result<crate::rabbit::RabbitOverview, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Rabbit(st) => crate::rabbit::overview(st).await,
+            _ => Err("非 RabbitMQ 连接".into()),
+        }
+    }
+
+    /// RabbitMQ:单队列详情(统计准)
+    pub async fn rabbit_queue_detail(
+        &self,
+        id: &str,
+        vhost: &str,
+        queue: &str,
+    ) -> Result<crate::rabbit::RabbitQueue, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Rabbit(st) => {
+                crate::rabbit::queue_detail(st, vhost, queue).await
+            }
+            _ => Err("非 RabbitMQ 连接".into()),
+        }
+    }
+
+    /// RabbitMQ:队列列表
+    pub async fn rabbit_list_queues(
+        &self,
+        id: &str,
+    ) -> Result<Vec<crate::rabbit::RabbitQueue>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Rabbit(st) => crate::rabbit::list_queues(st).await,
+            _ => Err("非 RabbitMQ 连接".into()),
+        }
+    }
+
+    /// RabbitMQ:从队列取回消息(requeue)
+    pub async fn rabbit_get_messages(
+        &self,
+        id: &str,
+        vhost: &str,
+        queue: &str,
+        count: usize,
+    ) -> Result<Vec<crate::rabbit::StreamMsg>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Rabbit(st) => {
+                crate::rabbit::get_messages(st, vhost, queue, count).await
+            }
+            _ => Err("非 RabbitMQ 连接".into()),
+        }
+    }
+
+    /// RabbitMQ:发布消息到 exchange(默认交换机+routing_key=队列名)
+    pub async fn rabbit_publish(
+        &self,
+        id: &str,
+        vhost: &str,
+        queue: &str,
+        payload: &str,
+    ) -> Result<(), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        if guard.info.read_only {
+            return Err("只读连接不允许发送".into());
+        }
+        match &mut guard.backend {
+            crate::model::Backend::Rabbit(st) => {
+                crate::rabbit::publish(st, vhost, "", queue, payload).await
+            }
+            _ => Err("非 RabbitMQ 连接".into()),
+        }
+    }
+
+    /// RabbitMQ:清空队列(破坏性)
+    pub async fn rabbit_purge(&self, id: &str, vhost: &str, queue: &str) -> Result<(), String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        if guard.info.read_only {
+            return Err("只读连接不允许清空队列".into());
+        }
+        match &mut guard.backend {
+            crate::model::Backend::Rabbit(st) => crate::rabbit::purge_queue(st, vhost, queue).await,
+            _ => Err("非 RabbitMQ 连接".into()),
         }
     }
 
@@ -773,6 +874,7 @@ impl Service {
                 crate::model::DbType::Mssql => 1433,
                 crate::model::DbType::ClickHouse => 8123,
                 crate::model::DbType::Kafka => 9092,
+                crate::model::DbType::Rabbit => 15672,
                 crate::model::DbType::Sqlite => 0,
             });
             let g = ssh::open_tunnel(&ssh_cfg, &target_host, target_port).await?;
@@ -845,6 +947,7 @@ impl Service {
             crate::model::DbType::Mssql => 1433,
             crate::model::DbType::ClickHouse => 8123,
             crate::model::DbType::Kafka => 9092,
+            crate::model::DbType::Rabbit => 15672,
             crate::model::DbType::Sqlite => 0,
         });
         let guard = ssh::open_tunnel(ssh_cfg, &target_host, target_port).await?;

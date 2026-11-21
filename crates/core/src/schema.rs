@@ -148,6 +148,7 @@ pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<V
         Backend::Mongo(st) => crate::mongo::list_databases(st).await,
         Backend::ClickHouse(st) => crate::clickhouse::list_databases(st).await,
         Backend::Kafka(_) => Ok(vec![]),
+        Backend::Rabbit(_) => Ok(vec![]),
         Backend::Mssql(st) => {
             let mut c = Backend::mssql_client(st).await?;
             let rows = c
@@ -641,7 +642,8 @@ pub async fn object_ddl(
         (crate::model::DbType::Mongo, _)
         | (crate::model::DbType::Mssql, _)
         | (crate::model::DbType::ClickHouse, _)
-        | (crate::model::DbType::Kafka, _) => String::new(),
+        | (crate::model::DbType::Kafka, _)
+        | (crate::model::DbType::Rabbit, _) => String::new(),
         (crate::model::DbType::Sqlite, _) => format!(
             "SELECT sql FROM sqlite_master WHERE name = {}",
             format!("'{}'", name.replace('\'', "''"))
@@ -743,6 +745,14 @@ impl Backend {
                     owner: None,
                 }])
             }
+            Backend::Rabbit(st) => {
+                let o = crate::rabbit::overview(st).await?;
+                Ok(vec![crate::model::TableMeta {
+                    name: format!("Queues ({})", o.queue_count),
+                    kind: format!("rabbit-console:{}", o.queue_count),
+                    owner: None,
+                }])
+            }
             Backend::Mssql(st) => {
                 let db = database
                     .map(str::trim)
@@ -835,6 +845,7 @@ async fn resolve_mysql_db(
             Backend::Mssql(st) => crate::mssql::structure(st, database, table).await,
             Backend::ClickHouse(st) => crate::clickhouse::structure(st, database, table).await,
             Backend::Kafka(_) => Err("Kafka 无表结构".into()),
+            Backend::Rabbit(_) => Err("RabbitMQ 无表结构".into()),
         }
     }
 
@@ -854,6 +865,7 @@ async fn resolve_mysql_db(
             Backend::Mssql(st) => crate::mssql::count(st, table).await,
             Backend::ClickHouse(st) => crate::clickhouse::count(st, None, table).await,
             Backend::Kafka(_) => Err("Kafka 计数请打开消息浏览".into()),
+            Backend::Rabbit(_) => Err("RabbitMQ 计数请打开队列控制台".into()),
         }
     }
 
@@ -878,6 +890,8 @@ async fn resolve_mysql_db(
             Backend::Mssql(_) => Ok(vec![]),
             Backend::ClickHouse(_) => Ok(vec![]),
             Backend::Kafka(_) => Ok(vec![]),
+            Backend::Rabbit(_) => Ok(vec![]),
+        Backend::Rabbit(_) => Ok(vec![]),
         }
     }
 }

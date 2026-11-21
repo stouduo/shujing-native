@@ -162,6 +162,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         mongo_import: None,
         save_result_modal: None,
         redis_info: None,
+        rabbit_tab: None,
         kafka_tab: None,
         session_tab: None,
         transfer: None,
@@ -440,6 +441,9 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         }
         TabKind::Session(s) => {
             let _ = crate::sessions::draw_sessions_view(ctx, &tab_id, s);
+        }
+        TabKind::Rabbit(r) => {
+            let _ = crate::rabbit::draw_rabbit_view(ctx, &tab_id, r);
         }
         TabKind::Ddl(d) => {
             let _ = crate::structure::draw_ddl_view(ctx, &tab_id, d);

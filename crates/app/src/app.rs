@@ -107,6 +107,19 @@ pub enum BgEvent {
         tab_id: String,
         result: Result<(), String>,
     },
+    RabbitQueuesLoaded {
+        tab_id: String,
+        result: Result<(shujing_core::rabbit::RabbitOverview, Vec<shujing_core::rabbit::RabbitQueue>), String>,
+    },
+    RabbitMsgsLoaded {
+        result: Result<Vec<shujing_core::rabbit::StreamMsg>, String>,
+    },
+    RabbitSendDone {
+        result: Result<(), String>,
+    },
+    RabbitPurgeDone {
+        result: Result<(), String>,
+    },
     KafkaTopicsLoaded {
         conn_id: String,
         result: Result<Vec<shujing_core::kafka::TopicInfo>, String>,
@@ -753,6 +766,41 @@ pub struct RedisInfoState {
     pub error: Option<String>,
 }
 
+/// RabbitMQ 控制台标签(概览/队列/消息取回/发送/清空)
+pub struct RabbitTab {
+    pub conn_id: String,
+    pub queues: Vec<shujing_core::rabbit::RabbitQueue>,
+    /// (vhost, 队列名)
+    pub selected: Option<(String, String)>,
+    pub msgs: Vec<shujing_core::rabbit::StreamMsg>,
+    pub overview: Option<shujing_core::rabbit::RabbitOverview>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub send_key: String,
+    pub send_payload: String,
+    pub sending: bool,
+    pub drop_arm: bool,
+}
+
+impl RabbitTab {
+    /// 用于 tabs 的独立实例(状态从零)
+    pub fn clone_shell(&self, _new_id: &str) -> RabbitTab {
+        RabbitTab {
+            conn_id: self.conn_id.clone(),
+            queues: self.queues.clone(),
+            selected: None,
+            msgs: Vec::new(),
+            overview: self.overview.clone(),
+            loading: false,
+            error: None,
+            send_key: String::new(),
+            send_payload: String::new(),
+            sending: false,
+            drop_arm: false,
+        }
+    }
+}
+
 /// 服务器会话面板标签(MySQL processlist / PG pg_stat_activity)
 pub struct SessionsTab {
     pub conn_id: String,
@@ -1030,6 +1078,8 @@ pub enum TabKind {
     Er(ErTab),
     /// Kafka 控制台(不参与会话恢复:重启后从侧栏重开)
     Kafka(KafkaTab),
+    /// RabbitMQ 控制台(不参与会话恢复)
+    Rabbit(RabbitTab),
     /// 服务器会话面板(不参与会话恢复)
     Session(SessionsTab),
     Ddl(DdlTab),
@@ -1235,6 +1285,7 @@ pub struct ShujingApp {
     pub kafka_tab: Option<KafkaTab>,
     pub session_tab: Option<SessionsTab>,
     pub redis_info: Option<RedisInfoState>,
+    pub rabbit_tab: Option<RabbitTab>,
     /// 查询结果存为新表:命名弹窗(tab_id, 表名草稿)
     pub save_result_modal: Option<(String, String)>,
     pub mongo_import: Option<MongoImportState>,
@@ -1362,6 +1413,7 @@ impl ShujingApp {
             kafka_tab: None,
             session_tab: None,
             redis_info: None,
+            rabbit_tab: None,
             save_result_modal: None,
             mongo_import: None,
             transfer: None,
@@ -2053,6 +2105,140 @@ impl ShujingApp {
         self.active_tab = self.tabs.len() - 1;
     }
 
+    /// 打开 RabbitMQ 控制台
+    pub fn open_rabbit(&mut self, conn_id: &str) {
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.kind, TabKind::Rabbit(r) if r.conn_id == conn_id))
+        {
+            self.active_tab = i;
+            return;
+        }
+        let Some(c) = self.conns.iter().find(|c| c.id == conn_id) else {
+            return;
+        };
+        let _ = c;
+        let id = format!("rmq{}", rand_suffix());
+        self.rabbit_tab = Some(RabbitTab {
+            conn_id: conn_id.to_string(),
+            queues: Vec::new(),
+            selected: None,
+            msgs: Vec::new(),
+            overview: None,
+            loading: false,
+            error: None,
+            send_key: String::new(),
+            send_payload: String::new(),
+            sending: false,
+            drop_arm: false,
+        });
+        self.tabs.push(Tab {
+            id: id.clone(),
+            title: ui_kit::t!("RabbitMQ Console", "RabbitMQ 控制台").to_string(),
+            kind: TabKind::Rabbit(
+                self.rabbit_tab.as_ref().expect("rabbit_tab 未初始化").clone_shell(&id),
+            ),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.rabbit_load_queues();
+    }
+
+    /// RabbitMQ:拉取概览+队列列表
+    pub fn rabbit_load_queues(&mut self) {
+        let Some(r) = self.rabbit_tab.as_ref() else {
+            return;
+        };
+        let conn_id = r.conn_id.clone();
+        let tab_id = self
+            .tabs
+            .iter()
+            .find(|t| matches!(&t.kind, TabKind::Rabbit(_)))
+            .map(|t| t.id.clone())
+            .unwrap_or_default();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.rabbit_tab.as_mut().unwrap().loading = true;
+        net::spawn(async move {
+            let result = async {
+                let overview = service.rabbit_overview(&conn_id).await?;
+                let queues = service.rabbit_list_queues(&conn_id).await?;
+                Ok((overview, queues))
+            }
+            .await;
+            let _ = tx.send(BgEvent::RabbitQueuesLoaded { tab_id, result });
+        });
+    }
+
+    /// RabbitMQ:取回选中队列消息(requeue)
+    pub fn rabbit_fetch_msgs(&mut self, vhost: &str, queue: &str) {
+        let Some(r) = self.rabbit_tab.as_ref() else {
+            return;
+        };
+        if r.loading {
+            return;
+        }
+        let conn_id = r.conn_id.clone();
+        let vhost = vhost.to_string();
+        let queue = queue.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.rabbit_tab.as_mut().unwrap().loading = true;
+        net::spawn(async move {
+            let result = service
+                .rabbit_get_messages(&conn_id, &vhost, &queue, 20)
+                .await;
+            let _ = tx.send(BgEvent::RabbitMsgsLoaded { result });
+        });
+    }
+
+    /// RabbitMQ:发送到选中队列
+    pub fn rabbit_send(&mut self, queue: &str) {
+        let Some(r) = self.rabbit_tab.as_ref() else {
+            return;
+        };
+        if r.sending {
+            return;
+        }
+        let Some((vhost, _)) = r.selected.clone() else {
+            return;
+        };
+        if r.send_payload.trim().is_empty() {
+            self.toast_error(ui_kit::t!("Payload is empty", "消息体为空").to_string());
+            return;
+        }
+        let conn_id = r.conn_id.clone();
+        let queue = queue.to_string();
+        let payload = r.send_payload.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.rabbit_tab.as_mut().unwrap().sending = true;
+        net::spawn(async move {
+            let result = service
+                .rabbit_publish(&conn_id, &vhost, &queue, &payload)
+                .await;
+            let _ = tx.send(BgEvent::RabbitSendDone { result });
+        });
+    }
+
+    /// RabbitMQ:清空选中队列
+    pub fn rabbit_purge(&mut self, queue: &str) {
+        let Some(r) = self.rabbit_tab.as_ref() else {
+            return;
+        };
+        let Some((vhost, _)) = r.selected.clone() else {
+            return;
+        };
+        let conn_id = r.conn_id.clone();
+        let queue = queue.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = service.rabbit_purge(&conn_id, &vhost, &queue).await;
+            let _ = tx.send(BgEvent::RabbitPurgeDone { result });
+        });
+    }
+
     /// 重拉 topic 列表(建/删后)
     pub fn kafka_reload_topics(&mut self) {
         let Some(k) = self.kafka_tab.as_ref() else {
@@ -2272,6 +2458,7 @@ impl ShujingApp {
         let t = self.tabs.get(self.active_tab)?;
         Some(match &t.kind {
             TabKind::Session(s) => (s.conn_id.as_str(), "", None),
+            TabKind::Rabbit(r) => (r.conn_id.as_str(), "", None),
             TabKind::Kafka(k) => (k.conn_id.as_str(), "", None),
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Structure(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
@@ -2792,6 +2979,7 @@ impl ShujingApp {
                 TabKind::Er(e) => e.conn_id.clone(),
                 TabKind::Ddl(d) => d.conn_id.clone(),
                 TabKind::Kafka(k) => k.conn_id.clone(),
+                TabKind::Rabbit(r) => r.conn_id.clone(),
                 TabKind::Session(s) => s.conn_id.clone(),
             })
         });
@@ -2805,6 +2993,7 @@ impl ShujingApp {
             TabKind::Ddl(d) => d.database.clone(),
             TabKind::Kafka(_) => None,
             TabKind::Session(_) => None,
+            TabKind::Rabbit(_) => None,
         });
         // 指定了连接(侧栏右键"新建查询")时,取侧栏展开的库;
         // 仅限无默认库的 MySQL 连接——有默认库的连接保持 None 走默认,
@@ -2912,6 +3101,7 @@ impl ShujingApp {
                 TabKind::Er(e) => e.conn_id == conn_id,
                 TabKind::Ddl(d) => d.conn_id == conn_id,
                 TabKind::Kafka(k) => k.conn_id == conn_id,
+                TabKind::Rabbit(r) => r.conn_id == conn_id,
                 TabKind::Session(s) => s.conn_id == conn_id,
             };
             if belongs {
@@ -4351,8 +4541,9 @@ impl ShujingApp {
                     conn: e.conn_id.clone(),
                     database: e.database.clone(),
                 }),
-                // Kafka/会话面板不入会话(重启后从侧栏重开)
+                // Kafka/Rabbit/会话面板不入会话(重启后从侧栏重开)
                 TabKind::Kafka(_) => {}
+                TabKind::Rabbit(_) => {}
                 TabKind::Session(_) => {}
                 TabKind::Ddl(d) => tabs.push(SessionTab::Ddl {
                     conn: d.conn_id.clone(),
@@ -5220,6 +5411,54 @@ impl ShujingApp {
                     }
                     // 终止后自动刷新
                     self.open_sessions_refresh();
+                    continue;
+                }
+                BgEvent::RabbitQueuesLoaded { tab_id: _, result } => {
+                    if let Some(r) = self.rabbit_tab.as_mut() {
+                        r.loading = false;
+                        match result {
+                            Ok((overview, queues)) => {
+                                r.overview = Some(overview);
+                                r.queues = queues;
+                                r.error = None;
+                            }
+                            Err(e) => r.error = Some(e),
+                        }
+                    }
+                    continue;
+                }
+                BgEvent::RabbitMsgsLoaded { result, .. } => {
+                    if let Some(r) = self.rabbit_tab.as_mut() {
+                        r.loading = false;
+                        match result {
+                            Ok(msgs) => {
+                                r.error = None;
+                                r.msgs = msgs;
+                            }
+                            Err(e) => r.error = Some(e),
+                        }
+                    }
+                    continue;
+                }
+                BgEvent::RabbitSendDone { result, .. } => {
+                    if let Some(r) = self.rabbit_tab.as_mut() {
+                        r.sending = false;
+                        match &result {
+                            Ok(_) => self.toast_error(ui_kit::t!("Published", "已发送").to_string()),
+                            Err(e) => self.toast_error(e.clone()),
+                        }
+                    }
+                    self.rabbit_load_queues();
+                    continue;
+                }
+                BgEvent::RabbitPurgeDone { result, .. } => {
+                    if let Some(r) = self.rabbit_tab.as_mut() {
+                        match &result {
+                            Ok(_) => self.toast_error(ui_kit::t!("Queue purged", "已清空队列").to_string()),
+                            Err(e) => self.toast_error(e.clone()),
+                        }
+                    }
+                    self.rabbit_load_queues();
                     continue;
                 }
                 BgEvent::KafkaTopicsLoaded { conn_id, result } => {
