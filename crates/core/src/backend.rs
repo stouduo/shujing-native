@@ -1,4 +1,4 @@
-use crate::model::{es, Backend, ConnInfo, DbType, PgPool};
+pub(crate) use crate::model::{es, Backend, ConnInfo, DbType, PgPool};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -471,14 +471,23 @@ impl Backend {
     /// PostgreSQL:轮发取一个会话,按需恢复 search_path。
     /// 返回的是共享 Arc<Client>:事务类操作(apply_changes 的 BEGIN/COMMIT)之所以安全,
     /// 依赖 Service 所有 DB 方法都持有同一把每连接互斥锁——新增长连接方法时必须沿用该纪律
-    /// 会话列表(MySQL SHOW FULL PROCESSLIST / PG pg_stat_activity)
-    pub(crate) async fn list_sessions(
-        backend: &mut Backend,
+    /// 会话列表(控制连接版):长查询持有 live guard 期间会话面板必须仍然可用——
+    /// 这正是它的用途;因此不走连接池互斥锁,与 cancel_query 同款控制连接。
+    /// MySQL SHOW FULL PROCESSLIST / PG pg_stat_activity
+    pub(crate) async fn list_sessions_standalone(
+        cancel: &crate::model::CancelState,
     ) -> Result<Vec<crate::model::SessionInfo>, String> {
-        match backend {
-            Backend::MySql(mp) => {
+        match cancel.db_type {
+            crate::model::DbType::MySql => {
                 use mysql_async::prelude::*;
-                let mut conn = Backend::mysql_conn(mp).await?;
+                let opts = mysql_async::OptsBuilder::default()
+                    .ip_or_hostname(cancel.host.as_deref().unwrap_or("127.0.0.1"))
+                    .tcp_port(cancel.port.unwrap_or(3306))
+                    .user(cancel.user.as_deref())
+                    .pass(Some(cancel.password.as_deref().unwrap_or("")));
+                let mut conn = mysql_async::Conn::new(opts)
+                    .await
+                    .map_err(|e| format!("会话列表(控制连接): {e}"))?;
                 let mine = conn.id() as u64;
                 let rows: Vec<(
                     u64,
@@ -514,14 +523,27 @@ impl Backend {
                     )
                     .collect())
             }
-            Backend::Pg(mp) => {
-                let client = Backend::pg_client(mp).await?;
+            crate::model::DbType::Postgres => {
+                let cfg = format!(
+                    "host={} port={} user={} password={} dbname={} connect_timeout=8",
+                    pg_quote(cancel.host.as_deref().unwrap_or("127.0.0.1")),
+                    cancel.port.unwrap_or(5432),
+                    pg_quote(cancel.user.as_deref().unwrap_or("postgres")),
+                    pg_quote(cancel.password.as_deref().unwrap_or("")),
+                    pg_quote(cancel.database.as_deref().unwrap_or("postgres"))
+                );
+                let (client, connection) = tokio_postgres::connect(&cfg, tokio_postgres::NoTls)
+                    .await
+                    .map_err(|e| format!("会话列表(控制连接): {e}"))?;
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                });
                 let rows = client
                     .simple_query(
                         "SELECT pid::text, COALESCE(usename,''), COALESCE(application_name,''),                          COALESCE(datname,''), COALESCE(state,''),                          COALESCE(ROUND(EXTRACT(EPOCH FROM (now()-query_start)))::text,'0'),                          COALESCE(wait_event_type,''), COALESCE(query,'')                          FROM pg_stat_activity WHERE pid <> pg_backend_pid() ORDER BY query_start DESC NULLS LAST",
                     )
                     .await
-                    .map_err(crate::backend::pg_err)?;
+                    .map_err(pg_err)?;
                 let mut out = Vec::new();
                 for m in rows {
                     let tokio_postgres::SimpleQueryMessage::Row(r) = m else {
@@ -547,20 +569,27 @@ impl Backend {
         }
     }
 
-    /// 终止会话(query_only=true 仅中断当前查询)
-    pub(crate) async fn kill_session(
-        backend: &mut Backend,
+    /// 终止会话(控制连接版;query_only=true 仅中断当前查询)
+    pub(crate) async fn kill_session_standalone(
+        cancel: &crate::model::CancelState,
         sid: &str,
         query_only: bool,
     ) -> Result<(), String> {
-        match backend {
-            Backend::MySql(mp) => {
+        match cancel.db_type {
+            crate::model::DbType::MySql => {
                 use mysql_async::prelude::*;
                 // processlist 的 Id 是纯数字;校验后裸用(引注反而是语法错误)
                 if !sid.bytes().all(|b| b.is_ascii_digit()) {
                     return Err("非法会话 ID".into());
                 }
-                let mut conn = Backend::mysql_conn(mp).await?;
+                let opts = mysql_async::OptsBuilder::default()
+                    .ip_or_hostname(cancel.host.as_deref().unwrap_or("127.0.0.1"))
+                    .tcp_port(cancel.port.unwrap_or(3306))
+                    .user(cancel.user.as_deref())
+                    .pass(Some(cancel.password.as_deref().unwrap_or("")));
+                let mut conn = mysql_async::Conn::new(opts)
+                    .await
+                    .map_err(|e| format!("终止失败(控制连接): {e}"))?;
                 let sql = if query_only {
                     format!("KILL QUERY {sid}")
                 } else {
@@ -570,18 +599,31 @@ impl Backend {
                     .await
                     .map_err(|e| format!("终止失败: {e}"))
             }
-            Backend::Pg(mp) => {
-                let client = Backend::pg_client(mp).await?;
+            crate::model::DbType::Postgres => {
                 // pid 纯数字校验(引注是标识符语义,PG 函数要的是数字)
                 if !sid.bytes().all(|b| b.is_ascii_digit()) {
                     return Err("非法会话 ID".into());
                 }
+                let cfg = format!(
+                    "host={} port={} user={} password={} dbname={} connect_timeout=8",
+                    pg_quote(cancel.host.as_deref().unwrap_or("127.0.0.1")),
+                    cancel.port.unwrap_or(5432),
+                    pg_quote(cancel.user.as_deref().unwrap_or("postgres")),
+                    pg_quote(cancel.password.as_deref().unwrap_or("")),
+                    pg_quote(cancel.database.as_deref().unwrap_or("postgres"))
+                );
+                let (client, connection) = tokio_postgres::connect(&cfg, tokio_postgres::NoTls)
+                    .await
+                    .map_err(|e| format!("终止失败(控制连接): {e}"))?;
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                });
                 let sql = if query_only {
                     format!("SELECT pg_cancel_backend({sid})")
                 } else {
                     format!("SELECT pg_terminate_backend({sid})")
                 };
-                client.simple_query(&sql).await.map(|_| ()).map_err(crate::backend::pg_err)
+                client.simple_query(&sql).await.map(|_| ()).map_err(pg_err)
             }
             _ => Err("该数据库类型不支持会话面板".into()),
         }

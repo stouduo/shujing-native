@@ -246,17 +246,17 @@ impl Service {
     /// Redis:按模式批量删除(上限 10000)
 
     pub async fn list_sessions(&self, id: &str) -> Result<Vec<model::SessionInfo>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        crate::model::Backend::list_sessions(&mut guard.backend).await
+        // 控制连接路径:长查询持有 live guard 期间会话面板照样可用(面板的意义所在)
+        let entry = self.state.cancel(id).ok_or("连接未建立或已断开")?;
+        backend::Backend::list_sessions_standalone(&entry).await
     }
 
     /// 终止服务器会话
 
     pub async fn kill_session(&self, id: &str, sid: &str, query_only: bool) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        crate::model::Backend::kill_session(&mut guard.backend, sid, query_only).await
+        // 同 list_sessions:控制连接,与长查询并发可用
+        let entry = self.state.cancel(id).ok_or("连接未建立或已断开")?;
+        backend::Backend::kill_session_standalone(&entry, sid, query_only).await
     }
 
     /// 数据字典导出:全部表的 列/类型/注释/默认/主键 Markdown

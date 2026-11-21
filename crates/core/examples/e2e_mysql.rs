@@ -232,9 +232,13 @@ async fn main() {
         };
         let target = sessions.iter().find(|s| s.query.contains("SLEEP"));
         let Some(target) = target else {
+            let dump: Vec<String> = sessions
+                .iter()
+                .map(|s| format!("id={} cmd={} q={:?}", s.id, s.command, s.query))
+                .collect();
             fail(
                 "list_sessions",
-                &format!("SLEEP 会话不在列表(共 {} 条)", sessions.len()),
+                &format!("SLEEP 不在列表(共 {} 条): {}", sessions.len(), dump.join(" | ")),
             );
         };
         pass(
@@ -246,6 +250,7 @@ async fn main() {
             fail("kill_session", &e);
         }
         let kill_ms = t0.elapsed().as_millis();
+        let started_at = std::time::Instant::now();
         match run.await.unwrap() {
             Err(e) => {
                 let hit = e.contains("interrupted")
@@ -254,9 +259,17 @@ async fn main() {
                 if !hit {
                     fail("kill_effect", &format!("异常信息不符: {e}"));
                 }
-                pass("kill_effect", &format!("KILL QUERY 中断长查询({kill_ms}ms)"));
+                pass("kill_effect", &format!("KILL QUERY 中断长查询({}ms)", started_at.elapsed().as_millis()));
             }
-            Ok(_) => fail("kill_effect", "长查询未被中断"),
+            // MySQL 26 语义:SLEEP 被 KILL QUERY 中断时提前返回(结果=1)而非报错;
+            // 真实慢查询才收 1314 错误。判据=远早于 30s 自然结束
+            Ok(_) => {
+                let ms = started_at.elapsed().as_millis();
+                if ms > 10_000 {
+                    fail("kill_effect", &format!("SLEEP 跑满({ms}ms),未被中断"));
+                }
+                pass("kill_effect", &format!("SLEEP 被 KILL 提前结束({ms}ms,MySQL 26 中断语义)"));
+            }
         }
         if kill_ms > 5000 {
             fail("kill_latency", &format!("{kill_ms}ms(应秒回)"));
@@ -293,14 +306,21 @@ async fn main() {
             Err(e) => fail("cancel_query", &e),
         }
         let cancel_ms = t0.elapsed().as_millis();
+        let started_at = std::time::Instant::now();
         match run.await.unwrap() {
             Err(e) => {
                 if !e.contains("interrupted") && !e.contains("1314") {
                     fail("cancel_effect", &format!("异常信息不符: {e}"));
                 }
-                pass("cancel_effect", &format!("取消按钮中断长查询({cancel_ms}ms)"));
+                pass("cancel_effect", &format!("取消按钮中断长查询({}ms)", started_at.elapsed().as_millis()));
             }
-            Ok(_) => fail("cancel_effect", "长查询未被取消"),
+            Ok(_) => {
+                let ms = started_at.elapsed().as_millis();
+                if ms > 10_000 {
+                    fail("cancel_effect", &format!("SLEEP 跑满({ms}ms),未被取消"));
+                }
+                pass("cancel_effect", &format!("SLEEP 被取消提前结束({ms}ms,MySQL 26 中断语义)"));
+            }
         }
         if cancel_ms > 5000 {
             fail("cancel_latency", &format!("{cancel_ms}ms(应秒回)"));
