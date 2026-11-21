@@ -42,6 +42,7 @@ exec = "./agent"              # 可执行文件,相对插件目录
 | structure | `{database,table}` | `{columns:[{name,type,nullable,default,comment,pk}],pk:["col"]}` |
 | query | `{database,sql,max}` | `{columns:[..],rows:[[字符串..]..],affected,truncated}` |
 | count | `{database,table}` | `{count:n}` |
+| execute_batch | `{database,sqls:[".."]}` | `{affected:n}`(表格回写;语句为 ANSI 双引号样式,**agent 应在内部事务中执行**) |
 
 - 值一律字符串化(与数镜网格 text 协议对齐);NULL = JSON null
 - 错误:`{"error":{"message":"..."}}`;数镜把 message 展示给用户
@@ -58,5 +59,5 @@ exec = "./agent"              # 可执行文件,相对插件目录
 ## 安全与边界
 
 - agent 以数镜同用户权限运行;它能访问什么由它自己的实现决定——**只安装可信插件**
-- v1 契约不含表格回写/数据传输/备份(agent 未声明事务语义);SQL 直接执行可用
+- v1 契约不含数据传输/备份;表格回写走 execute_batch(语句 ANSI 双引号样式,原子性由 agent 内部事务保证)
 - v1 无签名/商店;第三方分发渠道请自行校验哈希

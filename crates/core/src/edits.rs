@@ -71,6 +71,8 @@ pub fn build_change_stmts(
     // relation does not exist)——database 限定只对 MySQL/ClickHouse 生效
     let table = match info.db_type {
         crate::model::DbType::Postgres => qualified_table(table, None, false),
+        // 插件驱动:库限定由 agent 会话解释,语句走 ANSI 双引号样式(契约文档约定)
+        crate::model::DbType::Plugin => qualified_table(table, None, false),
         _ => qualified_table(table, database, mysql),
     };
     let mut stmts: Vec<String> = Vec::new();
@@ -194,8 +196,33 @@ pub async fn apply_changes(
             affected
         }
         Backend::Redis(_) => return Err("Redis 请使用专门的命令通道".into()),
-        Backend::Plugin(_) => {
-            return Err("插件驱动暂不支持表格回写(SQL 直接执行可用)".into())
+        Backend::Plugin(s) => {
+            // 契约 v1.1:execute_batch —— 语句打包一次提交,原子性由 agent 实现
+            // (文档要求 agent 内部事务;MySQL 反引号不适用,语句走 ANSI 双引号)
+            let stmts = build_change_stmts(info, table, database, updates, deletes, inserts)?;
+            if stmts.is_empty() {
+                return Ok(ExecResult {
+                    columns: vec![],
+                    rows: vec![],
+                    affected: 0,
+                    truncated: false,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                });
+            }
+            let mut ag = s.agent.lock().await;
+            let params = serde_json::json!({
+                "database": s.database,
+                "sqls": stmts,
+            });
+            let r = ag.call("execute_batch", &params).await?;
+            let affected = r.get("affected").and_then(|v| v.as_u64()).unwrap_or(0);
+            return Ok(ExecResult {
+                columns: vec![],
+                rows: vec![],
+                affected,
+                truncated: false,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            });
         }
         #[cfg(feature = "heavy-mw")]
         Backend::Mongo(_) => return Err("MongoDB 不支持 SQL 回写".into()),

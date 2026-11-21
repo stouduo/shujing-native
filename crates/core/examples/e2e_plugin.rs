@@ -140,7 +140,7 @@ async fn main() {
         Err(e) => fail("run_sql", &e),
     }
 
-    // 7) 表格回写拒绝(v1 契约边界)
+    // 7) 表格回写(execute_batch 契约):fixture 返回 affected=语句数
     let upd = vec![shujing_core::edits::CellUpdate {
         pk: vec![("id".into(), "1".into())],
         sets: vec![("name".into(), Some("改".into()))],
@@ -149,9 +149,9 @@ async fn main() {
         .apply_changes("e2e-plugin", "users", Some("main"), &upd, &[], &[])
         .await
     {
-        Err(e) if e.contains("回写") => pass("apply_changes_denied", "插件驱动回写按契约拒绝"),
-        Err(e) => fail("apply_changes_denied", &format!("文案异常: {e}")),
-        Ok(_) => fail("apply_changes_denied", "回写未被拒绝"),
+        Ok(r) if r.affected == 1 => pass("apply_changes", "回写 execute_batch,affected=1"),
+        Ok(r) => fail("apply_changes", &format!("affected={}", r.affected)),
+        Err(e) => fail("apply_changes", &e),
     }
 
     // 8) agent 重启恢复:断开→重连(agent 进程全新,连接语义完好)

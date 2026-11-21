@@ -26,6 +26,9 @@ def respond(method, params):
         return {"columns": COLS, "pk": ["id"]}
     if method == "count":
         return {"count": 2}
+    if method == "execute_batch":
+        sqls = params.get("sqls") or []
+        return {"affected": len(sqls)}
     if method == "query":
         sql = str(params.get("sql", ""))
         up = sql.strip().upper()
