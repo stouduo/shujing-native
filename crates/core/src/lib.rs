@@ -7,6 +7,7 @@ pub mod clickhouse;
 pub mod composite;
 pub mod kafka;
 pub mod kv;
+pub mod lineage;
 pub mod mqtt;
 pub mod rabbit;
 pub mod designer;

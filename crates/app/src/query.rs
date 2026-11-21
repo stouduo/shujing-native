@@ -630,55 +630,55 @@ pub fn draw_query_view(
                     .find(|c| c.id == q.conn_id)
                     .map(|c| c.read_only)
                     .unwrap_or(false);
-                // 字段血缘(简化):单表 SELECT 时给出 结果列←源表.列 的来源说明。
-                // SELECT * = 全列直引;显式列清单 = 解析 SELECT 清单(单行提示,hover 全量)。
-                // 多表 JOIN/子查询无可靠单点来源,不显示(诚实降级)
-                if let Some(tbl) = &q.result_table {
-                    let low = q.sql.to_lowercase();
-                    let single = !low.contains(" join ") && !low.contains("union");
-                    if single && low.trim_start().starts_with("select") {
-                        let src_db = q
-                            .result_db
-                            .clone()
-                            .or_else(|| q.database.clone())
-                            .unwrap_or_default();
-                        let full = if src_db.is_empty() {
-                            tbl.clone()
-                        } else {
-                            format!("{src_db}.{tbl}")
+                // 字段血缘(完整版):解析 SELECT 清单,JOIN/别名消解/函数/星号全覆盖;
+                // CTE/子查询/UNION 诚实降级(core/lineage.rs 返回原因)
+                match shujing_core::lineage::analyze(&q.sql) {
+                    Ok(cols) if !cols.is_empty() => {
+                        let pair = |c: &shujing_core::lineage::ColLineage| {
+                            format!("{} ← {}", c.output, c.source)
                         };
-                        let detail = if low.contains("select *") {
+                        let summary = if cols.len() <= 3 {
+                            cols.iter().map(|c| pair(c)).collect::<Vec<_>>().join(" · ")
+                        } else {
                             format!(
-                                "{} · {} = *",
-                                ui_kit::t!("lineage", "字段来源"),
-                                full
+                                "{} {}",
+                                cols.len(),
+                                ui_kit::t!("columns traced (hover for details)", "列已追踪(悬停看明细)")
                             )
-                        } else {
-                            // 抓 SELECT 与 FROM 之间的列清单(粗解析,逗号拆分)
-                            let cols = q.sql[q.sql.to_uppercase().find("SELECT").unwrap_or(0) + 6..
-                                q.sql.to_uppercase().find(" FROM ").unwrap_or(q.sql.len())]
-                                .replace('\n', " ")
-                                .split(',')
-                                .map(|c| c.trim().to_string())
-                                .filter(|c| !c.is_empty())
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            format!("{}: {}.{{{}}}", ui_kit::t!("lineage", "字段来源"), full, cols)
                         };
+                        let detail = cols
+                            .iter()
+                            .map(|c| pair(c))
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         let resp = ui.label(
-                            RichText::new(format!("● {}", icons::clip(&detail, 110)))
+                            RichText::new(format!(
+                                "● {}: {}",
+                                ui_kit::t!("lineage", "字段来源"),
+                                icons::clip(&summary, 120)
+                            ))
                                 .size(10.5)
                                 .color(p.muted),
                         );
-                        resp.on_hover_text(format!(
-                            "{}\n{}",
-                            detail,
-                            ui_kit::t!(
-                                "Column lineage (simplified): result columns map to the source table shown; JOIN/subqueries are not traced",
-                                "字段血缘(简化):结果列映射到所示源表;JOIN/子查询不追踪"
-                            )
+                        resp.on_hover_text(detail);
+                    }
+                    Err(e) => {
+                        let resp = ui.label(
+                            RichText::new(format!(
+                                "● {}: {}({})",
+                                ui_kit::t!("lineage", "字段来源"),
+                                ui_kit::t!("not traced", "未追踪"),
+                                e.0
+                            ))
+                                .size(10.5)
+                                .color(p.muted),
+                        );
+                        resp.on_hover_text(ui_kit::t!(
+                            "Column lineage v1 does not trace CTEs/subqueries/UNION — sources stay honest",
+                            "字段血缘 v1 不追踪 CTE/子查询/UNION,保持诚实降级"
                         ));
                     }
+                    Ok(_) => {}
                 }
                 let editable = !read_only
                     && q.result_table.is_some()
