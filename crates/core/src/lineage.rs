@@ -1,6 +1,7 @@
-//! 字段血缘(完整版):解析最外层 SELECT,给出每个输出列的来源。
-//! 覆盖:FROM/JOIN/逗号连接 + 表别名消解 + AS/裸列/表达式/t.*/星号。
-//! 诚实降级:CTE(WITH)与子查询返回 Err——来源不在最外层,不假装追踪。
+//! 字段血缘 v2:解析最外层 SELECT,给出每个输出列的来源。
+//! 覆盖:FROM/JOIN/逗号连接 + 表别名消解 + AS/裸列/表达式/t.*/星号 +
+//! CTE(WITH)递归追踪 + FROM 子查询追踪(有限深度,防无限递归)。
+//! 诚实降级:UNION / 嵌套超限返回 Err——来源不在可解析范围,不假装追踪。
 
 /// 一个输出列的血缘
 #[derive(Debug, Clone, PartialEq)]
@@ -14,6 +15,11 @@ pub struct ColLineage {
 /// 解析失败的原因(调用方展示降级说明)
 #[derive(Debug)]
 pub struct LineageError(pub String);
+
+/// CTE/子查询展开层数上限(防无限递归;超过诚实降级)
+const MAX_DEPTH: u32 = 2;
+
+// ---------------------------------------------------------------- 预处理
 
 /// 剥注释/字符串/反引号,保留结构与换行(避免注释里的 "select"/"join" 干扰)
 fn strip_noise(sql: &str) -> String {
@@ -135,6 +141,33 @@ fn find_word(s: &str, word: &str) -> Option<usize> {
     None
 }
 
+/// 括号深度 0 的词查找(子查询内部的 FROM/JOIN/limit 不干扰主查询定位)
+fn find_top_word(s: &str, word: &str) -> Option<usize> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut depth = 0i32;
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 && is_word_char(chars[i]) {
+            let start = i;
+            while i < chars.len() && is_word_char(chars[i]) {
+                i += 1;
+            }
+            let w: String = chars[start..i].iter().collect::<String>().to_ascii_lowercase();
+            if w == word.to_ascii_lowercase() {
+                return Some(start);
+            }
+            continue;
+        }
+        i += 1;
+    }
+    None
+}
+
 /// "(":其后(跳过空白)紧跟 select 词才算子查询——函数参数 COUNT(x)/UPPER(x) 不误判
 fn has_subquery(text: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
@@ -153,42 +186,82 @@ fn has_subquery(text: &str) -> bool {
     false
 }
 
-/// 提取 FROM/JOIN 表清单:表名(可含 db. 前缀)+ 可选别名
-fn parse_tables(from_clause: &str) -> Vec<(String, Option<String>)> {
-    let mut out = Vec::new();
-    // JOIN 边界:JOIN/STRAIGHT_JOIN 与裸逗号;ON/USING 之后的内容跳到下一个 JOIN
+/// 从 open_idx 处的 '(' 开始取平衡括号内容;返回 (内部文本, 闭括号后位置)
+fn balanced_span(s: &str, open_idx: usize) -> Option<(String, usize)> {
+    let chars: Vec<char> = s.chars().collect();
+    if open_idx >= chars.len() || chars[open_idx] != '(' {
+        return None;
+    }
     let mut depth = 0i32;
-    let chars: Vec<char> = from_clause.chars().collect();
-    let mut seg = String::new();
-    let mut i = 0;
-    // 先按 JOIN 关键词切块,块内取 表 [AS] 别名
-    let low = from_clause.to_ascii_lowercase();
+    let mut i = open_idx;
+    while i < chars.len() {
+        match chars[i] {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    let inner: String = chars[open_idx + 1..i].iter().collect();
+                    return Some((inner, i + 1));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn skip_ws(s: &str, mut i: usize) -> usize {
+    let chars: Vec<char> = s.chars().collect();
+    while i < chars.len() && chars[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+fn read_word(s: &str, mut i: usize) -> (String, usize) {
+    let chars: Vec<char> = s.chars().collect();
+    let start = i;
+    while i < chars.len() && is_word_char(chars[i]) {
+        i += 1;
+    }
+    (chars[start..i].iter().collect(), i)
+}
+
+// ---------------------------------------------------------------- 表/来源
+
+/// 一个"表"来源:真表 或 CTE/子查询(带列映射)
+#[derive(Debug, Clone)]
+struct TableSrc {
+    /// 真实表名;CTE/子查询为定义名
+    name: String,
+    alias: Option<String>,
+    /// 列映射(Some = CTE/子查询:output → 来源)
+    cols: Option<Vec<ColLineage>>,
+}
+
+/// 提取 FROM/JOIN 表清单:表名(可含 db. 前缀)+ 可选别名 + 子查询列映射
+fn parse_tables(from_clause: &str, depth: u32) -> Result<Vec<TableSrc>, LineageError> {
+    let mut out = Vec::new();
     let mut segments: Vec<(usize, usize)> = Vec::new();
     let mut start = 0usize;
-    while let Some(pos) = find_word(&low[start..], "join") {
+    while let Some(pos) = find_top_word(&from_clause[start..], "join") {
         let abs = start + pos;
         segments.push((start, abs));
         start = abs + "join".len();
     }
     segments.push((start, from_clause.len()));
-    let _ = (&depth, &chars, &i);
     for (a, b) in segments {
         let mut s = from_clause[a..b].trim().to_string();
-        // 去掉 JOIN 前缀词(left/right/inner/outer/cross/straight_join 等)与逗号
         s = s.trim_start_matches(|c: char| c == ',').to_string();
         // 剥 JOIN 修饰词
         loop {
             let low_s = s.to_ascii_lowercase();
-            let trimmed = low_s
-                .trim_start()
-                .split(' ')
-                .next()
-                .unwrap_or("")
-                .to_string();
+            let trimmed = low_s.trim_start().split(' ').next().unwrap_or("").to_string();
             if matches!(
                 trimmed.as_str(),
                 "left" | "right" | "inner" | "outer" | "cross" | "full" | "straight_join" | "natural" | ""
-            ) && trimmed != ""
+            ) && !trimmed.is_empty()
             {
                 s = s[trimmed.len()..].trim_start().to_string();
             } else {
@@ -196,14 +269,36 @@ fn parse_tables(from_clause: &str) -> Vec<(String, Option<String>)> {
             }
         }
         // ON/USING 之后的部分丢弃
-        if let Some(pos) = find_word(&s, "on") {
+        if let Some(pos) = find_top_word(&s, "on") {
             s = s[..pos].trim().to_string();
         }
-        if let Some(pos) = find_word(&s, "using") {
+        if let Some(pos) = find_top_word(&s, "using") {
             s = s[..pos].trim().to_string();
         }
-        // 逗号多表(隐式连接):每段取第一 token + 别名
+        // 逗号多表(隐式连接):每段取 表/子查询 + 别名
         for part in split_top_commas(&s) {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if part.starts_with('(') {
+                // FROM (SELECT ...) [AS] alias —— 子查询作为表
+                let Some((body, after)) = balanced_span(part, 0) else {
+                    return Err(LineageError("FROM 子查询括号不配对".into()));
+                };
+                let cols = Some(analyze_with(&body, depth + 1)?);
+                let tail = part[after..].trim();
+                let toks: Vec<&str> = tail.split_whitespace().collect();
+                let alias = match toks.first() {
+                    Some(&"AS") | Some(&"as") => toks.get(1).map(|x| x.to_string()),
+                    Some(x) if !matches!(x.to_ascii_lowercase().as_str(), "on" | "using") => {
+                        Some(x.to_string())
+                    }
+                    _ => None,
+                };
+                out.push(TableSrc { name: "(子查询)".into(), alias, cols });
+                continue;
+            }
             let toks: Vec<&str> = part.split_whitespace().collect();
             if toks.is_empty() {
                 continue;
@@ -213,86 +308,156 @@ fn parse_tables(from_clause: &str) -> Vec<(String, Option<String>)> {
             if toks.len() >= 2 {
                 let second = toks[1].to_ascii_lowercase();
                 if second == "as" && toks.len() >= 3 {
-                    alias = Some(
-                        toks[2].trim_matches(|c| c == '`' || c == '"').to_string(),
-                    );
+                    alias = Some(toks[2].trim_matches(|c| c == '`' || c == '"').to_string());
                 } else if second != "on" && second != "using" && second != "join" {
-                    alias = Some(
-                        toks[1].trim_matches(|c| c == '`' || c == '"').to_string(),
-                    );
+                    alias = Some(toks[1].trim_matches(|c| c == '`' || c == '"').to_string());
                 }
             }
             if !table.is_empty() {
-                out.push((table, alias));
+                out.push(TableSrc { name: table, alias, cols: None });
             }
         }
     }
-    out
+    Ok(out)
 }
 
-/// 别名消解:token(可能带 db. 前缀)→ 真实表名.qualifier
-fn resolve(token: &str, tables: &[(String, Option<String>)]) -> String {
-    let t = token.trim();
-    if let Some((tbl, alias)) = t.rsplit_once('.') {
-        let tbl = tbl.trim_matches(|c| c == '`' || c == '"');
-        let alias = alias.trim();
-        for (real, al) in tables {
-            if let Some(a) = al {
-                if a == tbl || a == alias {
-                    return format!("{real}.{alias}");
-                }
+/// 输出行消解:星号展开/列映射透传/真表限定
+fn resolve_rows(expr: &str, output: String, tables: &[TableSrc]) -> Vec<ColLineage> {
+    let e = expr.trim();
+    if e == "*" {
+        if tables.len() == 1 {
+            if let Some(cols) = &tables[0].cols {
+                return cols.clone();
             }
-            if real == tbl {
-                return format!("{real}.{alias}");
-            }
+            return vec![ColLineage { output, source: format!("{}.*", tables[0].name) }];
         }
-        format!("{tbl}.{alias}")
-    } else {
-        // 无点:可能是纯别名(u.*)→ 消解为真实表名
-        for (real, al) in tables {
-            if let Some(a) = al {
-                if a == t {
-                    return real.clone();
-                }
-            }
-        }
-        t.to_string()
+        return vec![ColLineage { output, source: "*".into() }];
     }
+    if e.ends_with(".*") {
+        let t = e.trim_end_matches(".*");
+        if let Some(ts) = find_table(t, tables) {
+            if let Some(cols) = &ts.cols {
+                return cols.clone();
+            }
+            return vec![ColLineage { output, source: format!("{}.*", ts.name) }];
+        }
+        return vec![ColLineage { output, source: format!("{e}.*") }];
+    }
+    if has_subquery(e) {
+        return vec![ColLineage { output, source: "(子查询)".into() }];
+    }
+    if e.contains('.') && !e.contains('(') {
+        let (t, col) = e.rsplit_once('.').unwrap();
+        if let Some(ts) = find_table(t, tables) {
+            if let Some(cols) = &ts.cols {
+                if let Some(hit) = cols.iter().find(|c| c.output == col) {
+                    return vec![ColLineage { output, source: hit.source.clone() }];
+                }
+            }
+            return vec![ColLineage { output, source: format!("{}.{}", ts.name, col) }];
+        }
+        return vec![ColLineage { output, source: e.to_string() }];
+    }
+    if !e.contains('(') {
+        if tables.len() == 1 {
+            let ts = &tables[0];
+            if let Some(cols) = &ts.cols {
+                if let Some(hit) = cols.iter().find(|c| c.output == e) {
+                    return vec![ColLineage { output, source: hit.source.clone() }];
+                }
+            }
+            return vec![ColLineage { output, source: format!("{}.{}", ts.name, e) }];
+        }
+        // 多表:某 CTE/子查询有该输出列 → 消解
+        for ts in tables {
+            if let Some(cols) = &ts.cols {
+                if let Some(hit) = cols.iter().find(|c| c.output == e) {
+                    return vec![ColLineage { output, source: hit.source.clone() }];
+                }
+            }
+        }
+        return vec![ColLineage { output, source: e.to_string() }];
+    }
+    vec![ColLineage { output, source: e.to_string() }]
 }
 
-/// 解析最外层 SELECT 的输出列血缘。
-/// 返回 Err = 无法可靠追踪(CTE/子查询/非 SELECT/结构解析失败),调用方展示降级说明。
+fn find_table<'a>(token: &str, tables: &'a [TableSrc]) -> Option<&'a TableSrc> {
+    tables
+        .iter()
+        .find(|t| Some(token) == t.alias.as_deref() || t.name == token)
+}
+
+/// 解析最外层 SELECT 的输出列血缘(CTE/FROM 子查询递归展开,深度 ≤2)。
+/// 返回 Err = 无法可靠追踪(UNION/嵌套超限/结构失败),调用方展示降级说明。
 pub fn analyze(sql: &str) -> Result<Vec<ColLineage>, LineageError> {
+    analyze_with(sql, 0)
+}
+
+pub fn analyze_with(sql: &str, depth: u32) -> Result<Vec<ColLineage>, LineageError> {
+    if depth > MAX_DEPTH {
+        return Err(LineageError("嵌套过深".into()));
+    }
     let s = strip_noise(sql).trim().to_string();
     let low = s.to_ascii_lowercase();
-    let low_trim = low.trim_start();
-    if !low_trim.starts_with("select") {
+    if !low.starts_with("select") && !low.starts_with("with") {
         return Err(LineageError("非 SELECT 语句".into()));
     }
-    if low_trim.starts_with("select") && low.starts_with("with") {
-        return Err(LineageError("CTE(WITH)不追踪".into()));
-    }
-    // 子查询:最外层 FROM 之前出现 "(SELECT"(函数参数括号不算)→ 降级
-    if let Some(sel) = find_word(&s, "select") {
-        let from_pos = find_word(&s[sel..], "from").map(|p| p + sel);
-        let before_from = from_pos.map(|p| &s[sel..p]).unwrap_or(&s[sel..]);
-        if has_subquery(&before_from) {
-            return Err(LineageError("子查询不追踪".into()));
+
+    // ── CTE:WITH name AS (SELECT ...), ... 主查询 ──
+    let mut cte_maps: Vec<(String, Vec<ColLineage>)> = Vec::new();
+    let mut main_sql = s.clone();
+    if low.starts_with("with") {
+        let mut i = 4usize;
+        loop {
+            i = skip_ws(&s, i);
+            if i >= s.len() {
+                return Err(LineageError("WITH 解析失败".into()));
+            }
+            let (name, ni) = read_word(&s, i);
+            if name.is_empty() {
+                return Err(LineageError("WITH 解析失败(缺 CTE 名)".into()));
+            }
+            i = skip_ws(&s, ni);
+            if find_word(&s[i..], "as").map(|p| p == 0).unwrap_or(false) {
+                i = skip_ws(&s, i + 2);
+            }
+            if i >= s.len() || s.chars().nth(i) != Some('(') {
+                return Err(LineageError("WITH 解析失败(缺括号定义)".into()));
+            }
+            let Some((body, after)) = balanced_span(&s, i) else {
+                return Err(LineageError("WITH 括号不配对".into()));
+            };
+            let lin = analyze_with(&body, depth + 1)?;
+            cte_maps.push((name, lin));
+            i = skip_ws(&s, after);
+            if s.chars().nth(i) == Some(',') {
+                i += 1;
+                continue;
+            }
+            main_sql = s[i..].trim().to_string();
+            break;
         }
     }
-    let sel_start = find_word(&s, "select").ok_or(LineageError("无 SELECT".into()))?;
-    let from_start = find_word(&s, "from")
+
+    let low = main_sql.to_ascii_lowercase();
+    if !low.starts_with("select") {
+        return Err(LineageError("主查询非 SELECT".into()));
+    }
+    if low.contains(" union ") {
+        return Err(LineageError("UNION 不追踪".into()));
+    }
+    let sel_start = find_word(&main_sql, "select").ok_or(LineageError("无 SELECT".into()))?;
+    let from_start = find_top_word(&main_sql, "from")
         .ok_or(LineageError("无 FROM 子句(SELECT 无来源表)".into()))?;
-    let select_list = s[sel_start + 6..from_start].trim();
+    let select_list = main_sql[sel_start + 6..from_start].trim();
     if select_list.is_empty() {
         return Err(LineageError("空 SELECT 清单".into()));
     }
     // FROM 子句终点:顶层的 where/group/order/limit/having/union/window/offset
-    let rest = &s[from_start + 4..];
+    let rest = &main_sql[from_start + 4..];
     let mut from_end = rest.len();
     for kw in ["where", "group", "order", "limit", "having", "union", "window", "offset"] {
-        let probe = format!("{rest}!");
-        if let Some(p0) = find_word(&probe, kw) {
+        if let Some(p0) = find_top_word(rest, kw) {
             let p = p0.min(rest.len());
             from_end = from_end.min(p);
         }
@@ -301,21 +466,28 @@ pub fn analyze(sql: &str) -> Result<Vec<ColLineage>, LineageError> {
     if from_clause.is_empty() {
         return Err(LineageError("空 FROM 子句".into()));
     }
-    let tables = parse_tables(&from_clause);
+    let mut tables = parse_tables(&from_clause, depth)?;
     if tables.is_empty() {
         return Err(LineageError("FROM 解析失败".into()));
     }
-    if low.contains(" union ") {
-        return Err(LineageError("UNION 不追踪".into()));
+    // CTE 注册为虚拟表(列映射透传给消解)
+    for (name, lin) in &cte_maps {
+        for t in tables.iter_mut() {
+            if t.alias.as_deref() == Some(name.as_str()) || t.name == *name {
+                if t.cols.is_none() {
+                    t.name = name.clone();
+                    t.cols = Some(lin.clone());
+                }
+            }
+        }
     }
 
-    let mut out = Vec::new();
+    let mut out: Vec<ColLineage> = Vec::new();
     for item in split_top_commas(select_list) {
         let item = item.trim();
         if item.is_empty() {
             continue;
         }
-        // 输出列名:AS 别名 > 裸列尾段 > 表达式截断
         let (expr, alias) = match find_word(item, "as") {
             Some(p) => (
                 item[..p].trim().to_string(),
@@ -333,37 +505,9 @@ pub fn analyze(sql: &str) -> Result<Vec<ColLineage>, LineageError> {
                 clipped
             }
         });
-        // 来源:星号直引 / 别名消解
-        let source = if expr == "*" {
-            if tables.len() == 1 {
-                format!("{}.*", tables[0].0)
-            } else {
-                "*".to_string()
-            }
-        } else if expr.ends_with(".*") {
-            let t = expr.trim_end_matches(".*");
-            format!("{}.*", resolve(t, &tables))
-        } else if !expr.contains('(') {
-            if expr.contains('.') {
-                resolve(&expr, &tables)
-            } else if tables.len() == 1 {
-                // 单表裸列:归属唯一表
-                format!("{}.{}", tables[0].0, expr)
-            } else {
-                // 多表裸列:归属有歧义,保留裸名
-                expr.clone()
-            }
-        } else {
-            expr.clone()
-        };
-        out.push(ColineagePush { output, source });
+        out.extend(resolve_rows(&expr, output, &tables));
     }
-    Ok(out.into_iter().map(|c| ColLineage { output: c.output, source: c.source }).collect())
-}
-
-struct ColineagePush {
-    output: String,
-    source: String,
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -416,16 +560,73 @@ mod tests {
     }
 
     #[test]
-    fn cte_and_subquery_and_union_degrade() {
-        assert!(analyze("WITH t AS (SELECT 1) SELECT * FROM t").is_err());
-        assert!(analyze("SELECT (SELECT max(id) FROM t) AS m FROM users").is_err());
+    fn db_qualified_table() {
+        let r = analyze("SELECT id FROM shop.users").unwrap();
+        assert_eq!(r[0].source, "shop.users.id");
+    }
+
+    // ── v2:CTE / 子查询追踪 ──
+
+    #[test]
+    fn cte_traced() {
+        let r = analyze(
+            "WITH t AS (SELECT id, name FROM users) SELECT t.name FROM t",
+        )
+        .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].output, "name");
+        assert_eq!(r[0].source, "users.name");
+    }
+
+    #[test]
+    fn cte_alias_and_multi_defs() {
+        let r = analyze(
+            "WITH a AS (SELECT id FROM x), b AS (SELECT n FROM y) SELECT aa.id AS i, b.n FROM a aa JOIN b ON b.aid = aa.id",
+        )
+        .unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].output, "i");
+        assert_eq!(r[0].source, "x.id");
+        assert_eq!(r[1].source, "y.n");
+    }
+
+    #[test]
+    fn cte_star_expands() {
+        let r = analyze("WITH t AS (SELECT id, name FROM users) SELECT t.* FROM t").unwrap();
+        assert_eq!(r.len(), 2, "CTE 星号按其定义列铺开: {r:?}");
+        assert_eq!(r[0].source, "users.id");
+        assert_eq!(r[1].source, "users.name");
+    }
+
+    #[test]
+    fn from_subquery_traced() {
+        let r = analyze(
+            "SELECT s.total FROM (SELECT SUM(v) AS total FROM sales) s",
+        )
+        .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].output, "total");
+        assert_eq!(r[0].source, "SUM(v)", "子查询内表达式透传: {r:?}");
+    }
+
+    #[test]
+    fn scalar_subquery_annotated() {
+        let r = analyze("SELECT (SELECT max(id) FROM t) AS m FROM users").unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].output, "m");
+        assert_eq!(r[0].source, "(子查询)");
+    }
+
+    #[test]
+    fn union_still_degrades() {
         assert!(analyze("SELECT id FROM a UNION SELECT id FROM b").is_err());
         assert!(analyze("DELETE FROM t").is_err());
     }
 
     #[test]
-    fn db_qualified_table() {
-        let r = analyze("SELECT id FROM shop.users").unwrap();
-        assert_eq!(r[0].source, "shop.users.id");
+    fn depth_limit_degrades() {
+        // 三层 CTE 套娃:超出 MAX_DEPTH=2 → 诚实降级
+        let sql = "WITH a AS (WITH b AS (WITH c AS (SELECT 1 AS x) SELECT * FROM c) SELECT * FROM b) SELECT * FROM a";
+        assert!(analyze(sql).is_err());
     }
 }
