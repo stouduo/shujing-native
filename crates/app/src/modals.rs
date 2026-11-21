@@ -742,17 +742,28 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     gs.searched = false;
                     gs.hits.clear();
                 }
-                // 库范围(多库连接):默认侧栏展开的库;换连接后下一帧列表随新连接刷新
-                let dbs: Vec<(String, String)> =
-                    conn_dbs.iter().map(|d| (d.clone(), d.clone())).collect();
-                if !dbs.is_empty() {
-                    let sel_db = gs
-                        .db
-                        .clone()
-                        .or(conn_expanded.clone())
-                        .unwrap_or_else(|| ui_kit::t!("(default db)", "(连接默认库)").into());
-                    if let Some(db) = theme::select(ui, "gs-db", &sel_db, &dbs, 140.0) {
-                        gs.db = Some(db);
+                // 库范围(多库连接):默认侧栏展开的库;「全部库」遍历连接全部非系统库
+                let all_label = ui_kit::t!("All Databases", "全部库").to_string();
+                let mut dbs: Vec<(String, String)> =
+                    vec![(all_label.clone(), "__all__".into())];
+                dbs.extend(conn_dbs.iter().map(|d| (d.clone(), d.clone())));
+                {
+                    let sel_db = if gs.all_dbs {
+                        all_label.clone()
+                    } else {
+                        gs.db
+                            .clone()
+                            .or(conn_expanded.clone())
+                            .unwrap_or_else(|| ui_kit::t!("(default db)", "(连接默认库)").into())
+                    };
+                    if let Some(v) = theme::select(ui, "gs-db", &sel_db, &dbs, 160.0) {
+                        if v == "__all__" {
+                            gs.all_dbs = true;
+                            gs.db = None;
+                        } else {
+                            gs.all_dbs = false;
+                            gs.db = Some(v);
+                        }
                         gs.searched = false;
                         gs.hits.clear();
                     }
@@ -927,6 +938,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     .and_then(|t| t.expanded_db.clone());
             }
             let db = gs.db.clone();
+            let all_dbs = gs.all_dbs;
             // 在途防抖:重复回车不再并发发起(旧结果由身份校验丢弃)
             if gs.searching {
                 do_search = false;
@@ -938,12 +950,15 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                 let cid = gs.conn_id.clone();
                 let kw2 = kw.clone();
                 net::spawn(async move {
-                    let result = service
-                        .search_all_tables(&cid, db.as_deref(), &kw2, 50)
-                        .await;
+                    let result = if all_dbs {
+                        service.search_all_databases(&cid, &kw2, 50).await
+                    } else {
+                        service.search_all_tables(&cid, db.as_deref(), &kw2, 50).await
+                    };
                     let _ = tx.send(BgEvent::SearchDone {
                         conn_id: cid,
                         db,
+                        all_dbs,
                         keyword: kw2,
                         result,
                     });
@@ -1996,6 +2011,67 @@ pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 if theme::checkbox(ui, &mut wd, ui_kit::t!("Copy data (unchecked = structure only)", "搬运数据(不勾=只建结构)")).changed() {
                     st.with_data = wd;
                 }
+            }
+            // 字段映射(可选):加载源结构后逐列改目标列名;留空=同构直插自动建表
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let has_map = st.mapping.is_some();
+                if theme::button(
+                    ui,
+                    if has_map {
+                        ui_kit::t!("Clear Mapping", "清除映射")
+                    } else {
+                        ui_kit::t!("Field Mapping…", "字段映射…")
+                    },
+                    theme::BtnKind::Secondary,
+                )
+                .clicked()
+                {
+                    if has_map {
+                        st.mapping = None;
+                    } else if let Some(cols) = &st.map_srcs {
+                        st.mapping = Some(cols.iter().cloned().map(|c| (c, String::new())).collect());
+                    } else {
+                        st.error = Some(
+                            ui_kit::t!(
+                                "Source structure still loading, try again",
+                                "源结构还在加载,稍后再点"
+                            )
+                            .to_string(),
+                        );
+                    }
+                }
+                if st.mapping.is_some() {
+                    ui.label(
+                        RichText::new(ui_kit::t!(
+                            "Target table must already exist; empty target column = skip",
+                            "映射模式不自动建表(目标表须已存在);目标列留空=跳过该源列"
+                        ))
+                        .size(10.5)
+                        .color(p.muted),
+                    );
+                }
+            });
+            if let Some(map) = &mut st.mapping {
+                egui::ScrollArea::vertical()
+                    .id_salt("tf-map-scroll")
+                    .max_height(160.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("tf-map-grid")
+                            .num_columns(3)
+                            .spacing([10.0, 3.0])
+                            .show(ui, |ui| {
+                                ui.label(RichText::new(ui_kit::t!("Source", "源列")).size(10.5).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("→ Target", "→ 目标列")).size(10.5).color(p.muted));
+                                ui.label(RichText::new("").size(10.5));
+                                ui.end_row();
+                                for (src, dst) in map.iter_mut() {
+                                    ui.label(RichText::new(src.clone()).font(theme::mono(11.5)).color(p.text));
+                                    theme::field(ui, &format!("tf-map-{}", src), dst, 160.0, false);
+                                    ui.end_row();
+                                }
+                            });
+                    });
             }
             {
                 let mut df = st.drop_first;

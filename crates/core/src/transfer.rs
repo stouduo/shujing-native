@@ -27,6 +27,8 @@ pub async fn transfer_table(
     dst: (&str, Option<&str>, &str),
     with_data: bool,
     drop_first: bool,
+    // 字段映射(源列→目标列);空=同构直插(自动建表)。非空时不自动建表(目标表须已存在)
+    col_map: &[(String, String)],
 ) -> Result<(u64, u64), String> {
     let (sc, sdb, st) = src;
     let (dc, ddb, dt) = dst;
@@ -59,8 +61,9 @@ pub async fn transfer_table(
 
     let mysql = dst_info.db_type == DbType::MySql;
     let dst_full = qualified(dt, ddb, mysql);
+    let mapped = !col_map.is_empty();
 
-    // 1) 建表:复用设计器 create(src 结构,目标表名)
+    // 1) 建表:同构模式自动建;映射模式目标表须已存在(跳过建表/先删)
     let st_struct = service.get_table_structure(sc, st, sdb.map(str::to_string)).await?;
     let cols = crate::designer::columns_from_structure(&st_struct);
     let create = crate::designer::designer_sql(dst_info.db_type, true, dt, &cols, &[]);
@@ -70,22 +73,33 @@ pub async fn transfer_table(
         .trim_end_matches(';')
         .to_string();
 
-    // 目标侧可能带库限定:CREATE 生成的表名不带库,统一补
-    let create_stmt = if let Some(d) = ddb.map(str::trim).filter(|s| !s.is_empty()) {
-        // 表名出现在 "CREATE TABLE `t`" 或 "CREATE TABLE \"t\"" 首个引注处
-        let qt = crate::edits::quote(dt, mysql);
-        create_sql.replacen(&qt, &dst_full, 1)
+    if mapped {
+        // 映射模式:目标表由用户准备;drop_first/建表都跳过(没有可靠的重建语义)
+        if with_data {
+            // 仅校验目标表存在(取不到结构即报错)
+            service
+                .get_table_structure(dc, dt, ddb.map(str::to_string))
+                .await
+                .map_err(|e| format!("目标表不可达({e});映射模式要求目标表已存在"))?;
+        }
     } else {
-        create_sql
-    };
+        // 目标侧可能带库限定:CREATE 生成的表名不带库,统一补
+        let create_stmt = if let Some(d) = ddb.map(str::trim).filter(|s| !s.is_empty()) {
+            // 表名出现在 "CREATE TABLE `t`" 或 "CREATE TABLE \"t\"" 首个引注处
+            let qt = crate::edits::quote(dt, mysql);
+            create_sql.replacen(&qt, &dst_full, 1)
+        } else {
+            create_sql
+        };
 
-    // 2) 先删(可选,破坏性)
-    if drop_first {
-        service
-            .run_sql_db(dc, format!("DROP TABLE IF EXISTS {dst_full}"), None, ddb)
-            .await?;
+        // 2) 先删(可选,破坏性)
+        if drop_first {
+            service
+                .run_sql_db(dc, format!("DROP TABLE IF EXISTS {dst_full}"), None, ddb)
+                .await?;
+        }
+        service.run_sql_db(dc, create_stmt, None, ddb).await?;
     }
-    service.run_sql_db(dc, create_stmt, None, ddb).await?;
 
     if !with_data {
         return Ok((0, 0));
@@ -107,9 +121,31 @@ pub async fn transfer_table(
     });
     let src_full = qualified(st, sdb, mysql);
     let src_cols: Vec<String> = st_struct.columns.iter().map(|c| c.name.clone()).collect();
-    let quoted_cols: Vec<String> = src_cols
+    // 列写入计划:(源值下标, 目标列名)。同构=恒等;映射=按 col_map 配对(未映射跳过)
+    let plan: Vec<(usize, String)> = if mapped {
+        src_cols
+            .iter()
+            .enumerate()
+            .filter_map(|(i, sc)| {
+                col_map
+                    .iter()
+                    .find(|(s, d)| s == sc && !d.trim().is_empty())
+                    .map(|(_, d)| (i, d.trim().to_string()))
+            })
+            .collect()
+    } else {
+        src_cols
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, c.clone()))
+            .collect()
+    };
+    if mapped && plan.is_empty() {
+        return Err("字段映射为空:没有可写入的目标列".into());
+    }
+    let quoted_cols: Vec<String> = plan
         .iter()
-        .map(|c| crate::edits::quote(c, mysql))
+        .map(|(_, d)| crate::edits::quote(d, mysql))
         .collect();
 
     let batch = 500;
@@ -133,11 +169,11 @@ pub async fn transfer_table(
         // 行 → INSERT(多行 VALUES 一条;NULL 语义保真)
         let mut inserts: Vec<String> = Vec::new();
         for row in &rs.rows {
-            let vals: Vec<String> = row
+            let vals: Vec<String> = plan
                 .iter()
-                .map(|v| match v {
-                    None => "NULL".to_string(),
-                    Some(s) => sql_literal(s, mysql),
+                .map(|(i, _)| match row.get(*i) {
+                    None | Some(None) => "NULL".to_string(),
+                    Some(Some(s)) => sql_literal(s, mysql),
                 })
                 .collect();
             inserts.push(format!(

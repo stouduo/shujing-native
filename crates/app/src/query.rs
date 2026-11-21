@@ -617,6 +617,56 @@ pub fn draw_query_view(
                     .find(|c| c.id == q.conn_id)
                     .map(|c| c.read_only)
                     .unwrap_or(false);
+                // 字段血缘(简化):单表 SELECT 时给出 结果列←源表.列 的来源说明。
+                // SELECT * = 全列直引;显式列清单 = 解析 SELECT 清单(单行提示,hover 全量)。
+                // 多表 JOIN/子查询无可靠单点来源,不显示(诚实降级)
+                if let Some(tbl) = &q.result_table {
+                    let low = q.sql.to_lowercase();
+                    let single = !low.contains(" join ") && !low.contains("union");
+                    if single && low.trim_start().starts_with("select") {
+                        let src_db = q
+                            .result_db
+                            .clone()
+                            .or_else(|| q.database.clone())
+                            .unwrap_or_default();
+                        let full = if src_db.is_empty() {
+                            tbl.clone()
+                        } else {
+                            format!("{src_db}.{tbl}")
+                        };
+                        let detail = if low.contains("select *") {
+                            format!(
+                                "{} · {} = *",
+                                ui_kit::t!("lineage", "字段来源"),
+                                full
+                            )
+                        } else {
+                            // 抓 SELECT 与 FROM 之间的列清单(粗解析,逗号拆分)
+                            let cols = q.sql[q.sql.to_uppercase().find("SELECT").unwrap_or(0) + 6..
+                                q.sql.to_uppercase().find(" FROM ").unwrap_or(q.sql.len())]
+                                .replace('\n', " ")
+                                .split(',')
+                                .map(|c| c.trim().to_string())
+                                .filter(|c| !c.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("{}: {}.{{{}}}", ui_kit::t!("lineage", "字段来源"), full, cols)
+                        };
+                        let resp = ui.label(
+                            RichText::new(format!("● {}", icons::clip(&detail, 110)))
+                                .size(10.5)
+                                .color(p.muted),
+                        );
+                        resp.on_hover_text(format!(
+                            "{}\n{}",
+                            detail,
+                            ui_kit::t!(
+                                "Column lineage (simplified): result columns map to the source table shown; JOIN/subqueries are not traced",
+                                "字段血缘(简化):结果列映射到所示源表;JOIN/子查询不追踪"
+                            )
+                        ));
+                    }
+                }
                 let editable = !read_only
                     && q.result_table.is_some()
                     && q.pk_checked

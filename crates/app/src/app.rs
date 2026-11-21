@@ -107,6 +107,9 @@ pub enum BgEvent {
         tab_id: String,
         result: Result<(), String>,
     },
+    TransferSrcCols {
+        cols: Option<Vec<String>>,
+    },
     RabbitQueuesLoaded {
         tab_id: String,
         result: Result<(shujing_core::rabbit::RabbitOverview, Vec<shujing_core::rabbit::RabbitQueue>), String>,
@@ -305,6 +308,7 @@ pub enum BgEvent {
         /// 发起时的 (连接, 库, 关键词):换连接/改词后迟到的旧结果直接丢弃
         conn_id: String,
         db: Option<String>,
+        all_dbs: bool,
         keyword: String,
         result: Result<Vec<shujing_core::SearchHit>, String>,
     },
@@ -706,6 +710,10 @@ pub struct TransferState {
     pub dst_table: String,
     pub with_data: bool,
     pub drop_first: bool,
+    /// 字段映射(源列→目标列文本);None=同构直插
+    pub mapping: Option<Vec<(String, String)>>,
+    /// 源列清单预取(打开传输时后台拉;映射按钮据此建格子)
+    pub map_srcs: Option<Vec<String>>,
     pub running: bool,
     pub error: Option<String>,
 }
@@ -942,6 +950,8 @@ pub struct GlobalSearchState {
     pub conn_id: String,
     /// 搜索范围库(None=连接默认库;MySQL 多库连接必选,否则无默认库时搜不到表)
     pub db: Option<String>,
+    /// 全库搜索(遍历连接全部非系统库;db 字段此时忽略)
+    pub all_dbs: bool,
     pub keyword: String,
     pub searching: bool,
     pub searched: bool,
@@ -3718,9 +3728,32 @@ impl ShujingApp {
             dst_table: table.to_string(),
             with_data: true,
             drop_first: false,
+            mapping: None,
+            map_srcs: None,
             running: false,
             error: None,
         });
+        // 源列预取(字段映射用;失败静默,点击映射时再提示)
+        {
+            let tx2 = self.event_tx.clone();
+            let svc2 = self.service.clone();
+            let cid2 = conn_id.to_string();
+            let db2 = db.map(str::to_string);
+            let tbl2 = table.to_string();
+            net::spawn(async move {
+                let cols = svc2
+                    .get_table_structure(&cid2, &tbl2, db2)
+                    .await
+                    .ok()
+                    .map(|s| {
+                        s.columns
+                            .iter()
+                            .map(|c| c.name.clone())
+                            .collect::<Vec<_>>()
+                    });
+                let _ = tx2.send(BgEvent::TransferSrcCols { cols });
+            });
+        }
     }
 
     /// 运行数据传输
@@ -3744,6 +3777,7 @@ impl ShujingApp {
                 ),
                 state.with_data,
                 state.drop_first,
+                &state.mapping.clone().unwrap_or_default(),
             )
             .await;
             let _ = tx.send(BgEvent::TransferDone { result });
@@ -5434,6 +5468,12 @@ impl ShujingApp {
                     self.open_sessions_refresh();
                     continue;
                 }
+                BgEvent::TransferSrcCols { cols } => {
+                    if let Some(st) = self.transfer.as_mut() {
+                        st.map_srcs = cols;
+                    }
+                    continue;
+                }
                 BgEvent::RabbitQueuesLoaded { tab_id: _, result } => {
                     if let Some(r) = self.rabbit_tab.as_mut() {
                         r.loading = false;
@@ -6178,6 +6218,7 @@ impl ShujingApp {
                 BgEvent::SearchDone {
                     conn_id,
                     db,
+                    all_dbs,
                     keyword,
                     result,
                 } => {
@@ -6187,6 +6228,7 @@ impl ShujingApp {
                     // 迟到的旧请求(发起后换了连接/库/词):丢弃,不串台显示
                     let stale = gs.conn_id != conn_id
                         || gs.db != db
+                        || gs.all_dbs != all_dbs
                         || gs.keyword.trim() != keyword;
                     if stale {
                         continue;

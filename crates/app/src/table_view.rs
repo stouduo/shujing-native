@@ -5494,6 +5494,7 @@ impl eframe::App for ShujingApp {
                 .input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command && i.modifiers.shift)
         {
             self.global_search = Some(crate::app::GlobalSearchState {
+                all_dbs: false,
                 conn_id: String::new(),
                 db: None,
                 keyword: String::new(),

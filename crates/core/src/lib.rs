@@ -1066,6 +1066,49 @@ impl Service {
         search::search_tables(&mut guard.backend, &info, database, keyword, max_hits).await
     }
 
+    /// 全库对象搜索:遍历连接上全部非系统库逐库搜(MySQL/PG 多库;其余单库退化)
+    pub async fn search_all_databases(
+        &self,
+        id: &str,
+        keyword: &str,
+        max_hits: usize,
+    ) -> Result<Vec<search::SearchHit>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        let info = guard.info.clone();
+        let dbs = match crate::schema::list_databases(&mut guard.backend, &info).await {
+            Ok(d) => d,
+            Err(_) => vec![],
+        };
+        // 系统库排除(MySQL information_schema/performance_schema/sys;PG pg_*/information_schema)
+        let dbs: Vec<String> = {
+            let all: Vec<String> = dbs;
+            all.into_iter()
+            .filter(|d: &String| {
+                let low = d.to_lowercase();
+                !(low.starts_with("pg_")
+                    || low == "information_schema"
+                    || low == "performance_schema"
+                    || low == "sys"
+                    || low == "mysql")
+            })
+            .collect::<Vec<String>>()
+        };
+        let mut hits = Vec::new();
+        for d in &dbs {
+            if hits.len() >= max_hits {
+                break;
+            }
+            match search::search_tables(&mut guard.backend, &info, Some(d), keyword, max_hits).await {
+                Ok(mut h) => {
+                    hits.append(&mut h);
+                }
+                Err(_) => continue,
+            }
+        }
+        Ok(hits)
+    }
+
     pub async fn apply_changes(
         &self,
         id: &str,
