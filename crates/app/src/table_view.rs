@@ -107,6 +107,11 @@ pub enum TabAction {
         columns: Vec<String>,
         rows: Vec<Vec<Option<String>>>,
     },
+    ExportParquet {
+        suggest: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<Option<String>>>,
+    },
     DeleteRow {
         tab_id: String,
         ri: usize,
@@ -4736,6 +4741,26 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             net::spawn(async move {
                 let result =
                     shujing_core::excel::export_xlsx(&columns, &rows, &path).map(|_| path.clone());
+                let _ = tx.send(BgEvent::ExportDone { result });
+            });
+        }
+        TabAction::ExportParquet {
+            suggest,
+            columns,
+            rows,
+        } => {
+            let Some(path) = rfd::FileDialog::new()
+                .set_file_name(&suggest)
+                .add_filter("Parquet", &["parquet"])
+                .save_file()
+            else {
+                return;
+            };
+            let path = path.display().to_string();
+            let tx = app.event_tx.clone();
+            net::spawn(async move {
+                let result = shujing_core::parquet_preview::export_parquet(&columns, &rows, std::path::Path::new(&path))
+                    .map(|n| format!("{path} · {n} rows"));
                 let _ = tx.send(BgEvent::ExportDone { result });
             });
         }

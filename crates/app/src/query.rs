@@ -154,6 +154,11 @@ pub fn draw_query_view(
                                     columns: r.columns.clone(),
                                     rows: r.rows.clone(),
                                 });
+                                actions.push(TabAction::ExportParquet {
+                                    suggest: ui_kit::t!("query-results.parquet", "查询结果.parquet").into(),
+                                    columns: r.columns.clone(),
+                                    rows: r.rows.clone(),
+                                });
                             }
                         }
                     }

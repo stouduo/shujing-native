@@ -1,6 +1,7 @@
 //! Parquet 文件预览:只读前 N 行转字符串网格(行组顺序),不做 schema 推断。
 
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use std::path::Path;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +101,182 @@ fn field_to_string(f: &parquet::record::Field) -> Option<String> {
     }
 }
 
+/// 行集导出为 Parquet 文件。列类型自动推断:
+/// 全列可解析 i32 → INT32;可解析 i64 → INT64;可解析 f64 → DOUBLE;其余 BYTE_ARRAY/UTF8。
+/// 值按文本协议进出(与网格一致),NULL 保留。返回写入行数。
+pub fn export_parquet(
+    columns: &[String],
+    rows: &[Vec<Option<String>>],
+    path: &Path,
+) -> Result<u64, String> {
+    use parquet::basic::{Repetition, Type as PType};
+    use parquet::data_type::{ByteArray, ByteArrayType, DoubleType, Int32Type, Int64Type};
+    use parquet::file::properties::WriterProperties;
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::types::Type as SchemaType;
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum ColKind {
+        I32,
+        I64,
+        F64,
+        Str,
+    }
+
+    let infer_kind = |vals: Vec<Option<&String>>| -> ColKind {
+        let mut kind = ColKind::I32;
+        for v in vals.into_iter().flatten() {
+            let t = v.trim();
+            if t.is_empty() {
+                continue;
+            }
+            let next = match kind {
+                ColKind::I32 => {
+                    if t.parse::<i32>().is_ok() {
+                        ColKind::I32
+                    } else if t.parse::<i64>().is_ok() {
+                        ColKind::I64
+                    } else if t.parse::<f64>().is_ok() {
+                        ColKind::F64
+                    } else {
+                        ColKind::Str
+                    }
+                }
+                ColKind::I64 => {
+                    if t.parse::<i64>().is_ok() {
+                        ColKind::I64
+                    } else if t.parse::<f64>().is_ok() {
+                        ColKind::F64
+                    } else {
+                        ColKind::Str
+                    }
+                }
+                ColKind::F64 => {
+                    if t.parse::<f64>().is_ok() {
+                        ColKind::F64
+                    } else {
+                        ColKind::Str
+                    }
+                }
+                ColKind::Str => ColKind::Str,
+            };
+            kind = next;
+            if kind == ColKind::Str {
+                break;
+            }
+        }
+        kind
+    };
+
+    let kinds: Vec<ColKind> = (0..columns.len())
+        .map(|ci| {
+            infer_kind(
+                rows.iter()
+                    .map(|r| r.get(ci).and_then(|c| c.as_ref()))
+                    .collect(),
+            )
+        })
+        .collect();
+
+    let mut fields: Vec<std::sync::Arc<SchemaType>> = Vec::new();
+    for (i, name) in columns.iter().enumerate() {
+        let ty = match kinds[i] {
+            ColKind::I32 => PType::INT32,
+            ColKind::I64 => PType::INT64,
+            ColKind::F64 => PType::DOUBLE,
+            ColKind::Str => PType::BYTE_ARRAY,
+        };
+        let f = SchemaType::primitive_type_builder(name, ty)
+            .with_repetition(Repetition::OPTIONAL)
+            .build()
+            .map_err(|e| format!("Parquet schema 构建失败: {e}"))?;
+        fields.push(std::sync::Arc::new(f));
+    }
+    let schema = SchemaType::group_type_builder("schema")
+        .with_fields(fields)
+        .build()
+        .map_err(|e| format!("Parquet schema 构建失败: {e}"))?;
+    let file = std::fs::File::create(path).map_err(|e| format!("Parquet 创建失败: {e}"))?;
+    let props = WriterProperties::builder().build();
+    let mut writer = SerializedFileWriter::new(
+        file,
+        std::sync::Arc::new(schema),
+        std::sync::Arc::new(props),
+    )
+    .map_err(|e| format!("Parquet 写入失败: {e}"))?;
+    let mut rg = writer
+        .next_row_group()
+        .map_err(|e| format!("Parquet 写入失败: {e}"))?;
+
+    let n = rows.len();
+    for (ci, col_name) in columns.iter().enumerate() {
+        let mut col = rg
+            .next_column()
+            .map_err(|e| format!("Parquet 写入失败: {e}"))?
+            .ok_or_else(|| format!("Parquet 列缺失: {col_name}"))?;
+        let def: Vec<i16> = rows.iter().map(|r| if r.get(ci).and_then(|c| c.as_ref()).is_some() { 1i16 } else { 0i16 }).collect();
+        match kinds[ci] {
+            ColKind::I32 => {
+                let vals: Vec<i32> = rows
+                    .iter()
+                    .filter_map(|r| match r.get(ci).and_then(|c| c.as_ref()) {
+                        Some(v) => v.trim().parse::<i32>().ok(),
+                        None => None,
+                    })
+                    .collect();
+                col.typed::<Int32Type>()
+                    .write_batch(&vals, Some(&def), None)
+                    .map_err(|e| format!("Parquet 写入失败: {e}"))?;
+                col.close().map_err(|e| format!("Parquet 写入失败: {e}"))?;
+            }
+            ColKind::I64 => {
+                let vals: Vec<i64> = rows
+                    .iter()
+                    .filter_map(|r| match r.get(ci).and_then(|c| c.as_ref()) {
+                        Some(v) => v.trim().parse::<i64>().ok(),
+                        None => None,
+                    })
+                    .collect();
+                col.typed::<Int64Type>()
+                    .write_batch(&vals, Some(&def), None)
+                    .map_err(|e| format!("Parquet 写入失败: {e}"))?;
+                col.close().map_err(|e| format!("Parquet 写入失败: {e}"))?;
+            }
+            ColKind::F64 => {
+                let vals: Vec<f64> = rows
+                    .iter()
+                    .filter_map(|r| match r.get(ci).and_then(|c| c.as_ref()) {
+                        Some(v) => v.trim().parse::<f64>().ok(),
+                        None => None,
+                    })
+                    .collect();
+                col.typed::<DoubleType>()
+                    .write_batch(&vals, Some(&def), None)
+                    .map_err(|e| format!("Parquet 写入失败: {e}"))?;
+                col.close().map_err(|e| format!("Parquet 写入失败: {e}"))?;
+            }
+            ColKind::Str => {
+                let vals: Vec<ByteArray> = rows
+                    .iter()
+                    .filter_map(|r| match r.get(ci).and_then(|c| c.as_ref()) {
+                        Some(v) => Some(ByteArray::from(v.clone().into_bytes())),
+                        None => None,
+                    })
+                    .collect();
+                col.typed::<ByteArrayType>()
+                    .write_batch(&vals, Some(&def), None)
+                    .map_err(|e| format!("Parquet 写入失败: {e}"))?;
+                col.close().map_err(|e| format!("Parquet 写入失败: {e}"))?;
+            }
+        }
+    }
+    let _ = rg.close();
+    writer
+        .close()
+        .map_err(|e| format!("Parquet 写入失败: {e}"))?;
+    Ok(n as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,6 +286,29 @@ mod tests {
     use parquet::schema::types::Type as SchemaType;
 
     /// 写一个小 parquet(2 列 × 3 行,含 NULL)再预览——全链路自证
+    #[test]
+    fn export_roundtrip_types_null_chinese() {
+        let dir = std::env::temp_dir().join(format!("sj-pqx-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("out.parquet");
+        let columns = vec!["id".to_string(), "score".to_string(), "name".to_string()];
+        let rows = vec![
+            vec![Some("1".into()), Some("91.5".into()), Some("张三".into())],
+            vec![Some("2".into()), None, Some("lisi".into())],
+            vec![Some("3000000000".into()), Some("72.25".into()), None],
+        ];
+        let n = export_parquet(&columns, &rows, &path).unwrap();
+        assert_eq!(n, 3);
+        let pv = preview(&path, 200).unwrap();
+        assert_eq!(pv.columns, columns);
+        assert_eq!(pv.rows.len(), 3);
+        assert_eq!(pv.rows[0][2].as_deref(), Some("张三"));
+        assert_eq!(pv.rows[1][1], None, "NULL 保真");
+        assert_eq!(pv.rows[2][0].as_deref(), Some("3000000000"), "i64 溢出 i32 的值走 INT64");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn write_then_preview() {
         let dir = std::env::temp_dir().join(format!("sj-pq-{}", std::process::id()));
