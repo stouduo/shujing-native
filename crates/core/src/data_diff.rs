@@ -275,6 +275,7 @@ mod tests {
             color: None,
             read_only: false,
             perm: None,
+            group: None,
             ssh: None,
         };
         svc.save_connection(mk("a", &path_a, "A")).unwrap();
@@ -282,8 +283,8 @@ mod tests {
 
         let pa = path_a.display().to_string();
         let pb = path_b.display().to_string();
-        svc.connect(crate::model::ConnInfo { id: "a".into(), name: "".into(), db_type: crate::model::DbType::Sqlite, host: None, port: None, user: None, password: None, database: None, file_path: Some(pa.clone()), color: None, read_only: false, perm: None, ssh: None }).await.unwrap();
-        svc.connect(crate::model::ConnInfo { id: "b".into(), name: "".into(), db_type: crate::model::DbType::Sqlite, host: None, port: None, user: None, password: None, database: None, file_path: Some(pb.clone()), color: None, read_only: false, perm: None, ssh: None }).await.unwrap();
+        svc.connect(crate::model::ConnInfo { id: "a".into(), name: "".into(), db_type: crate::model::DbType::Sqlite, host: None, port: None, user: None, password: None, database: None, file_path: Some(pa.clone()), color: None, read_only: false, perm: None, group: None, ssh: None }).await.unwrap();
+        svc.connect(crate::model::ConnInfo { id: "b".into(), name: "".into(), db_type: crate::model::DbType::Sqlite, host: None, port: None, user: None, password: None, database: None, file_path: Some(pb.clone()), color: None, read_only: false, perm: None, group: None, ssh: None }).await.unwrap();
 
         svc.run_sql("a", "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, age INT)".into(), None).await.unwrap();
         svc.run_sql("b", "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, age INT)".into(), None).await.unwrap();

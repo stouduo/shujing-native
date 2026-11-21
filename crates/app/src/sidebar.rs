@@ -193,12 +193,61 @@ impl ShujingApp {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let _ = ctx;
                 let conns = self.conns.clone();
-                for c in conns {
-                    let cid = c.id.clone();
-                    ui.push_id(("connblk", &cid), |ui| {
-                    self.draw_conn_block(ui, &cid, &c);
+                // 分组渲染:按 group 分节(可折叠,状态存 egui memory),组内保持保存顺序;
+                // 未分组的连接排在全部组之后,行为与旧版一致
+                let mut sections: Vec<(Option<String>, Vec<&shujing_core::ConnInfo>)> = Vec::new();
+                for c in &conns {
+                    match sections.iter_mut().find(|(g, _)| *g == c.group) {
+                        Some((_, list)) => list.push(c),
+                        None => sections.push((c.group.clone(), vec![c])),
+                    }
+                }
+                sections.sort_by(|a, b| match (&a.0, &b.0) {
+                    (Some(x), Some(y)) => x.cmp(y),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
                 });
-                    ui.add_space(10.0);
+                for (grp, list) in sections {
+                    if let Some(g) = grp {
+                        let key = egui::Id::new(("conn-grp", g.clone()));
+                        let collapsed = ui
+                            .ctx()
+                            .memory(|m| m.data.get_temp::<bool>(key).unwrap_or(false));
+                        let (rect, resp) =
+                            ui.allocate_exact_size(egui::vec2(w, 22.0), egui::Sense::click());
+                        ui.painter().text(
+                            egui::pos2(rect.left() + 8.0, rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            format!(
+                                "{} {} · {}",
+                                if collapsed { "\u{25B8}" } else { "\u{25BE}" },
+                                g,
+                                list.len()
+                            ),
+                            egui::FontId::proportional(10.5),
+                            p.muted,
+                        );
+                        if resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp.clicked() {
+                            ui.ctx().memory_mut(|m| {
+                                let cur = m.data.get_temp::<bool>(key).unwrap_or(false);
+                                m.data.insert_temp(key, !cur);
+                            });
+                        }
+                        if collapsed {
+                            continue;
+                        }
+                    }
+                    for c in list {
+                        let cid = c.id.clone();
+                        ui.push_id(("connblk", &cid), |ui| {
+                            self.draw_conn_block(ui, &cid, c);
+                        });
+                        ui.add_space(10.0);
+                    }
                 }
                 if self.conns.is_empty() {
                     ui.add_space(20.0);

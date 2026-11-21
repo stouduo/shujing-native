@@ -866,6 +866,8 @@ pub struct ConnModal {
     pub test_result: Option<Result<String, String>>,
     /// 权限档位(生产库保护;只读/仅 DML/完整)
     pub perm: shujing_core::Perm,
+    /// 侧栏分组(空 = 不分组)
+    pub group: String,
     /// 标识色板索引
     pub color_idx: Option<u8>,
     /// SSH 隧道开关
@@ -893,6 +895,7 @@ impl ConnModal {
             testing: false,
             test_result: None,
             perm: shujing_core::Perm::Full,
+            group: String::new(),
             color_idx: None,
             ssh_enabled: false,
             ssh_host: String::new(),
@@ -918,6 +921,7 @@ impl ConnModal {
             testing: false,
             test_result: None,
             perm: c.perm(),
+            group: c.group.clone().unwrap_or_default(),
             ssh_enabled: c.ssh.is_some(),
             ssh_host: c.ssh.as_ref().map(|x| x.host.clone()).unwrap_or_default(),
             ssh_port: c

@@ -130,6 +130,7 @@ fn parse_dbeaver_json(text: &str) -> Result<Vec<ConnInfo>, String> {
             color: None,
             read_only: false,
             perm: None,
+            group: None,
             ssh: cfg
                 .get("configuration")
                 .map(|c| {
@@ -269,6 +270,7 @@ fn parse_navicat_ncx(text: &str) -> Result<Vec<ConnInfo>, String> {
             color: None,
             read_only: false,
             perm: None,
+            group: None,
             ssh: xml_attr(tag, "SshHost")
                 .filter(|h| !h.is_empty())
                 .map(|ssh_host| SshConfig {
@@ -383,6 +385,7 @@ mod tests {
             color: None,
             read_only: false,
             perm: None,
+            group: None,
             ssh: None,
         }];
         let imported = vec![ConnInfo {
@@ -398,6 +401,7 @@ mod tests {
             color: None,
             read_only: false,
             perm: None,
+            group: None,
             ssh: None,
         }];
         let (added, skipped) = merge_into(&existing, imported);

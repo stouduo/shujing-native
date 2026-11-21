@@ -126,6 +126,9 @@ pub struct ConnInfo {
     /// None = 旧配置,从 read_only 布尔推断(旧文件无缝兼容)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perm: Option<Perm>,
+    /// 侧栏分组(文件夹);None = 不分组,排在所有组之后
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     /// SSH 隧道:开启后 host/port 指的是"从 SSH 服务器可达"的数据库地址
     #[serde(default)]
     pub ssh: Option<SshConfig>,

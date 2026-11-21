@@ -284,6 +284,7 @@ mod tests {
             color: None,
             read_only: false,
             perm: None,
+            group: None,
             ssh: None,
         };
         let stmts = build_change_stmts(
@@ -327,6 +328,7 @@ fn build_change_stmts_shapes() {
         color: None,
         read_only: false,
         perm: None,
+        group: None,
         ssh: None,
     };
     let updates = vec![crate::edits::CellUpdate {
@@ -362,6 +364,7 @@ mod tx_tests {
             color: None,
             read_only: false,
             perm: None,
+            group: None,
             ssh: None,
         };
         let b = crate::backend::connect(&info, None, None).await.unwrap();

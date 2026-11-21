@@ -93,6 +93,7 @@ async fn main() {
         color: None,
         read_only: false,
         perm: None,
+        group: None,
         ssh: None,
     };
 

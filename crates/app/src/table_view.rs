@@ -5204,6 +5204,22 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
 
             ui.add_space(2.0);
             ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(ui_kit::t!("Group", "分组")).size(11.5).color(p.text2),
+                );
+                theme::field(ui, "conn-group", &mut m.group, 200.0, false);
+                ui.label(
+                    RichText::new(ui_kit::t!(
+                        "Optional; groups connections in the sidebar",
+                        "可选;侧栏按此分组显示"
+                    ))
+                        .size(10.5)
+                        .color(p.muted),
+                );
+            });
+
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
                 if theme::button(ui, ui_kit::t!("Test Connection", "测试连接"), theme::BtnKind::Secondary).clicked() {
                     test = true;
                 }
@@ -5353,6 +5369,10 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
         // 旧布尔字段与新档位保持同步(旧版本读配置仍生效)
         read_only: m.perm == shujing_core::Perm::ReadOnly,
         perm: Some(m.perm),
+        group: {
+            let g = m.group.trim();
+            (!g.is_empty()).then(|| g.to_string())
+        },
         ssh: m.ssh_enabled.then(|| shujing_core::SshConfig {
             host: m.ssh_host.trim().to_string(),
             port: m.ssh_port.trim().parse().unwrap_or(22),

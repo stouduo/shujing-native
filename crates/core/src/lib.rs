@@ -1058,6 +1058,7 @@ mod save_table_tests {
             color: None,
             read_only: false,
             perm: None,
+            group: None,
             ssh: None,
         }
     }
@@ -1160,6 +1161,7 @@ mod tests {
             color: None,
             read_only: false,
             perm: None,
+            group: None,
             ssh: None,
         }
     }
@@ -1427,16 +1429,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(old.perm(), Perm::ReadOnly);
-        // 新配置文件:perm: "dml"
+        assert_eq!(old.group, None, "旧配置无 group 字段");
+        // 新配置文件:perm: "dml" + group
         let new: ConnInfo = serde_json::from_str(
-            r#"{"id":"b","name":"b","dbType":"mysql","perm":"dml"}"#,
+            r#"{"id":"b","name":"b","dbType":"mysql","perm":"dml","group":"生产"}"#,
         )
         .unwrap();
         assert_eq!(new.perm(), Perm::Dml);
+        assert_eq!(new.group.as_deref(), Some("生产"));
         // 新序列化含 perm,且 ReadOnly 时旧布尔同步为 true(旧版本可读)
         let ro = ConnInfo {
             read_only: true,
             perm: Some(Perm::ReadOnly),
+            group: None,
             ..old
         };
         let s = serde_json::to_string(&ro).unwrap();
