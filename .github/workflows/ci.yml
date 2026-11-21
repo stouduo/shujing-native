@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cmake (rdkafka vendored build)
+        run: brew install cmake
+      - name: Test (workspace, full features)
+        run: cargo test --workspace
+      - name: Test lean core (mcp/cli feature set)
+        run: cargo check -p shujing-core --no-default-features -p shujing-cli
+
+  test-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
+      - name: Test (workspace, full features)
+        run: cargo test --workspace
+
+  build-windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check
+        run: cargo check --workspace
