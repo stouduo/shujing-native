@@ -38,6 +38,7 @@ async fn main() {
         file_path: None,
         color: None,
         read_only: false,
+        perm: None,
         ssh: None,
     };
 
@@ -55,7 +56,7 @@ async fn main() {
         .unwrap();
         tokio::spawn(async move { let _ = conn.await; });
         client
-            .batch_execute("TRUNCATE users RESTART IDENTITY; INSERT INTO users (name, age, score, active) VALUES ('张三',28,91.50,true),('李四',34,88.25,false),('王五',NULL,72.00,true),('赵六',19,95.75,true)")
+            .batch_execute("TRUNCATE users RESTART IDENTITY; INSERT INTO users (name, age, score, active) VALUES ('张三',28,91.50,true),('李四',34,88.25,false),('王五',NULL,72.00,true),('赵六',19,95.75,true); CREATE TABLE IF NOT EXISTS big (id INT); INSERT INTO big SELECT generate_series(1,3) WHERE NOT EXISTS (SELECT 1 FROM big)")
             .await
             .unwrap();
     }

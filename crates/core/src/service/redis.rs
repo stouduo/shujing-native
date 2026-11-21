@@ -64,7 +64,7 @@ impl Service {
         let mut guard = live.lock().await;
         match guard.backend {
             crate::model::Backend::Redis(_) => {
-                if guard.info.read_only {
+                if !guard.info.perm().can_dml() {
                     return Err("只读连接不允许写入".into());
                 }
                 crate::redis_ops::stream_xadd(&mut guard.backend, db, key, fields).await
@@ -158,7 +158,7 @@ impl Service {
     pub async fn redis_del(&self, id: &str, db: u8, key: &str) -> Result<u64, String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
-        if guard.info.read_only {
+        if !guard.info.perm().can_dml() {
             return Err("只读连接不允许删除".into());
         }
         redis_ops::del_key(&mut guard.backend, db, key).await

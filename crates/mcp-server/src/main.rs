@@ -182,6 +182,11 @@ async fn call_tool(mcp: &Mcp, name: &str, args: &Value) -> (String, bool) {
                         "id": c.id, "name": c.name,
                         "type": format!("{:?}", c.db_type).to_lowercase(),
                         "host": c.host, "database": c.database,
+                        "perm": match c.perm() {
+                            shujing_core::Perm::ReadOnly => "read_only",
+                            shujing_core::Perm::Dml => "dml",
+                            shujing_core::Perm::Full => "full",
+                        },
                     })
                 })
                 .collect();
@@ -249,6 +254,30 @@ async fn call_tool(mcp: &Mcp, name: &str, args: &Value) -> (String, bool) {
                              DDL(CREATE/DROP/ALTER/TRUNCATE 等)需要 SHUJING_MCP_MODE=high_risk_write"
                                 .into(),
                         );
+                    }
+                    // 连接级权限档位与服务端模式取交集:连接自身更严时按连接
+                    if name == "execute" {
+                        let cp = mcp
+                            .service
+                            .list_saved_connections()
+                            .iter()
+                            .find(|c| c.id == conn || c.name == conn)
+                            .map(|c| c.perm());
+                        match cp {
+                            Some(shujing_core::Perm::ReadOnly) => {
+                                return text_err(format!(
+                                    "连接 {conn} 配置为只读,写语句被拒绝(连接级权限与服务端模式取交集)"
+                                ));
+                            }
+                            Some(shujing_core::Perm::Dml)
+                                if shujing_core::sql_write_kind(sql) != Some("dml") =>
+                            {
+                                return text_err(format!(
+                                    "连接 {conn} 配置为仅 DML,DDL 语句被拒绝(连接级权限与服务端模式取交集)"
+                                ));
+                            }
+                            _ => {}
+                        }
                     }
                     if name == "query"
                         && mcp.mode == "read_only"

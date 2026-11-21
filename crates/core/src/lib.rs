@@ -33,7 +33,7 @@ pub mod store;
 
 pub use search::SearchHit;
 pub use model::{
-    AppState, ColumnDef, ConnInfo, ConnectResult, DbType, ExecResult, IndexDef, LiveConn,
+    AppState, ColumnDef, ConnInfo, ConnectResult, DbType, ExecResult, IndexDef, LiveConn, Perm,
     SessionInfo, SshConfig, TableMeta, TableStructure, is_readonly_redis, is_readonly_sql,
     sql_write_kind,
 };
@@ -325,8 +325,8 @@ impl Service {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
-        if guard.info.read_only {
-            return Err("只读连接不允许建表".into());
+        if !guard.info.perm().can_ddl() {
+            return Err("连接权限不足:建表需要完整权限(DDL)".into());
         }
         let stmts = build_save_table_stmts(&info, database, table, columns, rows)?;
         // 走通用执行臂(复用 run_sql 的事务/方言处理),最后一条 INSERT 影响行数累加
@@ -722,12 +722,22 @@ impl Service {
         if let Some(db) = db.map(str::trim).filter(|s| !s.is_empty()) {
             guard.backend.set_session_db(Some(db));
         }
-        if guard.info.read_only {
-            // 多语句逐条校验:此前只看整体前缀,`SELECT 1; DROP TABLE t` 能绕过
-            let stmts = exec::split_statements(&sql);
-            if stmts.is_empty() || stmts.iter().any(|s| !model::is_readonly_sql(s)) {
-                return Err("只读连接:仅允许 SELECT/SHOW/EXPLAIN/查询型 PRAGMA".into());
+        match guard.info.perm() {
+            model::Perm::ReadOnly => {
+                // 多语句逐条校验:此前只看整体前缀,`SELECT 1; DROP TABLE t` 能绕过
+                let stmts = exec::split_statements(&sql);
+                if stmts.is_empty() || stmts.iter().any(|s| !model::is_readonly_sql(s)) {
+                    return Err("只读连接:仅允许 SELECT/SHOW/EXPLAIN/查询型 PRAGMA".into());
+                }
             }
+            model::Perm::Dml => {
+                // 仅数据操作:DDL(CREATE/DROP/ALTER/TRUNCATE…)拒绝,DML 放行
+                let stmts = exec::split_statements(&sql);
+                if stmts.is_empty() || stmts.iter().any(|s| model::sql_write_kind(s) == Some("ddl")) {
+                    return Err("仅 DML 连接:允许查询与 INSERT/UPDATE/DELETE/REPLACE,DDL 需完整权限".into());
+                }
+            }
+            model::Perm::Full => {}
         }
         let max_rows = max_rows.unwrap_or(exec::DEFAULT_MAX_ROWS);
         match guard
@@ -1016,6 +1026,7 @@ mod save_table_tests {
             file_path: None,
             color: None,
             read_only: false,
+            perm: None,
             ssh: None,
         }
     }
@@ -1102,7 +1113,7 @@ mod tests {
     use crate::model;
     use crate::schema;
     use crate::search;
-    use crate::model::{ConnInfo, DbType};
+    use crate::model::{ConnInfo, DbType, Perm};
 
     fn sqlite_info(path: &str) -> ConnInfo {
         ConnInfo {
@@ -1117,6 +1128,7 @@ mod tests {
             file_path: Some(path.into()),
             color: None,
             read_only: false,
+            perm: None,
             ssh: None,
         }
     }
@@ -1356,5 +1368,110 @@ mod tests {
         assert!(svc.list_saved_connections().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&db);
+    }
+
+    // ── 连接权限三档(批次34) ──
+
+    #[test]
+    fn perm_compat_and_helpers() {
+        let mut c = sqlite_info("perm-compat");
+        assert_eq!(c.perm(), Perm::Full);
+        // 旧配置:只有 read_only 布尔 → 推断
+        c.read_only = true;
+        assert_eq!(c.perm(), Perm::ReadOnly);
+        // 显式 perm 优先于旧布尔
+        c.perm = Some(Perm::Dml);
+        assert_eq!(c.perm(), Perm::Dml);
+        // 档位能力
+        assert!(Perm::Full.can_dml() && Perm::Full.can_ddl());
+        assert!(Perm::Dml.can_dml() && !Perm::Dml.can_ddl());
+        assert!(!Perm::ReadOnly.can_dml() && !Perm::ReadOnly.can_ddl());
+    }
+
+    #[test]
+    fn perm_serde_old_and_new_configs() {
+        // 旧配置文件:无 perm 字段,仅 readOnly
+        let old: ConnInfo = serde_json::from_str(
+            r#"{"id":"a","name":"a","dbType":"mysql","readOnly":true}"#,
+        )
+        .unwrap();
+        assert_eq!(old.perm(), Perm::ReadOnly);
+        // 新配置文件:perm: "dml"
+        let new: ConnInfo = serde_json::from_str(
+            r#"{"id":"b","name":"b","dbType":"mysql","perm":"dml"}"#,
+        )
+        .unwrap();
+        assert_eq!(new.perm(), Perm::Dml);
+        // 新序列化含 perm,且 ReadOnly 时旧布尔同步为 true(旧版本可读)
+        let ro = ConnInfo {
+            read_only: true,
+            perm: Some(Perm::ReadOnly),
+            ..old
+        };
+        let s = serde_json::to_string(&ro).unwrap();
+        assert!(s.contains("\"perm\":\"read_only\""), "{s}");
+        assert!(s.contains("\"readOnly\":true"), "{s}");
+    }
+
+    #[tokio::test]
+    async fn perm_tier_gate_on_sql_exec() {
+        let dir = std::env::temp_dir().join(format!("shujing_native_perm_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = tmp_db("perm");
+        std::fs::write(&path, b"").unwrap();
+        let svc = crate::Service::new(&dir);
+
+        // Full 档建表
+        let mut full = sqlite_info(&path);
+        full.id = "full".into();
+        full.name = "full".into();
+        svc.connect(full.clone()).await.unwrap();
+        svc.run_sql(&full.id, "CREATE TABLE p (id INTEGER PRIMARY KEY, v TEXT)".into(), None)
+            .await
+            .unwrap();
+        svc.disconnect(&full.id).await;
+
+        // DML 档:INSERT 放行,DDL(单条/混入多语句)拒绝
+        let mut dml = sqlite_info(&path);
+        dml.id = "dml".into();
+        dml.name = "dml".into();
+        dml.perm = Some(Perm::Dml);
+        svc.connect(dml.clone()).await.unwrap();
+        svc.run_sql_db(&dml.id, "INSERT INTO p (v) VALUES ('张三')".into(), None, None)
+            .await
+            .unwrap();
+        let e = svc
+            .run_sql_db(&dml.id, "CREATE TABLE q (id INTEGER)".into(), None, None)
+            .await
+            .unwrap_err();
+        assert!(e.contains("DDL"), "应拒 DDL: {e}");
+        // 混入多语句的 DDL 也拦(`INSERT…; DROP TABLE p` 绕过不了)
+        let e2 = svc
+            .run_sql_db(
+                &dml.id,
+                "INSERT INTO p (v) VALUES ('a'); DROP TABLE p".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(e2.contains("DDL"), "多语句混 DDL 应拦: {e2}");
+        svc.disconnect(&dml.id).await;
+
+        // 只读档:INSERT 拒绝
+        let mut ro = sqlite_info(&path);
+        ro.id = "ro".into();
+        ro.name = "ro".into();
+        ro.perm = Some(Perm::ReadOnly);
+        svc.connect(ro.clone()).await.unwrap();
+        let e3 = svc
+            .run_sql_db(&ro.id, "INSERT INTO p (v) VALUES ('x')".into(), None, None)
+            .await
+            .unwrap_err();
+        assert!(e3.contains("只读"), "只读应拒写: {e3}");
+        svc.disconnect(&ro.id).await;
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&path);
     }
 }

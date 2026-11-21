@@ -119,12 +119,47 @@ pub struct ConnInfo {
     /// 侧栏标识色(连接着色)
     #[serde(default)]
     pub color: Option<String>,
-    /// 只读模式:后端强制只放行查询语句
+    /// 只读模式:后端强制只放行查询语句(旧字段;新配置改用 perm,两者保持同步)
     #[serde(default)]
     pub read_only: bool,
+    /// 权限档位:read_only 只读 / dml 仅数据操作 / full 完整。
+    /// None = 旧配置,从 read_only 布尔推断(旧文件无缝兼容)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perm: Option<Perm>,
     /// SSH 隧道:开启后 host/port 指的是"从 SSH 服务器可达"的数据库地址
     #[serde(default)]
     pub ssh: Option<SshConfig>,
+}
+
+/// 连接权限档位(read_only 布尔的超集;与 MCP 服务端三档取交集)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Perm {
+    /// 只读:仅查询(SELECT/SHOW/EXPLAIN/查询型 PRAGMA)
+    ReadOnly,
+    /// 仅数据操作:查询 + INSERT/UPDATE/DELETE/REPLACE;DDL(CREATE/DROP/ALTER/TRUNCATE)拒绝
+    Dml,
+    /// 完整权限:DML + DDL
+    Full,
+}
+
+impl Perm {
+    /// 数据写操作(DML/中间件写/文档写)是否放行
+    pub fn can_dml(self) -> bool {
+        self != Perm::ReadOnly
+    }
+    /// 结构变更(DDL/建表/索引定义)是否放行
+    pub fn can_ddl(self) -> bool {
+        self == Perm::Full
+    }
+}
+
+impl ConnInfo {
+    /// 生效权限:显式 perm 优先;兼容旧配置(仅 read_only=true → ReadOnly)
+    pub fn perm(&self) -> Perm {
+        self.perm
+            .unwrap_or(if self.read_only { Perm::ReadOnly } else { Perm::Full })
+    }
 }
 
 fn ssh_port_default() -> u16 {

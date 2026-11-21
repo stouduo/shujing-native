@@ -800,7 +800,7 @@ pub async fn run_command(
     info: &ConnInfo,
     cmd_text: &str,
 ) -> Result<Vec<String>, String> {
-    if info.db_type == DbType::Redis && info.read_only && !crate::model::is_readonly_redis(cmd_text) {
+    if info.db_type == DbType::Redis && !info.perm().can_dml() && !crate::model::is_readonly_redis(cmd_text) {
         return Err("只读连接:该 Redis 命令被拒绝".into());
     }
     let mut con = get_con(backend).await?;

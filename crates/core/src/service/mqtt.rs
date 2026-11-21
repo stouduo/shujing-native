@@ -23,8 +23,8 @@ impl Service {
     ) -> Result<usize, String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许发布".into());
+        if !guard.info.perm().can_dml() {
+            return Err("连接权限不足:发布消息需要非只读权限".into());
         }
         match &mut guard.backend {
             crate::model::Backend::Mqtt(st) => {

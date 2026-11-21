@@ -26,6 +26,7 @@ async fn run_one(service: &Service, id: &str, db_type: DbType, port: u16, host: 
         file_path: None,
         color: None,
         read_only: false,
+        perm: None,
         ssh: None,
     };
     let tag = format!("{db_type:?}");

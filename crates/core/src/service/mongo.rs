@@ -23,7 +23,10 @@ impl Service {
         collection: &str,
         json: &str,
     ) -> Result<String, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
+        if self.list_saved_connections().iter().any(|c| c.id == id && !c.perm().can_dml()) {
+        return Err("只读连接不允许写入文档".into());
+    }
+    backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::insert_doc(st, database, collection, json).await
         })
     }
@@ -38,7 +41,10 @@ impl Service {
         doc_id: &str,
         json: &str,
     ) -> Result<(), String> {
-        backend_dispatch!(self, id, Mongo(st) => {
+        if self.list_saved_connections().iter().any(|c| c.id == id && !c.perm().can_dml()) {
+        return Err("只读连接不允许写入文档".into());
+    }
+    backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::replace_doc(st, database, collection, doc_id, json).await
         })
     }
@@ -52,7 +58,10 @@ impl Service {
         collection: &str,
         doc_id: &str,
     ) -> Result<(), String> {
-        backend_dispatch!(self, id, Mongo(st) => {
+        if self.list_saved_connections().iter().any(|c| c.id == id && !c.perm().can_dml()) {
+        return Err("只读连接不允许删除文档".into());
+    }
+    backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::delete_doc(st, database, collection, doc_id).await
         })
     }
@@ -83,7 +92,10 @@ impl Service {
         ttl_secs: Option<i64>,
         name: Option<&str>,
     ) -> Result<String, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
+        if self.list_saved_connections().iter().any(|c| c.id == id && !c.perm().can_ddl()) {
+        return Err("连接权限不足:创建索引是结构变更,需要完整权限".into());
+    }
+    backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::create_index(st, database, collection, fields, unique, ttl_secs, name)
                     .await
         })
@@ -98,7 +110,10 @@ impl Service {
         collection: &str,
         name: &str,
     ) -> Result<(), String> {
-        backend_dispatch!(self, id, Mongo(st) => {
+        if self.list_saved_connections().iter().any(|c| c.id == id && !c.perm().can_ddl()) {
+        return Err("连接权限不足:删除索引是结构变更,需要完整权限".into());
+    }
+    backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::drop_index(st, database, collection, name).await
         })
     }
@@ -112,7 +127,10 @@ impl Service {
         collection: &str,
         json: &str,
     ) -> Result<usize, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
+        if self.list_saved_connections().iter().any(|c| c.id == id && !c.perm().can_dml()) {
+        return Err("只读连接不允许导入文档".into());
+    }
+    backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::import_docs(st, database, collection, json).await
         })
     }
@@ -140,7 +158,10 @@ impl Service {
         collection: &str,
         csv_raw: &str,
     ) -> Result<usize, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
+        if self.list_saved_connections().iter().any(|c| c.id == id && !c.perm().can_dml()) {
+        return Err("只读连接不允许导入文档".into());
+    }
+    backend_dispatch!(self, id, Mongo(st) => {
                 crate::mongo::import_docs_csv(st, database, collection, csv_raw).await
         })
     }

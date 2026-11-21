@@ -16,7 +16,7 @@ impl Service {
         if self
             .list_saved_connections()
             .iter()
-            .any(|c| c.id == id && c.read_only)
+            .any(|c| c.id == id && !c.perm().can_dml())
         {
             return Err("只读连接不允许写入".into());
         }
@@ -30,7 +30,7 @@ impl Service {
         if self
             .list_saved_connections()
             .iter()
-            .any(|c| c.id == id && c.read_only)
+            .any(|c| c.id == id && !c.perm().can_dml())
         {
             return Err("只读连接不允许删除".into());
         }

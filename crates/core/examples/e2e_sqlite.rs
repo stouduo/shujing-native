@@ -55,6 +55,7 @@ async fn main() {
         file_path: Some(db_str.clone()),
         color: None,
         read_only: false,
+        perm: None,
         ssh: None,
     };
 

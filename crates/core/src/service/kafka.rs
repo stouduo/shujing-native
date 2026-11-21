@@ -36,8 +36,8 @@ impl Service {
     ) -> Result<(i32, i64), String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许发送".into());
+        if !guard.info.perm().can_dml() {
+            return Err("连接权限不足:发送消息需要非只读权限".into());
         }
         match &mut guard.backend {
             crate::model::Backend::Kafka(st) => {
@@ -58,8 +58,8 @@ impl Service {
     ) -> Result<(), String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许建 topic".into());
+        if !guard.info.perm().can_ddl() {
+            return Err("连接权限不足:建 topic 是结构变更,需要完整权限".into());
         }
         match &mut guard.backend {
             crate::model::Backend::Kafka(st) => {
@@ -74,8 +74,8 @@ impl Service {
     pub async fn kafka_delete_topic(&self, id: &str, name: &str) -> Result<(), String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许删 topic".into());
+        if !guard.info.perm().can_ddl() {
+            return Err("连接权限不足:删 topic 是结构变更,需要完整权限".into());
         }
         match &mut guard.backend {
             crate::model::Backend::Kafka(st) => crate::kafka::delete_topic(st, name).await,

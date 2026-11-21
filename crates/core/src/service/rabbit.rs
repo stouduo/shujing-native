@@ -57,8 +57,8 @@ impl Service {
     ) -> Result<(), String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许发送".into());
+        if !guard.info.perm().can_dml() {
+            return Err("连接权限不足:发送消息需要非只读权限".into());
         }
         match &mut guard.backend {
             crate::model::Backend::Rabbit(st) => {
@@ -73,8 +73,8 @@ impl Service {
     pub async fn rabbit_purge(&self, id: &str, vhost: &str, queue: &str) -> Result<(), String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许清空队列".into());
+        if !guard.info.perm().can_dml() {
+            return Err("连接权限不足:清空队列需要非只读权限".into());
         }
         match &mut guard.backend {
             crate::model::Backend::Rabbit(st) => crate::rabbit::purge_queue(st, vhost, queue).await,

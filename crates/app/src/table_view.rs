@@ -5171,11 +5171,34 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let _ = theme::checkbox(
-                        ui,
-                        &mut m.read_only,
-                        ui_kit::t!("Read-only mode (queries only)", "只读模式(仅允许查询)"),
+                    // 权限三档:完整(DDL+DML)/仅数据操作/只读;旧"只读"复选框升级而来
+                    ui.label(
+                        RichText::new(ui_kit::t!("Permissions", "权限")).size(11.5).color(p.text2),
                     );
+                    egui::ComboBox::from_id_salt("conn-perm")
+                        .width(190.0)
+                        .selected_text(match m.perm {
+                            shujing_core::Perm::ReadOnly => ui_kit::t!("Read-only", "只读"),
+                            shujing_core::Perm::Dml => ui_kit::t!("DML only", "仅 DML"),
+                            shujing_core::Perm::Full => ui_kit::t!("Full", "完整"),
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut m.perm,
+                                shujing_core::Perm::Full,
+                                ui_kit::t!("Full (DDL + DML)", "完整(DDL+DML)"),
+                            );
+                            ui.selectable_value(
+                                &mut m.perm,
+                                shujing_core::Perm::Dml,
+                                ui_kit::t!("Data ops only, no DDL", "仅数据操作(无 DDL)"),
+                            );
+                            ui.selectable_value(
+                                &mut m.perm,
+                                shujing_core::Perm::ReadOnly,
+                                ui_kit::t!("Read-only (queries only)", "只读(仅查询)"),
+                            );
+                        });
                 });
             });
 
@@ -5327,7 +5350,9 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
                     .then(|| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()))
             })
         }),
-        read_only: m.read_only,
+        // 旧布尔字段与新档位保持同步(旧版本读配置仍生效)
+        read_only: m.perm == shujing_core::Perm::ReadOnly,
+        perm: Some(m.perm),
         ssh: m.ssh_enabled.then(|| shujing_core::SshConfig {
             host: m.ssh_host.trim().to_string(),
             port: m.ssh_port.trim().parse().unwrap_or(22),
@@ -5684,7 +5709,7 @@ impl eframe::App for ShujingApp {
                         .conns
                         .iter()
                         .find(|c| c.id == rt.conn_id)
-                        .map(|c| c.read_only)
+                        .map(|c| !c.perm().can_dml())
                         .unwrap_or(false);
                     crate::redis::draw_redis_view(ctx, &tab_id, rt, read_only)
                 }

@@ -292,18 +292,24 @@ impl ShujingApp {
             name_galley.clone(),
             if online { p.text } else { p.text2 },
         );
-        // 名字右侧的徽标链(只读 chip / SQLite 徽标):x 依次右移,避免互相压字
+        // 名字右侧的徽标链(权限 chip / SQLite 徽标):x 依次右移,避免互相压字
         let mut badge_x = rect.left() + 17.0 + name_galley.size().x + 6.0;
-        if c.read_only {
+        let perm = c.perm();
+        if perm != shujing_core::Perm::Full {
+            let (label, width) = if perm == shujing_core::Perm::ReadOnly {
+                (ui_kit::t!("Read-only", "只读"), 34.0)
+            } else {
+                (ui_kit::t!("DML", "DML"), 32.0)
+            };
             let chip = egui::Rect::from_center_size(
                 egui::pos2(badge_x + 17.0, rect.center().y),
-                egui::vec2(34.0, 15.0),
+                egui::vec2(width, 15.0),
             );
             painter.rect_filled(chip, egui::CornerRadius::same(4), theme::tint(AMBER, 40));
             painter.text(
                 chip.center(),
                 egui::Align2::CENTER_CENTER,
-                ui_kit::t!("Read-only", "只读"),
+                label,
                 theme::bold(9.0),
                 AMBER,
             );

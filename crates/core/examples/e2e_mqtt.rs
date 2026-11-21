@@ -31,6 +31,7 @@ async fn main() {
         file_path: None,
         color: None,
         read_only: false,
+        perm: None,
         ssh: None,
     };
 
