@@ -40,6 +40,8 @@ pub use model::{
 use model::CancelState;
 use std::path::PathBuf;
 
+mod service;
+
 /// Service 数据源方法样板收敛(模板方法模式):取连接锁 → match backend 指定变体 →
 /// 执行体,其余变体统一「非 X 连接」。适用于"锁后立即 match"的同形包装;
 /// 含前置逻辑(会话库/只读门/cur_db)的方法保留手写。
@@ -206,11 +208,13 @@ impl Service {
         }
     }
 
+
     pub fn list_saved_connections(&self) -> Vec<ConnInfo> {
         store::load_conns(&self.config_dir)
     }
 
     /// 新增或更新连接,返回保存后的完整列表
+
     pub fn save_connection(&self, info: ConnInfo) -> Result<Vec<ConnInfo>, String> {
         let mut conns = store::load_conns(&self.config_dir);
         conns.retain(|c| c.id != info.id);
@@ -225,6 +229,7 @@ impl Service {
         Ok(conns)
     }
 
+
     pub fn delete_connection(&self, id: &str) -> Result<Vec<ConnInfo>, String> {
         self.state.remove(id);
         self.tunnels
@@ -238,416 +243,7 @@ impl Service {
     }
 
     /// Redis:按模式批量删除(上限 10000)
-    pub async fn redis_delete_by_pattern(
-        &self,
-        id: &str,
-        db: u8,
-        pattern: &str,
-    ) -> Result<u64, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match guard.backend {
-            crate::model::Backend::Redis(_) => {
-                crate::redis_ops::delete_by_pattern(&mut guard.backend, db, pattern).await
-            }
-            _ => Err("非 Redis 连接".into()),
-        }
-    }
 
-    /// Kafka:topic 列表
-    pub async fn kafka_list_topics(&self, id: &str) -> Result<Vec<crate::kafka::TopicInfo>, String> {
-        backend_dispatch!(self, id, Kafka(st) => {
-crate::kafka::list_topics(st).await
-        })
-    }
-
-    /// Kafka:从头浏览消息
-    pub async fn kafka_consume_recent(
-        &self,
-        id: &str,
-        topic: &str,
-        count: usize,
-        timeout_secs: u64,
-    ) -> Result<Vec<crate::kafka::StreamMsg>, String> {
-        backend_dispatch!(self, id, Kafka(st) => {
-                crate::kafka::consume_recent(&st.addr, topic, count, timeout_secs).await
-        })
-    }
-
-    /// Kafka:生产消息
-    pub async fn kafka_produce(
-        &self,
-        id: &str,
-        topic: &str,
-        key: Option<&str>,
-        payload: &str,
-    ) -> Result<(i32, i64), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许发送".into());
-        }
-        match &mut guard.backend {
-            crate::model::Backend::Kafka(st) => {
-                crate::kafka::produce(st, topic, key, payload).await
-            }
-            _ => Err("非 Kafka 连接".into()),
-        }
-    }
-
-    /// Kafka:新建 topic
-    pub async fn kafka_create_topic(
-        &self,
-        id: &str,
-        name: &str,
-        partitions: i32,
-        replication: i32,
-    ) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许建 topic".into());
-        }
-        match &mut guard.backend {
-            crate::model::Backend::Kafka(st) => {
-                crate::kafka::create_topic(st, name, partitions, replication).await
-            }
-            _ => Err("非 Kafka 连接".into()),
-        }
-    }
-
-    /// Kafka:删除 topic(破坏性)
-    pub async fn kafka_delete_topic(&self, id: &str, name: &str) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许删 topic".into());
-        }
-        match &mut guard.backend {
-            crate::model::Backend::Kafka(st) => {
-                crate::kafka::delete_topic(st, name).await
-            }
-            _ => Err("非 Kafka 连接".into()),
-        }
-    }
-
-    /// Redis:服务器 INFO(分区解析)
-    pub async fn redis_server_info(
-        &self,
-        id: &str,
-    ) -> Result<Vec<crate::redis_ops::InfoSection>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match guard.backend {
-            crate::model::Backend::Redis(_) => {
-                crate::redis_ops::server_info(&mut guard.backend).await
-            }
-            _ => Err("非 Redis 连接".into()),
-        }
-    }
-
-    /// Redis:慢日志最近 n 条
-    pub async fn redis_slowlog(
-        &self,
-        id: &str,
-        n: i64,
-    ) -> Result<Vec<crate::redis_ops::SlowEntry>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match guard.backend {
-            crate::model::Backend::Redis(_) => {
-                crate::redis_ops::slowlog(&mut guard.backend, n).await
-            }
-            _ => Err("非 Redis 连接".into()),
-        }
-    }
-
-    /// RabbitMQ:概览
-    pub async fn rabbit_overview(
-        &self,
-        id: &str,
-    ) -> Result<crate::rabbit::RabbitOverview, String> {
-        backend_dispatch!(self, id, Rabbit(st) => {
-crate::rabbit::overview(st).await
-        })
-    }
-
-    /// RabbitMQ:单队列详情(统计准)
-    pub async fn rabbit_queue_detail(
-        &self,
-        id: &str,
-        vhost: &str,
-        queue: &str,
-    ) -> Result<crate::rabbit::RabbitQueue, String> {
-        backend_dispatch!(self, id, Rabbit(st) => {
-                crate::rabbit::queue_detail(st, vhost, queue).await
-        })
-    }
-
-    /// RabbitMQ:队列列表
-    pub async fn rabbit_list_queues(
-        &self,
-        id: &str,
-    ) -> Result<Vec<crate::rabbit::RabbitQueue>, String> {
-        backend_dispatch!(self, id, Rabbit(st) => {
-crate::rabbit::list_queues(st).await
-        })
-    }
-
-    /// RabbitMQ:从队列取回消息(requeue)
-    pub async fn rabbit_get_messages(
-        &self,
-        id: &str,
-        vhost: &str,
-        queue: &str,
-        count: usize,
-    ) -> Result<Vec<crate::rabbit::StreamMsg>, String> {
-        backend_dispatch!(self, id, Rabbit(st) => {
-                crate::rabbit::get_messages(st, vhost, queue, count).await
-        })
-    }
-
-    /// RabbitMQ:发布消息到 exchange(默认交换机+routing_key=队列名)
-    pub async fn rabbit_publish(
-        &self,
-        id: &str,
-        vhost: &str,
-        queue: &str,
-        payload: &str,
-    ) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许发送".into());
-        }
-        match &mut guard.backend {
-            crate::model::Backend::Rabbit(st) => {
-                crate::rabbit::publish(st, vhost, "", queue, payload).await
-            }
-            _ => Err("非 RabbitMQ 连接".into()),
-        }
-    }
-
-    /// MQTT:主题采样浏览(订阅 # secs 秒)
-    pub async fn mqtt_browse(
-        &self,
-        id: &str,
-        secs: u64,
-    ) -> Result<Vec<crate::mqtt::MqttMsg>, String> {
-        backend_dispatch!(self, id, Mqtt(st) => {
-crate::mqtt::browse_snapshot(st, secs).await
-        })
-    }
-
-    /// MQTT:发布一条(可 retain)
-    pub async fn mqtt_publish(
-        &self,
-        id: &str,
-        topic: &str,
-        payload: &str,
-        retain: bool,
-    ) -> Result<usize, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许发布".into());
-        }
-        match &mut guard.backend {
-            crate::model::Backend::Mqtt(st) => {
-                crate::mqtt::publish(st, topic, payload, retain).await
-            }
-            _ => Err("非 MQTT 连接".into()),
-        }
-    }
-
-    /// RabbitMQ:清空队列(破坏性)
-    pub async fn rabbit_purge(&self, id: &str, vhost: &str, queue: &str) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许清空队列".into());
-        }
-        match &mut guard.backend {
-            crate::model::Backend::Rabbit(st) => crate::rabbit::purge_queue(st, vhost, queue).await,
-            _ => Err("非 RabbitMQ 连接".into()),
-        }
-    }
-
-    /// Kafka:消费组列表
-    pub async fn kafka_groups(
-        &self,
-        id: &str,
-    ) -> Result<Vec<crate::kafka::GroupInfo>, String> {
-        backend_dispatch!(self, id, Kafka(st) => {
-crate::kafka::list_groups(st).await
-        })
-    }
-
-    /// Redis:向 stream 追加消息(返回服务端生成的消息 id)
-    pub async fn redis_stream_xadd(
-        &self,
-        id: &str,
-        db: u8,
-        key: &str,
-        fields: &[(String, String)],
-    ) -> Result<String, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match guard.backend {
-            crate::model::Backend::Redis(_) => {
-                if guard.info.read_only {
-                    return Err("只读连接不允许写入".into());
-                }
-                crate::redis_ops::stream_xadd(&mut guard.backend, db, key, fields).await
-            }
-            _ => Err("非 Redis 连接".into()),
-        }
-    }
-
-    /// Redis:stream 消费者组列表
-    pub async fn redis_stream_groups(
-        &self,
-        id: &str,
-        db: u8,
-        key: &str,
-    ) -> Result<Vec<crate::redis_ops::StreamGroup>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match guard.backend {
-            crate::model::Backend::Redis(_) => {
-                crate::redis_ops::stream_groups(&mut guard.backend, db, key).await
-            }
-            _ => Err("非 Redis 连接".into()),
-        }
-    }
-
-    /// Redis:按模式 SCAN 计数(不删)
-    pub async fn redis_scan_count(
-        &self,
-        id: &str,
-        db: u8,
-        pattern: &str,
-    ) -> Result<u64, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        match guard.backend {
-            crate::model::Backend::Redis(_) => {
-                crate::redis_ops::scan_count(&mut guard.backend, db, pattern).await
-            }
-            _ => Err("非 Redis 连接".into()),
-        }
-    }
-
-    /// MongoDB:按 _id 取文档(pretty JSON,编辑器预填)
-    pub async fn mongo_get_doc(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        doc_id: &str,
-    ) -> Result<String, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::get_doc(st, database, collection, doc_id).await
-        })
-    }
-
-    /// MongoDB:插入文档(返回 inserted _id 文本)
-    pub async fn mongo_insert_doc(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        json: &str,
-    ) -> Result<String, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::insert_doc(st, database, collection, json).await
-        })
-    }
-
-    /// MongoDB:替换文档(_id 不可变)
-    pub async fn mongo_replace_doc(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        doc_id: &str,
-        json: &str,
-    ) -> Result<(), String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::replace_doc(st, database, collection, doc_id, json).await
-        })
-    }
-
-    /// MongoDB:删除文档
-    pub async fn mongo_delete_doc(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        doc_id: &str,
-    ) -> Result<(), String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::delete_doc(st, database, collection, doc_id).await
-        })
-    }
-
-    /// MongoDB:列出集合索引
-    pub async fn mongo_list_indexes(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-    ) -> Result<Vec<crate::mongo::IndexInfo>, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::list_indexes(st, database, collection).await
-        })
-    }
-
-    /// MongoDB:创建索引(返回索引名)
-    #[allow(clippy::too_many_arguments)]
-    pub async fn mongo_create_index(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        fields: &[(String, bool)],
-        unique: bool,
-        ttl_secs: Option<i64>,
-        name: Option<&str>,
-    ) -> Result<String, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::create_index(st, database, collection, fields, unique, ttl_secs, name)
-                    .await
-        })
-    }
-
-    /// MongoDB:删除索引
-    pub async fn mongo_drop_index(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        name: &str,
-    ) -> Result<(), String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::drop_index(st, database, collection, name).await
-        })
-    }
-
-    /// MongoDB:批量导入文档(返回成功条数)
-    pub async fn mongo_import_docs(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        json: &str,
-    ) -> Result<usize, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::import_docs(st, database, collection, json).await
-        })
-    }
-
-    /// 服务器会话列表(MySQL/PG)
     pub async fn list_sessions(&self, id: &str) -> Result<Vec<model::SessionInfo>, String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
@@ -655,6 +251,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 终止服务器会话
+
     pub async fn kill_session(&self, id: &str, sid: &str, query_only: bool) -> Result<(), String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
@@ -662,6 +259,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 数据字典导出:全部表的 列/类型/注释/默认/主键 Markdown
+
     pub async fn export_dictionary(
         &self,
         id: &str,
@@ -714,6 +312,7 @@ crate::kafka::list_groups(st).await
 
     /// 查询结果集保存为新表:类型推断建表 + 分批 INSERT(MySQL/PG/SQLite;
     /// ClickHouse 引擎语法不同暂不支持)。返回写入行数
+
     pub async fn save_result_as_table(
         &self,
         id: &str,
@@ -743,60 +342,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// MongoDB:导出集合文档为 JSON 数组文本
-    pub async fn mongo_export_docs(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        max: usize,
-    ) -> Result<(String, bool), String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::export_docs(st, database, collection, max).await
-        })
-    }
 
-    /// MongoDB:批量导入 CSV(首行列名,类型自动推断)
-    pub async fn mongo_import_docs_csv(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        csv_raw: &str,
-    ) -> Result<usize, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::import_docs_csv(st, database, collection, csv_raw).await
-        })
-    }
-
-    /// MongoDB 集合计数(带库上下文)
-    pub async fn mongo_count(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-    ) -> Result<u64, String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::count(st, database, collection).await
-        })
-    }
-
-    /// MongoDB 采样浏览:返回(列,行)展平网格
-    pub async fn mongo_sample(
-        &self,
-        id: &str,
-        database: Option<&str>,
-        collection: &str,
-        filter_json: Option<&str>,
-        limit: usize,
-        offset: u64,
-    ) -> Result<(Vec<String>, Vec<Vec<Option<String>>>), String> {
-        backend_dispatch!(self, id, Mongo(st) => {
-                crate::mongo::sample(st, database, collection, filter_json, limit, offset)
-                    .await
-        })
-    }
-
-    /// 按 id 连接(从已保存配置查找;MCP/脚本场景)。已在线直接复用
     pub async fn connect_by_id(&self, id: &str) -> Result<(), String> {
         if self.state.live(id).is_some() {
             return Ok(());
@@ -808,6 +354,7 @@ crate::kafka::list_groups(st).await
             .ok_or_else(|| format!("连接不存在: {id}"))?;
         self.connect(info).await.map(|_| ())
     }
+
 
     pub async fn test_connection(info: ConnInfo) -> Result<ConnectResult, String> {
         let mut endpoint = info.clone();
@@ -839,6 +386,7 @@ crate::kafka::list_groups(st).await
         Ok(ConnectResult { version })
     }
 
+
     pub async fn connect(&self, info: ConnInfo) -> Result<ConnectResult, String> {
         let mut endpoint = info.clone();
         if let Some(ssh_cfg) = info.ssh.clone() {
@@ -866,6 +414,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 确保该连接的隧道可用:同配置且存活→复用;否则(重)建。返回本地端口
+
     async fn ensure_tunnel(
         &self,
         id: &str,
@@ -912,6 +461,7 @@ crate::kafka::list_groups(st).await
         Ok(port)
     }
 
+
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
         // 直接移出连接表,引用清零后 TCP 连接随之关闭;隧道一并关闭
         self.state.remove(id);
@@ -923,6 +473,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 列出服务器上所有数据库
+
     pub async fn list_databases(&self, id: &str) -> Result<Vec<String>, String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
@@ -931,6 +482,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 列出指定数据库中的表
+
     pub async fn list_tables(
         &self,
         id: &str,
@@ -945,12 +497,14 @@ crate::kafka::list_groups(st).await
             .await
     }
 
+
     pub async fn list_tables_legacy(&self, id: &str) -> Result<Vec<TableMeta>, String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
         guard.backend.list_tables(&info).await
     }
+
 
     pub async fn get_table_structure(
         &self,
@@ -967,6 +521,7 @@ crate::kafka::list_groups(st).await
             .await
     }
 
+
     pub async fn list_foreign_keys(
         &self,
         id: &str,
@@ -981,11 +536,13 @@ crate::kafka::list_groups(st).await
             .await
     }
 
+
     pub async fn count_rows(&self, id: &str, table: &str) -> Result<u64, String> {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         guard.backend.count_rows(table).await
     }
+
 
     pub async fn get_object_ddl(
         &self,
@@ -999,6 +556,7 @@ crate::kafka::list_groups(st).await
         let info = guard.info.clone();
         schema::object_ddl(&mut guard.backend, &info, database.as_deref(), kind, name).await
     }
+
 
     pub async fn search_all_tables(
         &self,
@@ -1019,6 +577,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 全库对象搜索:遍历连接上全部非系统库逐库搜(MySQL/PG 多库;其余单库退化)
+
     pub async fn search_all_databases(
         &self,
         id: &str,
@@ -1061,6 +620,7 @@ crate::kafka::list_groups(st).await
         Ok(hits)
     }
 
+
     pub async fn apply_changes(
         &self,
         id: &str,
@@ -1086,6 +646,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 判断错误是否为连接失效(空闲超时/网络中断等),可尝试重连
+
     fn is_dead_conn(e: &str) -> bool {
         let s = e.to_lowercase();
         const KEYS: &[&str] = &[
@@ -1105,6 +666,7 @@ crate::kafka::list_groups(st).await
     /// 执行 SQL,返回多结果集(PostgreSQL 完整支持;MySQL/SQLite 返回第一个结果集)。
     /// 含只读拦截与断线自动重连。
     /// 供 composite 等组合模块直接执行原始 SQL
+
     pub async fn run_sql_standalone(
         service: &Service,
         info: &ConnInfo,
@@ -1112,6 +674,7 @@ crate::kafka::list_groups(st).await
     ) -> Result<Vec<crate::ExecResult>, String> {
         service.run_sql(&info.id, sql.to_string(), None).await
     }
+
 
     pub async fn run_sql(
         &self,
@@ -1124,6 +687,7 @@ crate::kafka::list_groups(st).await
 
     /// 带会话库的执行:库上下文在同一把连接锁内设置并生效,
     /// 避免多个查询标签并发时"先 USE 后执行"两步被交错到错误的库
+
     pub async fn run_sql_db(
         &self,
         id: &str,
@@ -1198,6 +762,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 取消当前正在执行的查询(MySQL KILL QUERY / PG pg_cancel_backend)
+
     pub async fn cancel_query(&self, id: &str) -> Result<(), String> {
         let entry = self.state.cancel(id).ok_or("连接未建立或已断开")?;
         let db_type = entry.db_type;
@@ -1268,6 +833,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 构建单表 SQL 文本(结构 + 可选数据)
+
     async fn build_table_dump(
         &self,
         backend: &mut model::Backend,
@@ -1376,6 +942,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 导出整表 SQL(结构 + 可选数据)。返回 (SQL 文本, 导出行数)
+
     pub async fn export_table_sql(
         &self,
         id: &str,
@@ -1391,6 +958,7 @@ crate::kafka::list_groups(st).await
     }
 
     /// 导出整个数据库 SQL(所有表,结构 + 可选数据)
+
     pub async fn export_database_sql(
         &self,
         id: &str,
@@ -1421,152 +989,8 @@ crate::kafka::list_groups(st).await
         Ok((out, exported))
     }
 
-    // ── Redis ────────────────────────────────────────────
-
-    pub async fn redis_scan(
-        &self,
-        id: &str,
-        db: u8,
-        pattern: &str,
-        cursor: u64,
-        count: usize,
-    ) -> Result<(u64, Vec<String>), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        redis_ops::scan_keys(&mut guard.backend, db, pattern, cursor, count).await
-    }
-
-    pub async fn redis_key_detail(
-        &self,
-        id: &str,
-        db: u8,
-        key: &str,
-    ) -> Result<redis_ops::RedisDetail, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        redis_ops::key_detail(&mut guard.backend, db, key).await
-    }
-
-    /// Redis 详情追加一页(list/zset 分页)
-    pub async fn redis_key_detail_more(
-        &self,
-        id: &str,
-        db: u8,
-        key: &str,
-        offset: usize,
-    ) -> Result<redis_ops::RedisDetail, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        redis_ops::key_detail_page(&mut guard.backend, db, key, offset).await
-    }
-
-    pub async fn redis_key_types(
-        &self,
-        id: &str,
-        db: u8,
-        keys: &[String],
-    ) -> Result<Vec<String>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        redis_ops::key_types(&mut guard.backend, db, keys).await
-    }
-
-    pub async fn redis_del(&self, id: &str, db: u8, key: &str) -> Result<u64, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许删除".into());
-        }
-        redis_ops::del_key(&mut guard.backend, db, key).await
-    }
-
-    pub async fn redis_set(&self, id: &str, db: u8, key: &str, value: &str) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许写入".into());
-        }
-        redis_ops::set_string(&mut guard.backend, db, key, value, true).await
-    }
-
-    pub async fn redis_set_ttl(&self, id: &str, db: u8, key: &str, seconds: i64) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许修改 TTL".into());
-        }
-        redis_ops::set_ttl(&mut guard.backend, db, key, seconds).await
-    }
-
-    pub async fn redis_rename(&self, id: &str, db: u8, key: &str, new_key: &str) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许重命名".into());
-        }
-        redis_ops::rename(&mut guard.backend, db, key, new_key).await
-    }
-
-    pub async fn redis_ttl_batch(&self, id: &str, db: u8, keys: &[String]) -> Result<Vec<i64>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        redis_ops::ttl_batch(&mut guard.backend, db, keys).await
-    }
-
-    pub async fn redis_new_key(
-        &self,
-        id: &str,
-        db: u8,
-        key: &str,
-        key_type: &str,
-        text: &str,
-        pairs: &[(String, String)],
-    ) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许新建".into());
-        }
-        redis_ops::new_key(&mut guard.backend, db, key, key_type, text, pairs).await
-    }
-
-    pub async fn redis_member_op(
-        &self,
-        id: &str,
-        db: u8,
-        key: &str,
-        key_type: &str,
-        op: &str,
-        member: &str,
-        extra: &str,
-    ) -> Result<(), String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        if guard.info.read_only {
-            return Err("只读连接不允许修改".into());
-        }
-        redis_ops::member_op(&mut guard.backend, db, key, key_type, op, member, extra).await
-    }
-
-    pub async fn redis_analyze(
-        &self,
-        id: &str,
-        db: u8,
-        sample: usize,
-        mode: &str,
-    ) -> Result<Vec<redis_ops::KeyStat>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        redis_ops::analyze(&mut guard.backend, db, sample.min(20000), mode).await
-    }
-
-    pub async fn redis_run(&self, id: &str, command: &str) -> Result<Vec<String>, String> {
-        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
-        let mut guard = live.lock().await;
-        let info = guard.info.clone();
-        redis_ops::run_command(&mut guard.backend, &info, command).await
-    }
 }
+
 
 #[cfg(test)]
 mod save_table_tests {
