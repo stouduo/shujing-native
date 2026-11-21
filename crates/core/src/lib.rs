@@ -717,6 +717,9 @@ impl Service {
         let live = self.state.live(id).ok_or("连接未建立或已断开")?;
         let mut guard = live.lock().await;
         let info = guard.info.clone();
+        if !info.perm().can_dml() {
+            return Err("连接权限不足:表格回写需要 DML 及以上权限".into());
+        }
         edits::apply_changes(
             &mut guard.backend,
             &info,
@@ -1575,6 +1578,58 @@ mod tests {
             .unwrap_err();
         assert!(e3.contains("只读"), "只读应拒写: {e3}");
         svc.disconnect(&ro.id).await;
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn perm_gate_on_apply_changes() {
+        // 表格回写(cell 编辑)同样受权限门禁:只读拒绝,DML 放行
+        let dir = std::env::temp_dir().join(format!("shujing_native_perm_ac_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = tmp_db("perm_ac");
+        std::fs::write(&path, b"").unwrap();
+        let svc = crate::Service::new(&dir);
+
+        let mut full = sqlite_info(&path);
+        full.id = "full-ac".into();
+        full.name = "full-ac".into();
+        svc.connect(full.clone()).await.unwrap();
+        svc.run_sql(&full.id, "CREATE TABLE ac (id INTEGER PRIMARY KEY, v TEXT)".into(), None)
+            .await
+            .unwrap();
+        svc.run_sql(&full.id, "INSERT INTO ac VALUES (1, 'a')".into(), None)
+            .await
+            .unwrap();
+        svc.disconnect(&full.id).await;
+
+        // 只读档:单元格回写拒绝
+        let mut ro = sqlite_info(&path);
+        ro.id = "ro-ac".into();
+        ro.name = "ro-ac".into();
+        ro.perm = Some(Perm::ReadOnly);
+        svc.connect(ro.clone()).await.unwrap();
+        let upd = vec![crate::edits::CellUpdate {
+            pk: vec![("id".into(), "1".into())],
+            sets: vec![("v".into(), Some("改".into()))],
+        }];
+        let e = svc
+            .apply_changes(&ro.id, "ac", None, &upd, &[], &[])
+            .await
+            .unwrap_err();
+        assert!(e.contains("权限不足"), "只读应拒回写: {e}");
+
+        // DML 档:回写放行
+        let mut dml = sqlite_info(&path);
+        dml.id = "dml-ac".into();
+        dml.name = "dml-ac".into();
+        dml.perm = Some(Perm::Dml);
+        svc.connect(dml.clone()).await.unwrap();
+        svc.apply_changes(&dml.id, "ac", None, &upd, &[], &[])
+            .await
+            .unwrap();
+        svc.disconnect(&dml.id).await;
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&path);

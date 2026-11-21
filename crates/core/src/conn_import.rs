@@ -294,28 +294,22 @@ fn parse_navicat_ncx(text: &str) -> Result<Vec<ConnInfo>, String> {
     Ok(out)
 }
 
-/// 合并导入:按 (类型,名称) 去重,已存在的同名同型连接跳过。返回 (新增数, 跳过数)
-pub fn merge_into(existing: &[ConnInfo], imported: Vec<ConnInfo>) -> (usize, usize) {
-    let mut added = 0;
+/// 合并导入:按稳定 id 与 (类型,名称) 去重,已存在的连接及批次内重复一律跳过。
+/// 返回 (应新增的连接, 跳过数)
+pub fn merge_into(existing: &[ConnInfo], imported: Vec<ConnInfo>) -> (Vec<ConnInfo>, usize) {
+    let is_dup = |e: &ConnInfo, c: &ConnInfo| {
+        e.id == c.id || (e.db_type == c.db_type && e.name == c.name)
+    };
+    let mut kept = Vec::new();
     let mut skipped = 0;
-    let mut result = existing.to_vec();
     for c in imported {
-        let dup = existing
-            .iter()
-            .any(|e| e.db_type == c.db_type && e.name == c.name)
-            || result
-                .iter()
-                .any(|e| e.id == c.id && e.id != c.id && e.db_type == c.db_type);
-        if dup {
+        if existing.iter().any(|e| is_dup(e, &c)) || kept.iter().any(|e| is_dup(e, &c)) {
             skipped += 1;
             continue;
         }
-        result.push(c);
-        added += 1;
+        kept.push(c);
     }
-    // 通过回写 existing 长度语义传结果:调用方需要完整列表,这里返回列表由调用方组装
-    let _ = result;
-    (added, skipped)
+    (kept, skipped)
 }
 
 #[cfg(test)]
@@ -409,8 +403,36 @@ mod tests {
             plugin: None,
             ssh: None,
         }];
-        let (added, skipped) = merge_into(&existing, imported);
-        assert_eq!(added, 0);
+        let (kept, skipped) = merge_into(&existing, imported);
+        assert_eq!(kept.len(), 0);
         assert_eq!(skipped, 1);
+    }
+
+    #[test]
+    fn merge_dedups_within_batch() {
+        let mk = |name: &str| ConnInfo {
+            id: format!("imp-mysql-{name}"),
+            name: name.into(),
+            db_type: DbType::MySql,
+            host: Some("h".into()),
+            port: None,
+            user: None,
+            password: None,
+            database: None,
+            file_path: None,
+            color: None,
+            read_only: false,
+            perm: None,
+            group: None,
+            plugin: None,
+            ssh: None,
+        };
+        // 同一文件里两条同名连接(同 id):只保留一条
+        let imported = vec![mk("重复库"), mk("重复库"), mk("新库")];
+        let (kept, skipped) = merge_into(&[], imported);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(skipped, 1);
+        assert_eq!(kept[0].name, "重复库");
+        assert_eq!(kept[1].name, "新库");
     }
 }

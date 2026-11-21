@@ -3761,18 +3761,21 @@ fn tab_click_survives_wobble_and_no_phantom_swap() {
         "拖拽累计不得跨手势残留(松开必须清零),普通点击不得触发换位"
     );
 
-    // 场景 3:无溢出时低带点击(tab 底缘上 3px)带 12px 手抖 → 应激活
-    let low_y = 38.0 - 5.0 - 3.0; // 面板 top margin 5,条高 33,底缘上 3px
-    let active_before2 = harness.state().active_tab;
-    let _ = active_before2;
-    wobble_click(&mut harness, 550.0, low_y, 12.0);
-    assert!(
-        harness.state().active_tab != 2 || true,
-        "占位(低带目标标签索引取决于布局)"
+    // 场景 3:无溢出时低带点击(tab 底缘上 3px = y35,在 × 区 y≤32.5 之外)带 12px
+    // 手抖 → 应激活 tab1;不得误触右侧 × 关闭区(× 为 22×22 居中矩形),不得换位
+    let low_y = 5.0 + (ui_kit::theme::TABBAR_H - 5.0) - 3.0; // 条顶 5 + 条高 33 - 3 = 底缘上 3px
+    let order_low = titles(&harness);
+    wobble_click(&mut harness, 430.0, low_y, 12.0);
+    assert_eq!(
+        harness.state().active_tab, 1,
+        "低带 12px 手抖点击应激活目标标签(tab1)"
+    );
+    assert_eq!(
+        titles(&harness), order_low,
+        "低带点击不得误触 × 关闭区(此前 y=30 落在 × 纵向范围内把标签点没了)"
     );
 
     // 场景 4(核心回归):大幅拖拽(60px)仍是换位而非点击
-    let active_pre = harness.state().active_tab;
     let order_pre = titles(&harness);
     harness
         .input_mut()
@@ -3806,7 +3809,6 @@ fn tab_click_survives_wobble_and_no_phantom_swap() {
         order_pre,
         "60px 水平拖拽应触发换位(不因手势层放宽而吞掉拖拽)"
     );
-    let _ = active_pre;
 }
 
 /// 回归:双击重命名已删——快连点两下(300ms 双击窗内)必须照常切换标签,

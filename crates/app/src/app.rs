@@ -3995,17 +3995,9 @@ impl ShujingApp {
             }
         };
         let existing = self.service.list_saved_connections();
-        let (added, skipped) =
-            shujing_core::conn_import::merge_into(&existing, imported.clone());
-        let mut new_conns: Vec<shujing_core::ConnInfo> = Vec::new();
-        for c in &imported {
-            let dup = existing
-                .iter()
-                .any(|e| e.db_type == c.db_type && e.name == c.name);
-            if !dup {
-                new_conns.push(c.clone());
-            }
-        }
+        let (new_conns, skipped) =
+            shujing_core::conn_import::merge_into(&existing, imported);
+        let added = new_conns.len();
         for c in new_conns {
             if let Err(e) = self.service.save_connection(c) {
                 self.toast_error(format!(

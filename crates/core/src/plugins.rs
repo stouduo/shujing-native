@@ -668,28 +668,28 @@ impl DriverSession {
         method: &str,
         params: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let mut retried = false;
-        loop {
-            let mut guard = self.agent.lock().await;
-            let Some(agent) = guard.as_mut() else {
-                return Err("驱动插件 agent 无实例".into());
-            };
-            let r = agent.call(method, params).await;
-            let dead = matches!(&r, Err(e) if e.contains("意外退出") || e.contains("进程已退出") || e.contains("写失败"));
-            if !(dead && method != "execute_batch" && !retried) {
-                return r;
-            }
-            // 重启恢复:杀旧 → spawn → 重放 connect → 重发当前请求
-            if let Some(mut old) = guard.take() {
-                old.shutdown().await;
-            }
-            drop(guard);
-            retried = true;
-            let mut fresh = DriverAgent::spawn(&self.plugin).await?;
-            fresh.call("connect", &self.cfg).await?;
-            let r2 = fresh.call(method, params).await;
-            *self.agent.lock().await = Some(fresh);
-            return r2;
+        let mut guard = self.agent.lock().await;
+        let Some(agent) = guard.as_mut() else {
+            return Err("驱动插件 agent 无实例".into());
+        };
+        let r = agent.call(method, params).await;
+        let dead = matches!(&r, Err(e) if e.contains("意外退出") || e.contains("进程已退出") || e.contains("写失败"));
+        if !dead || method == "execute_batch" {
+            return r;
         }
+        // 重启恢复:杀旧 → spawn → 重放 connect → 重发当前请求;
+        // connect 失败也把 fresh 放回——后续调用走同一恢复路径,不再永久"无实例"
+        if let Some(mut old) = guard.take() {
+            old.shutdown().await;
+        }
+        let mut fresh = DriverAgent::spawn(&self.plugin).await?;
+        let connect_result = fresh.call("connect", &self.cfg).await;
+        *guard = Some(fresh);
+        connect_result?;
+        guard
+            .as_mut()
+            .expect("fresh 刚放回") // 重发当前请求(读类,允许重复)
+            .call(method, params)
+            .await
     }
 }

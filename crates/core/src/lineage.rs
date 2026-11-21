@@ -123,43 +123,47 @@ fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '$'
 }
 
-/// 词边界查找(大小写不敏感);返回匹配起点
+/// 词边界查找(大小写不敏感);返回匹配起点的字节偏移(中文等多字节安全)
 fn find_word(s: &str, word: &str) -> Option<usize> {
-    let low: Vec<char> = s.to_ascii_lowercase().chars().collect();
-    let w: Vec<char> = word.chars().collect();
-    let mut i = 0;
-    while i + w.len() <= low.len() {
-        if low[i..i + w.len()] == w[..] {
-            let before_ok = i == 0 || !is_word_char(low[i - 1]);
-            let after_ok = i + w.len() == low.len() || !is_word_char(low[i + w.len()]);
+    let low = s.to_ascii_lowercase();
+    let w: Vec<char> = word.to_ascii_lowercase().chars().collect();
+    let idxs: Vec<(usize, char)> = low.char_indices().collect();
+    for k in 0..idxs.len() {
+        if k + w.len() > idxs.len() {
+            break;
+        }
+        if idxs[k..k + w.len()].iter().map(|(_, c)| *c).eq(w.iter().copied()) {
+            let before_ok = k == 0 || !is_word_char(idxs[k - 1].1);
+            let after_ok = k + w.len() == idxs.len() || !is_word_char(idxs[k + w.len()].1);
             if before_ok && after_ok {
-                return Some(i);
+                return Some(idxs[k].0);
             }
         }
-        i += 1;
     }
     None
 }
 
-/// 括号深度 0 的词查找(子查询内部的 FROM/JOIN/limit 不干扰主查询定位)
+/// 括号深度 0 的词查找(子查询内部的 FROM/JOIN/limit 不干扰主查询定位);返回字节偏移
 fn find_top_word(s: &str, word: &str) -> Option<usize> {
-    let chars: Vec<char> = s.chars().collect();
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let target = word.to_ascii_lowercase();
     let mut depth = 0i32;
     let mut i = 0;
     while i < chars.len() {
-        match chars[i] {
+        match chars[i].1 {
             '(' => depth += 1,
             ')' => depth -= 1,
             _ => {}
         }
-        if depth == 0 && is_word_char(chars[i]) {
+        if depth == 0 && is_word_char(chars[i].1) {
             let start = i;
-            while i < chars.len() && is_word_char(chars[i]) {
+            let start_byte = chars[i].0;
+            while i < chars.len() && is_word_char(chars[i].1) {
                 i += 1;
             }
-            let w: String = chars[start..i].iter().collect::<String>().to_ascii_lowercase();
-            if w == word.to_ascii_lowercase() {
-                return Some(start);
+            let w: String = chars[start..i].iter().map(|(_, c)| c).collect::<String>().to_ascii_lowercase();
+            if w == target {
+                return Some(start_byte);
             }
             continue;
         }
@@ -186,46 +190,63 @@ fn has_subquery(text: &str) -> bool {
     false
 }
 
-/// 从 open_idx 处的 '(' 开始取平衡括号内容;返回 (内部文本, 闭括号后位置)
+/// 从 open_idx(字节偏移)处的 '(' 开始取平衡括号内容;返回 (内部文本, 闭括号后字节偏移)
 fn balanced_span(s: &str, open_idx: usize) -> Option<(String, usize)> {
-    let chars: Vec<char> = s.chars().collect();
-    if open_idx >= chars.len() || chars[open_idx] != '(' {
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let mut k = 0;
+    while k < chars.len() && chars[k].0 < open_idx {
+        k += 1;
+    }
+    if k >= chars.len() || chars[k].1 != '(' {
         return None;
     }
+    let open_byte = chars[k].0;
     let mut depth = 0i32;
-    let mut i = open_idx;
-    while i < chars.len() {
-        match chars[i] {
+    while k < chars.len() {
+        match chars[k].1 {
             '(' => depth += 1,
             ')' => {
                 depth -= 1;
                 if depth == 0 {
-                    let inner: String = chars[open_idx + 1..i].iter().collect();
-                    return Some((inner, i + 1));
+                    let close_byte = chars[k].0;
+                    let inner = s[open_byte + 1..close_byte].to_string();
+                    return Some((inner, close_byte + ')'.len_utf8()));
                 }
             }
             _ => {}
         }
-        i += 1;
+        k += 1;
     }
     None
 }
 
+/// 跳过空白;入参与返回值均为字节偏移
 fn skip_ws(s: &str, mut i: usize) -> usize {
-    let chars: Vec<char> = s.chars().collect();
-    while i < chars.len() && chars[i].is_whitespace() {
-        i += 1;
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let mut k = 0;
+    while k < chars.len() && chars[k].0 < i {
+        k += 1;
     }
-    i
+    while k < chars.len() && chars[k].1.is_whitespace() {
+        k += 1;
+    }
+    chars.get(k).map(|(b, _)| *b).unwrap_or(s.len())
 }
 
+/// 从 i(字节偏移)读一个词;返回 (词, 词后字节偏移)
 fn read_word(s: &str, mut i: usize) -> (String, usize) {
-    let chars: Vec<char> = s.chars().collect();
-    let start = i;
-    while i < chars.len() && is_word_char(chars[i]) {
-        i += 1;
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let mut k = 0;
+    while k < chars.len() && chars[k].0 < i {
+        k += 1;
     }
-    (chars[start..i].iter().collect(), i)
+    let start = k;
+    while k < chars.len() && is_word_char(chars[k].1) {
+        k += 1;
+    }
+    let word: String = chars[start..k].iter().map(|(_, c)| c).collect();
+    let end_byte = chars.get(k).map(|(b, _)| *b).unwrap_or(s.len());
+    (word, end_byte)
 }
 
 // ---------------------------------------------------------------- 表/来源
@@ -421,7 +442,7 @@ pub fn analyze_with(sql: &str, depth: u32) -> Result<Vec<ColLineage>, LineageErr
             if find_word(&s[i..], "as").map(|p| p == 0).unwrap_or(false) {
                 i = skip_ws(&s, i + 2);
             }
-            if i >= s.len() || s.chars().nth(i) != Some('(') {
+            if i >= s.len() || s.as_bytes()[i] != b'(' {
                 return Err(LineageError("WITH 解析失败(缺括号定义)".into()));
             }
             let Some((body, after)) = balanced_span(&s, i) else {
@@ -430,7 +451,7 @@ pub fn analyze_with(sql: &str, depth: u32) -> Result<Vec<ColLineage>, LineageErr
             let lin = analyze_with(&body, depth + 1)?;
             cte_maps.push((name, lin));
             i = skip_ws(&s, after);
-            if s.chars().nth(i) == Some(',') {
+            if s.as_bytes().get(i) == Some(&b',') {
                 i += 1;
                 continue;
             }
@@ -628,5 +649,47 @@ mod tests {
         // 三层 CTE 套娃:超出 MAX_DEPTH=2 → 诚实降级
         let sql = "WITH a AS (WITH b AS (WITH c AS (SELECT 1 AS x) SELECT * FROM c) SELECT * FROM b) SELECT * FROM a";
         assert!(analyze(sql).is_err());
+    }
+
+    // ── 中文/多字节 SQL:此前 char 索引混用字节切片会 panic ──
+
+    #[test]
+    fn chinese_alias_as() {
+        let r = analyze("SELECT 姓名 AS n, 年龄 FROM users").unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].output, "n");
+        assert_eq!(r[0].source, "users.姓名");
+        assert_eq!(r[1].output, "年龄");
+        assert_eq!(r[1].source, "users.年龄");
+    }
+
+    #[test]
+    fn chinese_cte_name() {
+        let r = analyze(
+            "WITH 订单 AS (SELECT id, name FROM users) SELECT name FROM 订单",
+        )
+        .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].source, "users.name");
+    }
+
+    #[test]
+    fn chinese_join_alias_on_clause() {
+        let r = analyze(
+            "SELECT u.姓名 FROM users u JOIN 订单表 o ON o.uid = u.id WHERE u.姓名 = '张三'",
+        )
+        .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].output, "姓名");
+        assert_eq!(r[0].source, "users.姓名");
+    }
+
+    #[test]
+    fn chinese_where_keyword_located() {
+        // 中文在 SELECT 清单里,顶层 where 仍按字节偏移正确定位
+        let r = analyze("SELECT 姓名, 备注 FROM 用户表 WHERE 年龄 > 18").unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].source, "用户表.姓名");
+        assert_eq!(r[1].source, "用户表.备注");
     }
 }
