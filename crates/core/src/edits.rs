@@ -389,6 +389,7 @@ mod tx_tests {
             "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, age INT, UNIQUE(name))",
             100,
             None,
+            None,
         )
         .await
         .unwrap();

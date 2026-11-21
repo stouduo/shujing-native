@@ -1204,10 +1204,10 @@ mod tests {
         let info = sqlite_info(&path);
         let mut b = backend::connect(&info, None, None).await.unwrap();
 
-        b.run_sql("CREATE TABLE t1 (id INTEGER PRIMARY KEY, name TEXT, age INT)", 100, None)
+        b.run_sql("CREATE TABLE t1 (id INTEGER PRIMARY KEY, name TEXT, age INT)", 100, None, None)
             .await
             .unwrap();
-        b.run_sql("CREATE INDEX idx_name ON t1(name)", 100, None).await.unwrap();
+        b.run_sql("CREATE INDEX idx_name ON t1(name)", 100, None, None).await.unwrap();
         let r = b.run_one(
             "INSERT INTO t1 (name, age) VALUES ('alice', 30), ('bob', 25), ('carol', NULL)",
             100,
@@ -1267,7 +1267,7 @@ mod tests {
         assert_eq!(r.rows.len(), 1);
         assert!(r.truncated);
 
-        b.run_sql("CREATE TABLE nopk (a TEXT)", 10, None).await.unwrap();
+        b.run_sql("CREATE TABLE nopk (a TEXT)", 10, None, None).await.unwrap();
         let bad = edits::apply_changes(
             &mut b,
             &info,
@@ -1296,6 +1296,7 @@ mod tests {
                 "CREATE TABLE m (x INT);\nINSERT INTO m VALUES (1);\nINSERT INTO m VALUES (2);\nSELECT * FROM m;\nSELECT x + 1 AS nx FROM m WHERE x = 2;",
                 10,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1304,7 +1305,7 @@ mod tests {
         assert_eq!(rs[4].columns, vec!["nx"]);
         assert_eq!(rs[4].rows[0][0].as_deref(), Some("3"));
 
-        let rs = b.run_sql("SELECT 'a;b' AS s", 10, None).await.unwrap();
+        let rs = b.run_sql("SELECT 'a;b' AS s", 10, None, None).await.unwrap();
         assert_eq!(rs.len(), 1);
         assert_eq!(rs[0].rows[0][0].as_deref(), Some("a;b"));
 
@@ -1320,6 +1321,7 @@ mod tests {
             "CREATE TABLE a (id INTEGER PRIMARY KEY);\
              CREATE TABLE b (id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id));",
             10,
+            None,
             None,
         )
         .await
@@ -1343,6 +1345,7 @@ mod tests {
              CREATE TRIGGER trg_t AFTER INSERT ON t BEGIN UPDATE t SET n = n + 1 WHERE id = NEW.id; END;",
             10,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1360,7 +1363,7 @@ mod tests {
         let path = tmp_db("ro");
         let mut info = sqlite_info(&path);
         let mut b = backend::connect(&info, None, None).await.unwrap();
-        b.run_sql("CREATE TABLE r (x INT); INSERT INTO r VALUES (1);", 10, None).await.unwrap();
+        b.run_sql("CREATE TABLE r (x INT); INSERT INTO r VALUES (1);", 10, None, None).await.unwrap();
 
         info.read_only = true;
         assert!(model::is_readonly_sql("select 1"));
@@ -1379,6 +1382,7 @@ mod tests {
         b.run_sql(
             "CREATE TABLE s1 (id INTEGER PRIMARY KEY, name TEXT);             CREATE TABLE s2 (id INTEGER PRIMARY KEY, note TEXT);             INSERT INTO s1 (name) VALUES ('alpha'), ('Beta'), ('gamma');             INSERT INTO s2 (note) VALUES ('ALPHA note'), ('other');",
             20,
+            None,
             None,
         )
         .await
