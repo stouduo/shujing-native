@@ -20,6 +20,7 @@ pub mod conn_import;
 pub mod mongo;
 pub mod mssql;
 pub mod parquet_preview;
+pub mod plugins;
 pub mod schema;
 pub mod data_diff;
 pub mod schema_diff;

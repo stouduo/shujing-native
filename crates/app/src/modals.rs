@@ -2049,6 +2049,132 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     let _ = modal.should_close();
 }
 
+/// 插件处理弹窗:行集 JSON → WASM 插件(fuel 沙箱)→ 输出预览/保存
+pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    let Some(pr) = app.plugin_run.clone() else { return };
+    let p = theme::c();
+    let mut close = false;
+    let mut run = false;
+    let mut save = false;
+    let modal = egui::Modal::new(egui::Id::new("plugin-modal"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(620.0);
+            theme::modal_title(ui, ui_kit::t!("Process with Plugin", "用插件处理结果"));
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "Runs a WASM sandbox plugin (fuel-limited, no I/O) over the current result set as JSON",
+                    "对当前结果集 JSON 运行 WASM 沙箱插件(燃料限额,无任何 IO 权限)"
+                ))
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            ui.add_space(6.0);
+            let ok_plugins: Vec<usize> = (0..pr.plugins.len())
+                .filter(|i| pr.plugins[*i].ok)
+                .collect();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(ui_kit::t!("Plugin", "插件")).size(11.5).color(p.text2));
+                egui::ComboBox::from_id_salt("plugin-sel")
+                    .width(360.0)
+                    .selected_text(if ok_plugins.is_empty() {
+                        ui_kit::t!("(none)", "(无可用插件)").to_string()
+                    } else {
+                        let i = ok_plugins[pr.sel.min(ok_plugins.len() - 1)];
+                        format!("{} v{}", pr.plugins[i].name, pr.plugins[i].version)
+                    })
+                    .show_ui(ui, |ui| {
+                        for (k, i) in ok_plugins.iter().enumerate() {
+                            ui.selectable_value(
+                                &mut app.plugin_run.as_mut().unwrap().sel,
+                                k,
+                                format!("{} v{}", pr.plugins[*i].name, pr.plugins[*i].version),
+                            );
+                        }
+                    });
+                if let Some(i) = ok_plugins.get(pr.sel.min(ok_plugins.len().saturating_sub(1))).copied() {
+                    if !pr.plugins[i].description.is_empty() {
+                        ui.label(
+                            RichText::new(icons::clip(&pr.plugins[i].description, 30))
+                                .size(10.5)
+                                .color(p.muted),
+                        );
+                    }
+                }
+            });
+            ui.label(
+                RichText::new(format!(
+                    "{}: {}",
+                    ui_kit::t!("Input (result set JSON)", "输入(结果集 JSON)"),
+                    icons::clip(&pr.input, 90)
+                ))
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            ui.add_space(6.0);
+            if pr.running {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0).color(p.accent));
+                    ui.label(RichText::new(ui_kit::t!("Running…", "运行中…")).size(11.5).color(p.text2));
+                });
+            } else if let Some(e) = &pr.error {
+                ui.label(RichText::new(icons::clip(e, 110)).size(11.5).color(p.red));
+            } else if let Some(out) = &pr.output {
+                ui.label(RichText::new(ui_kit::t!("Output", "输出")).size(11.0).color(p.muted));
+                egui::ScrollArea::vertical()
+                    .id_salt("plugin-output")
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut out.as_str())
+                                .font(theme::mono(11.0))
+                                .desired_width(600.0)
+                                .interactive(false),
+                        );
+                    });
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(
+                    ui,
+                    if pr.running {
+                        ui_kit::t!("Running…", "运行中…")
+                    } else {
+                        ui_kit::t!("Run Plugin", "运行插件")
+                    },
+                    theme::BtnKind::Primary,
+                )
+                .clicked()
+                {
+                    run = true;
+                }
+                if let Some(out) = pr.output.clone() {
+                    if theme::button(ui, ui_kit::t!("Copy", "复制"), theme::BtnKind::Secondary).clicked() {
+                        ui.output_mut(|o| o.copied_text = out);
+                    }
+                    if theme::button(ui, ui_kit::t!("Save…", "保存…"), theme::BtnKind::Secondary).clicked() {
+                        save = true;
+                    }
+                }
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if run && !pr.running && !pr.plugins.is_empty() {
+        app.run_plugin();
+    }
+    if save {
+        app.save_plugin_output();
+    }
+    if close {
+        if app.plugin_run.as_ref().map(|x| x.running) != Some(true) {
+            app.plugin_run = None;
+        }
+    }
+    let _ = modal.should_close();
+}
+
 pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.transfer.is_none() {
         return;
@@ -3032,6 +3158,39 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     .color(p.text2),
                 );
             });
+            // 插件(WASM 沙箱)
+            ui.add_space(8.0);
+            ui.label(theme::strong(ui_kit::t!("Plugins (WASM)", "插件(WASM)"), 12.5).color(p.text2));
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "Drop plugin folders (plugin.toml + plugin.wasm) into ~/.shujing-native/plugins",
+                    "把插件目录(plugin.toml + plugin.wasm)放入 ~/.shujing-native/plugins"
+                ))
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{}: {}/{}",
+                        ui_kit::t!("Loaded", "已加载"),
+                        app.plugins.ok_count(),
+                        app.plugins.plugins.len()
+                    ))
+                        .size(11.5)
+                        .color(p.text2),
+                );
+                if theme::button(ui, ui_kit::t!("Rescan", "重新扫描"), theme::BtnKind::Secondary).clicked() {
+                    app.reload_plugins();
+                }
+                if theme::button(ui, ui_kit::t!("Open Folder", "打开文件夹"), theme::BtnKind::Secondary).clicked() {
+                    let dir = app.config_dir.join("plugins");
+                    let _ = std::fs::create_dir_all(&dir);
+                    #[cfg(target_os = "macos")]
+                    let _ = std::process::Command::new("open").arg(&dir).spawn();
+                }
+            });
+
             // AI 助手
             ui.add_space(8.0);
             ui.label(theme::strong(ui_kit::t!("AI Assistant", "AI 助手"), 12.5).color(p.text2));

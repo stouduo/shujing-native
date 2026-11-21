@@ -1,0 +1,3 @@
+name = "rows-to-markdown"
+version = "0.1.0"
+description = "把行集 JSON 转成 Markdown 表格"

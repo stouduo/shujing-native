@@ -377,6 +377,19 @@ pub struct TransferState {
     pub error: Option<String>,
 }
 
+/// 插件处理弹窗状态(查询结果 → WASM 插件 → 输出)
+#[derive(Clone)]
+pub struct PluginRunState {
+    pub tab_id: String,
+    /// 行集 JSON 快照 {"columns":[..],"rows":[[..]..]}
+    pub input: String,
+    pub plugins: Vec<shujing_core::plugins::PluginInfo>,
+    pub sel: usize,
+    pub output: Option<String>,
+    pub error: Option<String>,
+    pub running: bool,
+}
+
 /// 备份数据库状态(连接右键;单文件 SQL dump,逐表进度)
 #[derive(Clone)]
 pub struct BackupState {

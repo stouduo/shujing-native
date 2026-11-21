@@ -90,6 +90,9 @@ pub enum BgEvent {
     BackupDone {
         result: Result<(usize, u64, String, u64), String>,
     },
+    PluginDone {
+        result: Result<String, String>,
+    },
     DataDiffDone {
         state: DataDiffState,
         result: Result<shujing_core::data_diff::DataDiff, String>,
@@ -457,6 +460,8 @@ pub struct ShujingApp {
     /// 数据传输弹窗
     pub transfer: Option<TransferState>,
     pub backup: Option<crate::app::BackupState>,
+    pub plugin_run: Option<crate::app::PluginRunState>,
+    pub plugins: std::sync::Arc<shujing_core::plugins::PluginManager>,
     /// 数据对比弹窗
     pub data_diff: Option<DataDiffState>,
     /// 连接备份口令弹窗
@@ -556,6 +561,9 @@ impl ShujingApp {
         #[cfg(target_os = "macos")]
         crate::force_appearance(dark);
         let snippets = std::sync::Arc::new(Self::load_snippets(&config_dir));
+        let plugins = std::sync::Arc::new(shujing_core::plugins::PluginManager::load_all(
+            &config_dir.join("plugins"),
+        ));
         let mut app = Self {
             service,
             config_dir,
@@ -599,6 +607,8 @@ impl ShujingApp {
             mongo_import: None,
             transfer: None,
             backup: None,
+            plugin_run: None,
+            plugins,
             data_diff: None,
             conn_crypto: None,
             update_available: None,
@@ -3193,6 +3203,99 @@ impl ShujingApp {
             let _ = tx.send(BgEvent::BackupDone { result });
         });
     }
+    /// 打开「用插件处理」弹窗:快照当前结果集为行集 JSON
+    pub fn open_plugin_run(&mut self, tab_id: &str) {
+        if self.plugins.ok_count() == 0 {
+            self.toast_error(ui_kit::t!(
+                "No plugins installed (put them in ~/.shujing-native/plugins)",
+                "尚未安装插件(放入 ~/.shujing-native/plugins 后重新扫描)"
+            ));
+            return;
+        }
+        let Some(t) = self.tabs.get(self.active_tab) else {
+            self.toast_error(ui_kit::t!("Plugin needs a query result", "插件需要查询结果"));
+            return;
+        };
+        if t.id != tab_id {
+            return;
+        }
+        let TabKind::Query(q) = &t.kind else {
+            self.toast_error(ui_kit::t!("Plugin needs a query result", "插件需要查询结果"));
+            return;
+        };
+        let Some(r) = q.results.get(q.active_set) else {
+            self.toast_error(ui_kit::t!("Plugin needs a query result", "插件需要查询结果"));
+            return;
+        };
+        if r.columns.is_empty() {
+            self.toast_error(ui_kit::t!("Plugin needs a query result", "插件需要查询结果"));
+            return;
+        }
+        let columns = r.columns.clone();
+        let rows = r.rows.clone();
+        let payload = serde_json::json!({ "columns": columns, "rows": rows });
+        self.plugin_run = Some(crate::app::PluginRunState {
+            tab_id: tab_id.to_string(),
+            input: payload.to_string(),
+            plugins: self.plugins.plugins.clone(),
+            sel: 0,
+            output: None,
+            error: None,
+            running: false,
+        });
+    }
+
+    /// 重新扫描插件目录(设置弹窗入口)
+    pub fn reload_plugins(&mut self) {
+        let dir = self.config_dir.join("plugins");
+        self.plugins = std::sync::Arc::new(shujing_core::plugins::PluginManager::load_all(&dir));
+        self.toast_error(format!(
+            "{}: {}/{}",
+            ui_kit::t!("Plugins loaded", "已加载插件"),
+            self.plugins.ok_count(),
+            self.plugins.plugins.len()
+        ));
+    }
+
+    /// 同步入口已在后台线程执行插件(fuel 限额防死循环)
+    pub fn run_plugin(&mut self) {
+        let Some(pr) = self.plugin_run.as_ref() else { return };
+        if pr.running || pr.plugins.is_empty() {
+            return;
+        }
+        let mgr = self.plugins.clone();
+        let idx = pr.sel;
+        let input = pr.input.clone();
+        self.plugin_run.as_mut().unwrap().running = true;
+        self.plugin_run.as_mut().unwrap().error = None;
+        let tx = self.event_tx.clone();
+        net::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                mgr.transform(idx, &input)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("插件线程失败: {e}")));
+            let _ = tx.send(BgEvent::PluginDone { result });
+        });
+    }
+
+    /// 保存插件输出到 ~/Documents/数镜插件输出/<时间戳>.txt
+    pub fn save_plugin_output(&mut self) {
+        let Some(pr) = self.plugin_run.as_ref() else { return };
+        let Some(out) = pr.output.clone() else { return };
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::path::PathBuf::from(format!("{home}/Documents/数镜插件输出"));
+        let _ = std::fs::create_dir_all(&dir);
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = dir.join(format!("plugin-output-{ts}.txt"));
+        match std::fs::write(&path, out) {
+            Ok(_) => self.toast_error(format!("{}: {}", ui_kit::t!("Saved", "已保存"), path.display())),
+            Err(e) => self.toast_error(format!("{}: {e}", ui_kit::t!("Save failed", "保存失败"))),
+        }
+    }
 
     /// 打开数据对比(源=右键表)
     pub fn open_data_diff(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
@@ -4791,6 +4894,16 @@ impl ShujingApp {
                     if let Some(b) = self.backup.as_mut() {
                         b.running = false;
                         b.result = Some(result);
+                    }
+                    continue;
+                }
+                BgEvent::PluginDone { result } => {
+                    if let Some(pr) = self.plugin_run.as_mut() {
+                        pr.running = false;
+                        match result {
+                            Ok(out) => pr.output = Some(out),
+                            Err(e) => pr.error = Some(e),
+                        }
                     }
                     continue;
                 }

@@ -29,3 +29,4 @@ parquet = { workspace = true }
 redis = { workspace = true }
 rust_xlsxwriter = { workspace = true }
 calamine = { workspace = true }
+wasmi = { workspace = true }

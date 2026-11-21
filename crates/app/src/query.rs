@@ -187,6 +187,19 @@ pub fn draw_query_view(
                             tab_id: tab_id.to_string(),
                         });
                     }
+                    let plg = theme::button(ui, ui_kit::t!("Plugin", "插件"), theme::BtnKind::Secondary);
+                    let plg_clicked = plg.clicked();
+                    if !has_grid {
+                        plg.on_disabled_hover_text(ui_kit::t!(
+                            "Nothing to process in this result set (no grid)",
+                            "当前结果集无可处理内容(无表格)"
+                        ));
+                    }
+                    if has_grid && plg_clicked {
+                        actions.push(TabAction::PluginRun {
+                            tab_id: tab_id.to_string(),
+                        });
+                    }
                     if !is_redis {
                         let ai = theme::button(ui, "AI", theme::BtnKind::Secondary);
                         let ai_clicked = ai.clicked();

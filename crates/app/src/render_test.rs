@@ -173,6 +173,8 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         session_tab: None,
         transfer: None,
         backup: None,
+        plugin_run: None,
+        plugins: std::sync::Arc::new(shujing_core::plugins::PluginManager::load_all(std::path::Path::new("/tmp/definitely-missing-plugins-dir"))),
         data_diff: None,
         conn_crypto: None,
         pending_crypto_path: None,
@@ -1150,6 +1152,31 @@ fn render_modals_visual_sweep2() {
         let mut b = app.borrow_mut();
         draw_app(&mut b, ctx);
         crate::modals::draw_backup_modal(&mut b, ctx);
+    });
+
+    // 3c) 插件处理弹窗(输出态)
+    let mut app = test_app(vec![], 0);
+    app.plugin_run = Some(crate::app::PluginRunState {
+        tab_id: "q1".into(),
+        input: r#"{"columns":["name"],"rows":[["张三"]]}"#.into(),
+        plugins: vec![shujing_core::plugins::PluginInfo {
+            name: "rows-to-markdown".into(),
+            version: "0.1.0".into(),
+            description: "行集转 Markdown".into(),
+            dir: "/tmp".into(),
+            ok: true,
+            err: None,
+        }],
+        sel: 0,
+        output: Some("| name |\n|---|\n| 张三 |".into()),
+        error: None,
+        running: false,
+    });
+    let app = std::cell::RefCell::new(app);
+    render("modal_plugin", 700.0, 560.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_plugin_modal(&mut b, ctx);
     });
 
     // 4) 快速打开(输入过滤态)
