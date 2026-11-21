@@ -172,6 +172,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         kafka_tab: None,
         session_tab: None,
         transfer: None,
+        backup: None,
         data_diff: None,
         conn_crypto: None,
         pending_crypto_path: None,
@@ -1130,6 +1131,25 @@ fn render_modals_visual_sweep2() {
         let mut b = app.borrow_mut();
         draw_app(&mut b, ctx);
         crate::modals::draw_settings_modal(&mut b, ctx);
+    });
+
+    // 3b) 备份弹窗(进行中态)
+    let mut app = test_app(vec![], 0);
+    app.backup = Some(crate::app::BackupState {
+        conn_id: "c1".into(),
+        conn_name: "本地库".into(),
+        db: "main".into(),
+        running: true,
+        done: 2,
+        total: 7,
+        cur_table: "users".into(),
+        result: None,
+    });
+    let app = std::cell::RefCell::new(app);
+    render("modal_backup", 700.0, 560.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_backup_modal(&mut b, ctx);
     });
 
     // 4) 快速打开(输入过滤态)

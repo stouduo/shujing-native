@@ -24,6 +24,7 @@ pub mod schema;
 pub mod data_diff;
 pub mod schema_diff;
 pub mod transfer;
+pub mod backup;
 pub mod ssh;
 mod search;
 pub mod sql_advisor;

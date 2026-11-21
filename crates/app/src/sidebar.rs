@@ -457,6 +457,13 @@ impl ShujingApp {
                     ui.close_menu();
                 }
                 if ui
+                    .button(ui_kit::t!("Backup Database…", "备份数据库…"))
+                    .clicked()
+                {
+                    self.open_backup(conn_id);
+                    ui.close_menu();
+                }
+                if ui
                     .button(ui_kit::t!("Import SQL File…", "导入 SQL 文件…"))
                     .clicked()
                 {

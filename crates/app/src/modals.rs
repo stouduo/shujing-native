@@ -1933,6 +1933,122 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
 }
 
 /// 数据传输弹窗(同类型连接;建表+分批搬运)
+/// 备份数据库弹窗:库输入 + 进度 + 完成统计(打开文件夹)
+pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    let Some(st) = app.backup.clone() else { return };
+    let p = theme::c();
+    let mut close = false;
+    let mut run = false;
+    let mut reveal = st.result.as_ref().and_then(|r| r.as_ref().ok()).map(|(_, _, path, _)| path.clone());
+    let reveal = reveal.clone();
+    let modal = egui::Modal::new(egui::Id::new("backup-modal"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(460.0);
+            theme::modal_title(ui, ui_kit::t!("Backup Database", "备份数据库"));
+            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "Writes a single SQL file (DDL + data INSERTs) to ~/Documents/数镜备份",
+                    "生成单文件 SQL 备份(DDL + 数据 INSERT),保存到 ~/Documents/数镜备份"
+                ))
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            theme::form_field(ui, ui_kit::t!("Connection", "连接"), "backup-conn", &mut st.conn_name.clone(), 430.0, false);
+            let mut db = st.db.clone();
+            theme::form_field(ui, ui_kit::t!("Database", "库"), "backup-db", &mut db, 430.0, false);
+            if db != st.db && !st.running {
+                if let Some(b) = app.backup.as_mut() {
+                    b.db = db;
+                }
+            }
+
+            if st.running {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0).color(p.accent));
+                    ui.label(
+                        RichText::new(format!(
+                            "{} {}/{} · {}",
+                            ui_kit::t!("Backing up", "备份中"),
+                            st.done,
+                            st.total,
+                            st.cur_table
+                        ))
+                            .size(11.5)
+                            .color(p.text2),
+                    );
+                });
+            } else if let Some(res) = &st.result {
+                ui.add_space(4.0);
+                match res {
+                    Ok((tables, rows, path, bytes)) => {
+                        ui.label(
+                            RichText::new(format!(
+                                "✓ {} {} · {} {} · {}",
+                                tables,
+                                ui_kit::t!("tables", "张表"),
+                                rows,
+                                ui_kit::t!("rows", "行"),
+                                crate::app::fmt_bytes(*bytes)
+                            ))
+                                .size(12.0)
+                                .color(p.green),
+                        );
+                        ui.label(
+                            RichText::new(icons::clip(path, 60)).size(10.5).color(p.text2),
+                        );
+                    }
+                    Err(e) => {
+                        ui.label(RichText::new(icons::clip(e, 110)).size(11.5).color(p.red));
+                    }
+                }
+            }
+
+            theme::modal_footer(ui, |ui| {
+                if theme::button(
+                    ui,
+                    if st.running {
+                        ui_kit::t!("Backing up…", "备份中…")
+                    } else if st.result.is_some() {
+                        ui_kit::t!("Backup Again", "再次备份")
+                    } else {
+                        ui_kit::t!("Start Backup", "开始备份")
+                    },
+                    theme::BtnKind::Primary,
+                )
+                .clicked()
+                {
+                    run = true;
+                }
+                if let Some(path) = &reveal {
+                    if theme::button(ui, ui_kit::t!("Reveal in Finder", "打开文件夹"), theme::BtnKind::Secondary)
+                        .clicked()
+                    {
+                        #[cfg(target_os = "macos")]
+                        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+                        #[cfg(not(target_os = "macos"))]
+                        let _ = path;
+                    }
+                }
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if run && !st.running {
+        app.run_backup();
+    }
+    if close {
+        if app.backup.as_ref().map(|b| b.running) != Some(true) {
+            app.backup = None;
+        }
+    }
+    let _ = modal.should_close();
+}
+
 pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.transfer.is_none() {
         return;

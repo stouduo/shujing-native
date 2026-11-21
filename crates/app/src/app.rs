@@ -82,6 +82,14 @@ pub enum BgEvent {
     TransferDone {
         result: Result<(u64, u64), String>,
     },
+    BackupProgress {
+        done: usize,
+        total: usize,
+        table: String,
+    },
+    BackupDone {
+        result: Result<(usize, u64, String, u64), String>,
+    },
     DataDiffDone {
         state: DataDiffState,
         result: Result<shujing_core::data_diff::DataDiff, String>,
@@ -362,6 +370,19 @@ pub enum BgEvent {
 }
 
 /// ⌘P 快速打开
+/// 字节数人性化(备份完成统计)
+pub fn fmt_bytes(n: u64) -> String {
+    if n >= 1024 * 1024 * 1024 {
+        format!("{:.1} GB", n as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if n >= 1024 * 1024 {
+        format!("{:.1} MB", n as f64 / (1024.0 * 1024.0))
+    } else if n >= 1024 {
+        format!("{:.1} KB", n as f64 / 1024.0)
+    } else {
+        format!("{n} B")
+    }
+}
+
 pub struct ShujingApp {
     pub service: Arc<Service>,
     pub config_dir: std::path::PathBuf,
@@ -435,6 +456,7 @@ pub struct ShujingApp {
     pub mongo_import: Option<MongoImportState>,
     /// 数据传输弹窗
     pub transfer: Option<TransferState>,
+    pub backup: Option<crate::app::BackupState>,
     /// 数据对比弹窗
     pub data_diff: Option<DataDiffState>,
     /// 连接备份口令弹窗
@@ -576,6 +598,7 @@ impl ShujingApp {
             save_result_modal: None,
             mongo_import: None,
             transfer: None,
+            backup: None,
             data_diff: None,
             conn_crypto: None,
             update_available: None,
@@ -3108,6 +3131,69 @@ impl ShujingApp {
         });
     }
 
+    /// 打开备份数据库弹窗(SQL 类连接右键入口)
+    pub fn open_backup(&mut self, conn_id: &str) {
+        let Some(c) = self.conns.iter().find(|c| c.id == conn_id) else { return };
+        if !matches!(
+            c.db_type,
+            shujing_core::DbType::MySql | shujing_core::DbType::Postgres | shujing_core::DbType::Sqlite
+        ) {
+            self.toast_error(ui_kit::t!(
+                "Backup supports MySQL/PostgreSQL/SQLite for now",
+                "备份目前支持 MySQL/PostgreSQL/SQLite"
+            ));
+            return;
+        }
+        self.backup = Some(crate::app::BackupState {
+            conn_id: c.id.clone(),
+            conn_name: c.name.clone(),
+            db: c.database.clone().unwrap_or_default(),
+            running: false,
+            done: 0,
+            total: 0,
+            cur_table: String::new(),
+            result: None,
+        });
+    }
+
+    /// 执行备份:逐表 DDL+INSERT 流式写盘,进度走 BgEvent
+    pub fn run_backup(&mut self) {
+        let Some(st) = self.backup.as_ref() else { return };
+        if st.running {
+            return;
+        }
+        let state = st.clone();
+        self.backup.as_mut().unwrap().running = true;
+        self.backup.as_mut().unwrap().result = None;
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let db_trim = state.db.trim().to_string();
+            let db_opt = (!db_trim.is_empty()).then(|| db_trim.clone());
+            let path = shujing_core::backup::default_backup_path(
+                &state.conn_name,
+                &db_trim,
+            );
+            let txp = tx.clone();
+            let result = shujing_core::backup::backup_database(
+                &service,
+                &state.conn_id,
+                db_opt.as_deref(),
+                &path,
+                &|done, total, table| {
+                    let _ = txp.send(BgEvent::BackupProgress {
+                done,
+                total,
+                table: table.to_string(),
+            });
+                },
+            )
+            .await;
+            let result = result.map(|s| (s.tables, s.rows, s.path, s.bytes));
+            let _ = tx.send(BgEvent::BackupDone { result });
+        });
+    }
+
     /// 打开数据对比(源=右键表)
     pub fn open_data_diff(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
         let src_info = self.conns.iter().find(|c| c.id == conn_id).cloned();
@@ -4691,6 +4777,21 @@ impl ShujingApp {
                         Err(e) => self.toast_error(format!("{}: {e}", ui_kit::t!("Transfer failed", "传输失败"))),
                     }
                     self.transfer = None;
+                    continue;
+                }
+                BgEvent::BackupProgress { done, total, table } => {
+                    if let Some(b) = self.backup.as_mut() {
+                        b.done = done;
+                        b.total = total;
+                        b.cur_table = table;
+                    }
+                    continue;
+                }
+                BgEvent::BackupDone { result } => {
+                    if let Some(b) = self.backup.as_mut() {
+                        b.running = false;
+                        b.result = Some(result);
+                    }
                     continue;
                 }
                 BgEvent::DataDiffDone { state, result } => {

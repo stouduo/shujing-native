@@ -4,7 +4,7 @@
 use crate::model::{Backend, ConnInfo, DbType};
 use crate::Service;
 
-fn sql_literal(v: &str, mysql: bool) -> String {
+pub(crate) fn sql_literal(v: &str, mysql: bool) -> String {
     if mysql {
         format!("'{}'", v.replace('\\', "\\\\").replace('\'', "''"))
     } else {
@@ -12,7 +12,7 @@ fn sql_literal(v: &str, mysql: bool) -> String {
     }
 }
 
-fn qualified(table: &str, db: Option<&str>, mysql: bool) -> String {
+pub(crate) fn qualified(table: &str, db: Option<&str>, mysql: bool) -> String {
     let t = crate::edits::quote(table, mysql);
     match db.map(str::trim).filter(|s| !s.is_empty()) {
         Some(d) => format!("{}.{}", crate::edits::quote(d, mysql), t),

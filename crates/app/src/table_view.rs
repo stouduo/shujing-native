@@ -5765,6 +5765,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_save_result_modal(self, ctx);
         crate::modals::draw_redis_info_modal(self, ctx);
         crate::modals::draw_transfer_modal(self, ctx);
+        crate::modals::draw_backup_modal(self, ctx);
         crate::modals::draw_data_diff_modal(self, ctx);
         crate::modals::draw_conn_crypto_modal(self, ctx);
         crate::modals::draw_redis_batch_modal(self, ctx);

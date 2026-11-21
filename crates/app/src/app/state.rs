@@ -377,6 +377,20 @@ pub struct TransferState {
     pub error: Option<String>,
 }
 
+/// 备份数据库状态(连接右键;单文件 SQL dump,逐表进度)
+#[derive(Clone)]
+pub struct BackupState {
+    pub conn_id: String,
+    pub conn_name: String,
+    pub db: String,
+    pub running: bool,
+    pub done: usize,
+    pub total: usize,
+    pub cur_table: String,
+    /// Ok = (tables, rows, path, bytes)
+    pub result: Option<Result<(usize, u64, String, u64), String>>,
+}
+
 /// 数据对比状态(按主键逐行对齐;目标侧同步 SQL)
 #[derive(Clone)]
 pub struct DataDiffState {
