@@ -492,6 +492,7 @@ pub struct ShujingApp {
     pub auto_backup_running: bool,
     pub plugin_run: Option<crate::app::PluginRunState>,
     pub query_history: Option<crate::app::HistoryState>,
+    pub plugin_manager_open: bool,
     pub plugins: std::sync::Arc<shujing_core::plugins::PluginManager>,
     /// 数据对比弹窗
     pub data_diff: Option<DataDiffState>,
@@ -648,6 +649,7 @@ impl ShujingApp {
             auto_backup_running: false,
             plugin_run: None,
             query_history: None,
+            plugin_manager_open: false,
             plugins,
             data_diff: None,
             conn_crypto: None,
@@ -3306,7 +3308,32 @@ impl ShujingApp {
         }
         let columns = r.columns.clone();
         let rows = r.rows.clone();
-        let payload = serde_json::json!({ "columns": columns, "rows": rows });
+        // v2 上下文注入:方言/库/当前连接已加载的表名(旧插件忽略此键,向后兼容)
+        let dialect = self
+            .conns
+            .iter()
+            .find(|c| c.id == q.conn_id)
+            .map(|c| format!("{:?}", c.db_type).to_lowercase())
+            .unwrap_or_default();
+        let tables: Vec<String> = self
+            .trees
+            .get(&q.conn_id)
+            .map(|t| {
+                t.tables_by_db
+                    .values()
+                    .flat_map(|ts| ts.iter().map(|m| m.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let payload = serde_json::json!({
+            "columns": columns,
+            "rows": rows,
+            "context": {
+                "dialect": dialect,
+                "database": q.database,
+                "tables": tables,
+            },
+        });
         self.plugin_run = Some(crate::app::PluginRunState {
             tab_id: tab_id.to_string(),
             input: payload.to_string(),

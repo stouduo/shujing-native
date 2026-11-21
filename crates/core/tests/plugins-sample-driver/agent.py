@@ -41,6 +41,7 @@ def respond(method, params):
 
 
 def main():
+    query_count = 0
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -50,7 +51,20 @@ def main():
             rid = req.get("id", 0)
             method = req.get("method", "")
             params = req.get("params") or {}
+            # 崩溃模式(E2E 用):第 2 次 query 模拟 agent 崩溃(stderr 留线索)
+            if method == "query":
+                query_count += 1
+                if query_count == 2:
+                    sys.stderr.write("sample agent crashed: intentional\n")
+                    sys.stderr.flush()
+                    sys.exit(1)
+            if method == "execute_batch":
+                sys.stderr.write("sample: db locked\n")
+                sys.stderr.flush()
+                sys.exit(1)
             out = {"jsonrpc": "2.0", "id": rid, "result": respond(method, params)}
+        except SystemExit:
+            raise
         except Exception as e:  # noqa
             rid = 0
             try:

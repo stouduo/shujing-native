@@ -2356,6 +2356,137 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     let _ = modal.should_close();
 }
 
+/// 插件管理器面板:transform(WASM)与 driver(子进程)统一列表 + 状态/版本/说明
+pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if !app.plugin_manager_open {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut rescan = false;
+    let drivers = shujing_core::plugins::scan_drivers(&app.config_dir.join("plugins"));
+    let modal = egui::Modal::new(egui::Id::new("plugin-manager-modal"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(680.0);
+            theme::modal_title(ui, ui_kit::t!("Plugin Manager", "插件管理"));
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "Transform plugins (WASM sandbox) and driver plugins (sidecar agent) share the plugins/ directory",
+                    "transform 插件(WASM 沙箱)与 driver 插件(sidecar agent)共用 plugins/ 目录"
+                ))
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            ui.add_space(8.0);
+
+            ui.label(theme::strong(ui_kit::t!("Transform (WASM)", "处理型(WASM)"), 12.5).color(p.text2));
+            ui.add_space(2.0);
+            if app.plugins.plugins.is_empty() {
+                ui.label(
+                    RichText::new(ui_kit::t!("(none installed)", "(未安装)")).size(11.5).color(p.muted),
+                );
+            }
+            for it in &app.plugins.plugins {
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 30.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_filled(
+                    rect,
+                    egui::CornerRadius::same(6),
+                    if resp.hovered() { p.hover } else { egui::Color32::TRANSPARENT },
+                );
+                let dot = if it.ok { p.green } else { p.red };
+                ui.painter().circle_filled(egui::pos2(rect.left() + 10.0, rect.center().y), 4.0, dot);
+                ui.painter().text(
+                    egui::pos2(rect.left() + 22.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{} v{}  ·  {}", it.name, it.version, it.description),
+                    egui::FontId::proportional(11.5),
+                    p.text,
+                );
+                if let Some(e) = &it.err {
+                    ui.painter().text(
+                        egui::pos2(rect.right() - 8.0, rect.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        icons::clip(e, 40),
+                        egui::FontId::proportional(10.0),
+                        p.red,
+                    );
+                }
+                resp.on_hover_text(format!(
+                    "{}\n{}",
+                    ui_kit::t!(
+                        "Result-set transform (input JSON, output JSON)",
+                        "结果集处理(输入 JSON,输出 JSON)"
+                    ),
+                    it.dir.display()
+                ));
+            }
+
+            ui.add_space(10.0);
+            ui.label(theme::strong(ui_kit::t!("Driver (sidecar)", "驱动型(子进程)"), 12.5).color(p.text2));
+            ui.add_space(2.0);
+            if drivers.is_empty() {
+                ui.label(
+                    RichText::new(ui_kit::t!("(none installed)", "(未安装)")).size(11.5).color(p.muted),
+                );
+            }
+            for d in &drivers {
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 30.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_filled(
+                    rect,
+                    egui::CornerRadius::same(6),
+                    if resp.hovered() { p.hover } else { egui::Color32::TRANSPARENT },
+                );
+                ui.painter().circle_filled(egui::pos2(rect.left() + 10.0, rect.center().y), 4.0, p.accent);
+                let types = d.db_types.join("/");
+                ui.painter().text(
+                    egui::pos2(rect.left() + 22.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    format!(
+                        "{} v{}  ·  {} {}",
+                        d.name,
+                        d.version,
+                        ui_kit::t!("provides", "提供类型"),
+                        types
+                    ),
+                    egui::FontId::proportional(11.5),
+                    p.text,
+                );
+                resp.on_hover_text(format!("{}\n{}", d.description, d.dir.display()));
+            }
+
+            ui.add_space(6.0);
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, ui_kit::t!("Rescan", "重新扫描"), theme::BtnKind::Primary).clicked() {
+                    rescan = true;
+                }
+                if theme::button(ui, ui_kit::t!("Open Folder", "打开文件夹"), theme::BtnKind::Secondary).clicked() {
+                    let dir = app.config_dir.join("plugins");
+                    let _ = std::fs::create_dir_all(&dir);
+                    #[cfg(target_os = "macos")]
+                    let _ = std::process::Command::new("open").arg(&dir).spawn();
+                }
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if rescan {
+        app.reload_plugins();
+    }
+    if close {
+        app.plugin_manager_open = false;
+    }
+    let _ = modal.should_close();
+}
+
 pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.transfer.is_none() {
         return;
@@ -3419,6 +3550,9 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         .size(11.5)
                         .color(p.text2),
                 );
+                if theme::button(ui, ui_kit::t!("Plugin Manager…", "插件管理…"), theme::BtnKind::Secondary).clicked() {
+                    app.plugin_manager_open = true;
+                }
                 if theme::button(ui, ui_kit::t!("Rescan", "重新扫描"), theme::BtnKind::Secondary).clicked() {
                     app.reload_plugins();
                 }

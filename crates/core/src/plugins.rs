@@ -305,7 +305,11 @@ pub struct DriverPlugin {
     pub description: String,
     pub dir: PathBuf,
     pub exec: String,
+    /// 可执行文件 SHA-256(manifest 可选声明;非空则 spawn 前校验)
+    pub sha256: String,
     pub db_types: Vec<String>,
+    /// stderr 收集环(100 行);agent 崩溃时尾部进错误信息
+    pub stderr_tail: std::sync::Arc<tokio::sync::Mutex<Vec<String>>>,
 }
 
 /// 插件目录(SHUJING_CONFIG_DIR 优先,默认 ~/.shujing-native)
@@ -333,9 +337,10 @@ pub fn scan_drivers(dir: &Path) -> Vec<DriverPlugin> {
             continue;
         };
         let (name, version, description, _sha) = parse_manifest(&mf);
-        // 逐行抓 driver 专属键(kind/exec/db_types;parse_manifest 不含这些)
+        // 逐行抓 driver 专属键(kind/exec/db_types/sha256;parse_manifest 不含这些)
         let mut kind = String::new();
         let mut exec = String::new();
+        let mut sha256 = String::new();
         let mut db_types = Vec::new();
         for line in mf.lines() {
             let line = line.trim();
@@ -348,6 +353,7 @@ pub fn scan_drivers(dir: &Path) -> Vec<DriverPlugin> {
             match k {
                 "kind" => kind = v.to_string(),
                 "exec" => exec = v.to_string(),
+                "sha256" => sha256 = v.to_string(),
                 "db_types" => {
                     // ["a","b"] 或 "a" 宽容解析
                     let inner = v.trim_start_matches('[').trim_end_matches(']');
@@ -373,7 +379,9 @@ pub fn scan_drivers(dir: &Path) -> Vec<DriverPlugin> {
             description,
             dir: d.clone(),
             exec,
+            sha256,
             db_types,
+            stderr_tail: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
         });
     }
     out
@@ -386,6 +394,7 @@ pub struct DriverAgent {
     stdin: tokio::process::ChildStdin,
     stdout: BufReader<tokio::process::ChildStdout>,
     next_id: AtomicU64,
+    stderr_tail: std::sync::Arc<tokio::sync::Mutex<Vec<String>>>,
 }
 
 impl DriverAgent {
@@ -403,11 +412,23 @@ impl DriverAgent {
         {
             // 允许执行位缺失(脚本场景)——由使用者保证可执行
         }
+        if !plugin.sha256.is_empty() {
+            let Ok(bytes) = std::fs::read(&exec_path) else {
+                return Err(format!("驱动插件可执行文件读取失败: {}", exec_path.display()));
+            };
+            let actual = wasm_sha256(&bytes);
+            if actual != plugin.sha256.to_lowercase() {
+                return Err(format!(
+                    "驱动插件 sha256 校验失败(清单与文件不符): {}",
+                    exec_path.display()
+                ));
+            }
+        }
         let mut cmd = tokio::process::Command::new(&exec_path);
         cmd.current_dir(&plugin.dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             // 数镜退出/断开连接(LiveConn drop)时必须带走 agent 子进程:
             // tokio Child 默认 drop 不杀 → 孤儿进程残留
             .kill_on_drop(true);
@@ -429,12 +450,35 @@ impl DriverAgent {
             .map_err(|e| format!("驱动插件启动失败({}): {e}", exec_path.display()))?;
         let stdin = child.stdin.take().ok_or("agent stdin 缺失")?;
         let stdout = child.stdout.take().ok_or("agent stdout 缺失")?;
+        let stderr = child.stderr.take();
+        if let Some(stderr) = stderr {
+            // stderr 后台收集(环形 100 行):call 失败时附进错误信息,agent 调试可见
+            let tail = plugin.stderr_tail.clone();
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            let mut t = tail.lock().await;
+                            if t.len() >= 100 {
+                                t.remove(0);
+                            }
+                            t.push(line.trim_end().to_string());
+                        }
+                    }
+                }
+            });
+        }
         let mut agent = Self {
             plugin_name: plugin.name.clone(),
             child,
             stdin,
             stdout: BufReader::new(stdout),
             next_id: AtomicU64::new(1),
+            stderr_tail: plugin.stderr_tail.clone(),
         };
         // 协议握手
         let pong: serde_json::Value = agent
@@ -455,14 +499,27 @@ impl DriverAgent {
     ) -> Result<serde_json::Value, String> {
         /// 单请求上限:agent 卡死/死循环时兜底,不让 UI 永挂
         const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+        // (超时/失败时 stderr 尾部由 DriverSession.call 附着)
         let call = self.call_inner(method, params);
         match tokio::time::timeout(CALL_TIMEOUT, call).await {
-            Ok(r) => r,
-            Err(_) => Err(format!(
-                "驱动插件 {} 请求超时(60s):方法 {method}",
-                self.plugin_name
-            )),
+            Ok(Ok(r)) => Ok(r),
+            Ok(Err(e)) => Err(self.with_stderr_tail(e).await),
+            Err(_) => Err(self
+                .with_stderr_tail(format!(
+                    "驱动插件 {} 请求超时(60s):方法 {method}",
+                    self.plugin_name
+                ))
+                .await),
         }
+    }
+
+    async fn with_stderr_tail(&self, mut msg: String) -> String {
+        let t = self.stderr_tail.lock().await;
+        if !t.is_empty() {
+            let tail: Vec<String> = t.iter().rev().take(3).cloned().collect();
+            msg.push_str(&format!("\n[agent stderr] {}", tail.join(" | ")));
+        }
+        msg
     }
 
     async fn call_inner(
@@ -517,7 +574,7 @@ impl DriverAgent {
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("未知错误");
-                return Err(format!("驱动插件错误: {msg}"));
+                return Err(self.with_stderr_tail(format!("驱动插件错误: {msg}")).await);
             }
             return Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null));
         }
@@ -567,10 +624,12 @@ mod driver_tests {
     }
 }
 
-/// 驱动插件会话:agent 进程 + 连接参数缓存 + 会话库记忆
+/// 驱动插件会话:agent 进程 + 连接参数缓存 + 会话库记忆。
+/// 读类方法崩溃自动重启(execute_batch 写类不自动重发——防重复执行)
 pub struct DriverSession {
-    pub agent: tokio::sync::Mutex<DriverAgent>,
-    /// 连接参数(connect 用;Redis 式重连时重建 agent 用)
+    pub plugin: DriverPlugin,
+    agent: tokio::sync::Mutex<Option<DriverAgent>>,
+    /// 连接参数(connect 用;agent 重启恢复时重放)
     pub cfg: serde_json::Value,
     /// agent connect 返回的版本串
     pub version: String,
@@ -594,10 +653,43 @@ impl DriverSession {
             .unwrap_or("插件驱动")
             .to_string();
         Ok(Self {
-            agent: tokio::sync::Mutex::new(agent),
+            plugin: plugin.clone(),
+            agent: tokio::sync::Mutex::new(Some(agent)),
             cfg: params.clone(),
             version,
             database: None,
         })
+    }
+
+    /// 统一入口:agent 进程死亡时,读类方法自动重启+重 connect+重发一次;
+    /// execute_batch(写)不自动重发——防重复执行,错误如实上抛
+    pub async fn call(
+        &self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let mut retried = false;
+        loop {
+            let mut guard = self.agent.lock().await;
+            let Some(agent) = guard.as_mut() else {
+                return Err("驱动插件 agent 无实例".into());
+            };
+            let r = agent.call(method, params).await;
+            let dead = matches!(&r, Err(e) if e.contains("意外退出") || e.contains("进程已退出") || e.contains("写失败"));
+            if !(dead && method != "execute_batch" && !retried) {
+                return r;
+            }
+            // 重启恢复:杀旧 → spawn → 重放 connect → 重发当前请求
+            if let Some(mut old) = guard.take() {
+                old.shutdown().await;
+            }
+            drop(guard);
+            retried = true;
+            let mut fresh = DriverAgent::spawn(&self.plugin).await?;
+            fresh.call("connect", &self.cfg).await?;
+            let r2 = fresh.call(method, params).await;
+            *self.agent.lock().await = Some(fresh);
+            return r2;
+        }
     }
 }

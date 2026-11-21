@@ -209,12 +209,11 @@ pub async fn apply_changes(
                     elapsed_ms: started.elapsed().as_millis() as u64,
                 });
             }
-            let mut ag = s.agent.lock().await;
             let params = serde_json::json!({
                 "database": s.database,
                 "sqls": stmts,
             });
-            let r = ag.call("execute_batch", &params).await?;
+            let r = s.call("execute_batch", &params).await?;
             let affected = r.get("affected").and_then(|v| v.as_u64()).unwrap_or(0);
             return Ok(ExecResult {
                 columns: vec![],

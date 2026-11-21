@@ -180,6 +180,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         auto_backup: Default::default(),
         auto_backup_queue: Vec::new(),
         auto_backup_running: false,
+        plugin_manager_open: false,
         plugins: std::sync::Arc::new(shujing_core::plugins::PluginManager::load_all(std::path::Path::new("/tmp/definitely-missing-plugins-dir"))),
         data_diff: None,
         conn_crypto: None,

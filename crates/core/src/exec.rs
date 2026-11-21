@@ -497,13 +497,12 @@ impl Backend {
             Backend::Sqlite(conn) => run_sqlite(conn, sql, max),
             Backend::Plugin(s) => {
                 let started2 = Instant::now();
-                let mut ag = s.agent.lock().await;
                 let params = serde_json::json!({
                     "database": s.database,
                     "sql": sql,
                     "max": max,
                 });
-                let r = ag.call("query", &params).await?;
+                let r = s.call("query", &params).await?;
                 let columns: Vec<String> = r
                     .get("columns")
                     .and_then(|v| v.as_array())

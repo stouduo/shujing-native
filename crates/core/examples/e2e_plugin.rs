@@ -120,7 +120,7 @@ async fn main() {
         Err(e) => fail("count_rows", &e),
     }
 
-    // 6) 查询(agent query,中文保真)
+    // 6) 查询(agent query,中文保真)——第 1 次 query 正常
     match service
         .run_sql_db(
             "e2e-plugin",
@@ -140,7 +140,29 @@ async fn main() {
         Err(e) => fail("run_sql", &e),
     }
 
-    // 7) 表格回写(execute_batch 契约):fixture 返回 affected=语句数
+    // 6b) agent 崩溃自动重启:fixture 第 2 次 query 故意退出进程,数镜应重启 agent
+    // 并重放 connect 后重发查询,用户无感
+    match service
+        .run_sql_db(
+            "e2e-plugin",
+            "SELECT id, name FROM users".into(),
+            None,
+            Some("main".into()),
+        )
+        .await
+    {
+        Ok(rs) => {
+            let r = rs.first().expect("结果集");
+            if r.rows.len() != 2 || r.rows[0][1].as_deref() != Some("张三") {
+                fail("crash_autorestart", &format!("{:?}", r.rows));
+            }
+            pass("crash_autorestart", "agent 崩溃后自动重启+重放 connect,查询成功");
+        }
+        Err(e) => fail("crash_autorestart", &format!("重启恢复失败: {e}")),
+    }
+
+    // 7) 表格回写(execute_batch):fixture 故意崩溃(stderr=db locked)——
+    // 写类不自动重发,错误如实上抛且含 agent stderr 尾部
     let upd = vec![shujing_core::edits::CellUpdate {
         pk: vec![("id".into(), "1".into())],
         sets: vec![("name".into(), Some("改".into()))],
@@ -149,9 +171,11 @@ async fn main() {
         .apply_changes("e2e-plugin", "users", Some("main"), &upd, &[], &[])
         .await
     {
-        Ok(r) if r.affected == 1 => pass("apply_changes", "回写 execute_batch,affected=1"),
-        Ok(r) => fail("apply_changes", &format!("affected={}", r.affected)),
-        Err(e) => fail("apply_changes", &e),
+        Err(e) if e.contains("db locked") => {
+            pass("apply_changes_crash", "写类崩溃不重发,stderr 尾部进错误信息");
+        }
+        Err(e) => fail("apply_changes_crash", &format!("错误异常: {e}")),
+        Ok(r) => fail("apply_changes_crash", &format!("崩溃 agent 不应回写成功: {r:?}")),
     }
 
     // 8) agent 重启恢复:断开→重连(agent 进程全新,连接语义完好)

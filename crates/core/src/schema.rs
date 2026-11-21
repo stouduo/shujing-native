@@ -113,8 +113,7 @@ fn ui_kit_noop() -> String {
 pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<Vec<String>, String> {
     match backend {
         Backend::Plugin(s) => {
-            let mut ag = s.agent.lock().await;
-            let r = ag
+            let r = s
                 .call("databases", &serde_json::json!({}))
                 .await
                 .map_err(|e| e.to_string())?;
@@ -720,8 +719,7 @@ impl Backend {
     pub async fn list_tables_in(&mut self, _info: &crate::model::ConnInfo, database: Option<&str>) -> Result<Vec<TableMeta>, String> {
         match self {
             Backend::Plugin(s) => {
-                let mut ag = s.agent.lock().await;
-                let r = ag
+                let r = s
                     .call("tables", &serde_json::json!({ "database": s.database }))
                     .await
                     .map_err(|e| e.to_string())?;
@@ -898,8 +896,7 @@ async fn resolve_mysql_db(
     ) -> Result<TableStructure, String> {
         match self {
             Backend::Plugin(s) => {
-                let mut ag = s.agent.lock().await;
-                let r = ag
+                let r = s
                     .call(
                         "structure",
                         &serde_json::json!({ "database": s.database, "table": table }),
@@ -977,8 +974,7 @@ async fn resolve_mysql_db(
     pub async fn count_rows(&mut self, table: &str) -> Result<u64, String> {
         match self {
             Backend::Plugin(s) => {
-                let mut ag = s.agent.lock().await;
-                let r = ag
+                let r = s
                     .call("count", &serde_json::json!({ "database": s.database, "table": table }))
                     .await
                     .map_err(|e| e.to_string())?;
