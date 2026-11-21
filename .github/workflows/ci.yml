@@ -27,8 +27,11 @@ jobs:
       - name: Install build deps
         # librdkafka vendored 构建需要 curl/zlib 头文件
         run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libcurl4-openssl-dev zlib1g-dev
-      - name: Test (workspace, full features)
-        run: cargo test --workspace
+      - name: Core logic tests + app compile check
+        # 渲染测试留 macOS:headless runner 无 GPU,且 egui 快照断言跨平台像素必有差异
+        run: |
+          cargo test -p shujing-core -p shujing-mcp -p ui-kit
+          cargo check -p shujing-app
 
   build-windows:
     runs-on: windows-latest
