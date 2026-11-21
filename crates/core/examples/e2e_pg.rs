@@ -205,5 +205,46 @@ async fn main() {
         Ok(_) => pass("idle_cancel", "空闲取消无害通过"),
     }
 
+    // 11) 流式截断:十万行单 SELECT,按 max=200 截断(带外取消服务端)后连接干净可复用
+    match service
+        .run_sql_db(
+            "e2e-pg",
+            "SELECT generate_series(1, 100000) AS g".into(),
+            Some(200),
+            None,
+        )
+        .await
+    {
+        Ok(rs) => {
+            let r = rs.first().expect("结果集");
+            if r.rows.len() != 200 || !r.truncated {
+                fail(
+                    "stream_truncate",
+                    &format!("rows={} truncated={}", r.rows.len(), r.truncated),
+                );
+            }
+            if r.rows[0][0].as_deref() != Some("1") || r.rows[199][0].as_deref() != Some("200") {
+                fail("stream_truncate", "截断行内容错位");
+            }
+            pass("stream_truncate", "十万行 200 截断,行内容连续");
+        }
+        Err(e) => fail("stream_truncate", &e),
+    }
+    match service.run_sql("e2e-pg", "SELECT 43".into(), None).await {
+        Ok(rs) => {
+            let v = rs
+                .first()
+                .and_then(|r| r.rows.first())
+                .and_then(|r| r.first())
+                .cloned()
+                .flatten();
+            if v.as_deref() != Some("43") {
+                fail("post_stream_conn", &format!("连接被残留消息毒化: {v:?}"));
+            }
+            pass("post_stream_conn", "截断后连接干净可复用");
+        }
+        Err(e) => fail("post_stream_conn", &e),
+    }
+
     println!("\n全部通过 ✓");
 }

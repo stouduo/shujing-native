@@ -307,64 +307,124 @@ async fn run_mysql(conn: &mut mysql_async::Conn, sql: &str, max: usize) -> Resul
     Ok(vec![r])
 }
 
-/// PostgreSQL simple_query 天然返回全部消息流,按 CommandComplete 分组为多个结果集
+/// PostgreSQL:single_query_raw 流式逐行消费(文本协议,列值天然为 str)。
+/// 达到行数上限即取消服务端执行(cancel_token 走带外连接),再把流排空到
+/// ReadyForQuery——残留消息会毒化连接的下一个查询,必须读干净。
+/// 大表浏览不再整体物化(此前 simple_query 一次性收全量,千万行 OOM)。
+/// 多语句仍走 simple_query 一次性执行:组间原子语义;cancel 会中断后续语句,不能用。
 async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Result<Vec<ExecResult>, String> {
     use tokio_postgres::SimpleQueryMessage;
+    use futures_util::StreamExt;
     let started = Instant::now();
-    // simple_query 会把整个结果集一次性物化进内存,行数上限只在组装时生效——
-    // 千万行 SELECT 直接 OOM。单条 SELECT 且不带 LIMIT 时自动补一行硬上限
-    // (多语句不拼,拼在中间语句尾部是语法错误)
-    let sql_owned;
-    let mut sql = sql;
-    {
-        let stmts = split_statements(sql);
-        if let [one] = stmts.as_slice() {
-            let low = one.to_ascii_lowercase();
-            let is_select = low == "select"
-                || low.starts_with("select")
-                    && low
-                        .as_bytes()
-                        .get(6)
-                        .is_some_and(|b| b.is_ascii_whitespace());
-            if is_select && !low.split_whitespace().any(|w| w == "limit") {
-                sql_owned = format!("{one} LIMIT {}", HARD_MAX_ROWS + 1);
-                sql = &sql_owned;
+
+    // ── 多语句路径(原物化逻辑,语义不变) ──
+    if split_statements(sql).len() > 1 {
+        let messages = client.simple_query(sql).await.map_err(crate::backend::pg_err)?;
+        let mut results: Vec<ExecResult> = Vec::new();
+        let mut columns: Vec<String> = vec![];
+        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+        let mut truncated = false;
+        for msg in messages {
+            match msg {
+                SimpleQueryMessage::Row(row) => {
+                    if columns.is_empty() {
+                        columns = row.columns().iter().map(|c| c.name().to_string()).collect();
+                    }
+                    if rows.len() >= max {
+                        truncated = true;
+                        continue;
+                    }
+                    rows.push((0..row.len()).map(|i| row.get(i).map(str::to_string)).collect());
+                }
+                SimpleQueryMessage::CommandComplete(n) => {
+                    let affected = if columns.is_empty() { n } else { rows.len() as u64 };
+                    results.push(ExecResult {
+                        columns: std::mem::take(&mut columns),
+                        rows: std::mem::take(&mut rows),
+                        affected,
+                        truncated,
+                        elapsed_ms: 0,
+                    });
+                    truncated = false;
+                }
+                _ => {}
             }
         }
+        if !columns.is_empty() || !rows.is_empty() {
+            let affected = rows.len() as u64;
+            results.push(ExecResult {
+                columns,
+                rows,
+                affected,
+                truncated,
+                elapsed_ms: 0,
+            });
+        }
+        let elapsed = started.elapsed().as_millis() as u64;
+        for r in &mut results {
+            r.elapsed_ms = elapsed;
+        }
+        if results.is_empty() {
+            results.push(ExecResult {
+                columns: vec![],
+                rows: vec![],
+                affected: 0,
+                truncated: false,
+                elapsed_ms: elapsed,
+            });
+        }
+        return Ok(results);
     }
-    let messages = client.simple_query(sql).await.map_err(crate::backend::pg_err)?;
+
+    // ── 单条语句:流式逐行,超限即取消 ──
+    let stream = client
+        .simple_query_raw(sql)
+        .await
+        .map_err(crate::backend::pg_err)?;
+    futures_util::pin_mut!(stream);
     let mut results: Vec<ExecResult> = Vec::new();
     let mut columns: Vec<String> = vec![];
     let mut rows: Vec<Vec<Option<String>>> = Vec::new();
     let mut truncated = false;
 
-    for msg in messages {
-        match msg {
-            SimpleQueryMessage::Row(row) => {
-                if columns.is_empty() {
-                    columns = row.columns().iter().map(|c| c.name().to_string()).collect();
-                }
-                if rows.len() >= max { truncated = true; continue; }
-                let vals: Vec<Option<String>> =
-                    (0..row.len()).map(|i| row.get(i).map(str::to_string)).collect();
-                rows.push(vals);
+    loop {
+        match stream.next().await {
+            Some(Ok(SimpleQueryMessage::RowDescription(cols))) => {
+                columns = cols.iter().map(|c| c.name().to_string()).collect();
             }
-            SimpleQueryMessage::CommandComplete(n) => {
+            Some(Ok(SimpleQueryMessage::Row(row))) => {
+                if rows.len() >= max {
+                    truncated = true;
+                    break;
+                }
+                rows.push((0..row.len()).map(|i| row.get(i).map(str::to_string)).collect());
+            }
+            Some(Ok(SimpleQueryMessage::CommandComplete(n))) => {
                 let affected = if columns.is_empty() { n } else { rows.len() as u64 };
                 results.push(ExecResult {
                     columns: std::mem::take(&mut columns),
                     rows: std::mem::take(&mut rows),
                     affected,
-                    truncated,
+                    truncated: false,
                     elapsed_ms: 0,
                 });
-                truncated = false;
             }
-            _ => {}
+            Some(Err(e)) => return Err(crate::backend::pg_err(e)),
+            Some(Ok(_)) => {} // 其他消息类型:忽略(协议完备性兜底)
+            None => break,
         }
     }
-    let elapsed = started.elapsed().as_millis() as u64;
-    // 末尾未闭合的结果组(防御性)
+    if truncated {
+        // 带外取消服务端查询(独立连接发 CancelRequest);失败也无妨——
+        // 排空循环会把剩余行读完即弃,内存有界,连接最终回到 ReadyForQuery
+        let _ = client
+            .cancel_token()
+            .cancel_query(tokio_postgres::NoTls)
+            .await;
+        while let Some(m) = stream.next().await {
+            let _ = m;
+        }
+    }
     if !columns.is_empty() || !rows.is_empty() {
         let affected = rows.len() as u64;
         results.push(ExecResult {
@@ -372,9 +432,10 @@ async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Resul
             rows,
             affected,
             truncated,
-            elapsed_ms: elapsed,
+            elapsed_ms: 0,
         });
     }
+    let elapsed = started.elapsed().as_millis() as u64;
     for r in &mut results {
         r.elapsed_ms = elapsed;
     }
