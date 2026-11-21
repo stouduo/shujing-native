@@ -1523,6 +1523,138 @@ pub fn draw_save_result_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 }
 
+/// Redis 服务器信息弹窗(INFO 分区块 + 慢日志)
+pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if app.redis_info.is_none() {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let mut load_slow = false;
+    let modal = egui::Modal::new(egui::Id::new("redis-info"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(560.0);
+            let Some(st) = app.redis_info.as_mut() else {
+                return;
+            };
+            theme::modal_title(ui, ui_kit::t!("Redis Server Info", "Redis 服务器信息"));
+            if st.loading {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0).color(p.muted));
+                    ui.label(RichText::new(ui_kit::t!("Loading…", "加载中…")).size(11.5).color(p.muted));
+                });
+            }
+            if let Some(err) = &st.error {
+                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+            }
+            // INFO 区块(键空间/内存/客户端优先可读展示;其余紧凑两列)
+            if !st.sections.is_empty() {
+                let mut shown_slow_header = false;
+                egui::ScrollArea::vertical()
+                    .id_salt("redis-info-scroll")
+                    .max_height((ui.available_height() - 70.0).max(220.0))
+                    .show(ui, |ui| {
+                        for sec in &st.sections {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(&sec.name)
+                                    .font(theme::bold(12.0))
+                                    .color(p.text2),
+                            );
+                            if sec.name == "Keyspace" {
+                                // db0:keys=12,expires=0,avg_ttl=0 → 一行一库
+                                for (k, v) in &sec.items {
+                                    ui.label(
+                                        RichText::new(format!("{}: {}", k, v))
+                                            .font(theme::mono(11.5))
+                                            .color(p.text),
+                                    );
+                                }
+                                continue;
+                            }
+                            egui::Grid::new(format!("redis-info-g-{}", sec.name))
+                                .num_columns(2)
+                                .spacing([14.0, 3.0])
+                                .show(ui, |ui| {
+                                    for (k, v) in sec.items.iter().take(60) {
+                                        ui.label(RichText::new(k).size(11.0).color(p.muted));
+                                        ui.label(
+                                            RichText::new(icons::clip(v, 48))
+                                                .font(theme::mono(11.0))
+                                                .color(p.text),
+                                        );
+                                        ui.end_row();
+                                    }
+                                });
+                            // Memory 区块后插慢日志按钮(一次性)
+                            if sec.name == "Memory" && !shown_slow_header && !st.slowlog_loaded {
+                                shown_slow_header = true;
+                                ui.add_space(4.0);
+                                if theme::button(
+                                    ui,
+                                    ui_kit::t!("Load Slowlog (20)", "加载慢日志(20 条)"),
+                                    theme::BtnKind::Secondary,
+                                )
+                                .clicked()
+                                {
+                                    load_slow = true;
+                                }
+                            }
+                        }
+                        // 慢日志
+                        if st.slowlog_loaded {
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.label(
+                                RichText::new(ui_kit::t!("Slowlog (latest 20)", "慢日志(最近 20 条)"))
+                                    .font(theme::bold(12.0))
+                                    .color(p.text2),
+                            );
+                            if st.slowlog.is_empty() {
+                                ui.label(
+                                    RichText::new(ui_kit::t!("No slow queries", "没有慢查询"))
+                                        .size(11.5)
+                                        .color(p.muted),
+                                );
+                            }
+                            egui::Grid::new("redis-slowlog-g")
+                                .num_columns(3)
+                                .spacing([12.0, 3.0])
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new(ui_kit::t!("Time", "耗时")).size(10.5).color(p.muted));
+                                    ui.label(RichText::new(ui_kit::t!("Command", "命令")).size(10.5).color(p.muted));
+                                    ui.label(RichText::new(ui_kit::t!("Args", "参数")).size(10.5).color(p.muted));
+                                    ui.end_row();
+                                    for e in &st.slowlog {
+                                        ui.label(
+                                            RichText::new(format!("{} ms", e.duration_us / 1000))
+                                                .font(theme::mono(11.0))
+                                                .color(if e.duration_us > 100_000 { DIFF_ORANGE } else { p.text }),
+                                        );
+                                        ui.label(RichText::new(&e.command).size(11.5).color(p.text));
+                                        ui.label(RichText::new(icons::clip(&e.args, 40)).font(theme::mono(11.0)).color(p.text2));
+                                        ui.end_row();
+                                    }
+                                });
+                        }
+                    });
+            }
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if load_slow {
+        app.redis_fetch_slowlog();
+    }
+    if close || modal.should_close() {
+        app.redis_info = None;
+    }
+}
+
 /// Mongo 批量导入弹窗(粘贴/文件读入 JSON 数组)
 pub fn draw_mongo_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.mongo_import.is_none() {

@@ -307,6 +307,10 @@ pub enum TabAction {
         sid: String,
         query_only: bool,
     },
+    /// 打开 Redis 服务器信息弹窗
+    OpenRedisInfo {
+        conn_id: String,
+    },
     /// Kafka:新建 topic
     KafkaCreateTopic {
         tab_id: String,
@@ -4155,6 +4159,7 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             sid,
             query_only,
         } => app.session_kill(&sid, query_only),
+        TabAction::OpenRedisInfo { conn_id } => app.open_redis_info(&conn_id),
         TabAction::KafkaLoadMsgs { tab_id: _ } => app.kafka_load_msgs(),
         TabAction::KafkaSend { tab_id: _, topic: _ } => app.kafka_send(),
         TabAction::KafkaLoadGroups { tab_id: _ } => app.kafka_load_groups(),
@@ -5628,6 +5633,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_mongo_indexes_modal(self, ctx);
         crate::modals::draw_mongo_import_modal(self, ctx);
         crate::modals::draw_save_result_modal(self, ctx);
+        crate::modals::draw_redis_info_modal(self, ctx);
         crate::modals::draw_transfer_modal(self, ctx);
         crate::modals::draw_data_diff_modal(self, ctx);
         crate::modals::draw_conn_crypto_modal(self, ctx);

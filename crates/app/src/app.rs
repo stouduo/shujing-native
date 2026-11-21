@@ -93,6 +93,12 @@ pub enum BgEvent {
     KafkaTopicDeleted {
         result: Result<(), String>,
     },
+    RedisInfoLoaded {
+        result: Result<Vec<shujing_core::redis_ops::InfoSection>, String>,
+    },
+    RedisSlowlogLoaded {
+        result: Result<Vec<shujing_core::redis_ops::SlowEntry>, String>,
+    },
     SessionsLoaded {
         tab_id: String,
         result: Result<Vec<shujing_core::SessionInfo>, String>,
@@ -737,6 +743,16 @@ pub struct MongoDocState {
     pub error: Option<String>,
 }
 
+/// Redis 服务器信息弹窗(INFO 区块 + 慢日志)
+pub struct RedisInfoState {
+    pub conn_id: String,
+    pub sections: Vec<shujing_core::redis_ops::InfoSection>,
+    pub slowlog: Vec<shujing_core::redis_ops::SlowEntry>,
+    pub loading: bool,
+    pub slowlog_loaded: bool,
+    pub error: Option<String>,
+}
+
 /// 服务器会话面板标签(MySQL processlist / PG pg_stat_activity)
 pub struct SessionsTab {
     pub conn_id: String,
@@ -1218,6 +1234,7 @@ pub struct ShujingApp {
     pub mongo_indexes: Option<MongoIndexState>,
     pub kafka_tab: Option<KafkaTab>,
     pub session_tab: Option<SessionsTab>,
+    pub redis_info: Option<RedisInfoState>,
     /// 查询结果存为新表:命名弹窗(tab_id, 表名草稿)
     pub save_result_modal: Option<(String, String)>,
     pub mongo_import: Option<MongoImportState>,
@@ -1344,6 +1361,7 @@ impl ShujingApp {
             mongo_indexes: None,
             kafka_tab: None,
             session_tab: None,
+            redis_info: None,
             save_result_modal: None,
             mongo_import: None,
             transfer: None,
@@ -1879,6 +1897,39 @@ impl ShujingApp {
         });
     }
 
+
+    /// 打开 Redis 服务器信息弹窗(INFO+慢日志)
+    pub fn open_redis_info(&mut self, conn_id: &str) {
+        self.redis_info = Some(RedisInfoState {
+            conn_id: conn_id.to_string(),
+            sections: Vec::new(),
+            slowlog: Vec::new(),
+            loading: true,
+            slowlog_loaded: false,
+            error: None,
+        });
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        let cid = conn_id.to_string();
+        net::spawn(async move {
+            let result = service.redis_server_info(&cid).await;
+            let _ = tx.send(BgEvent::RedisInfoLoaded { result });
+        });
+    }
+
+    /// 拉取慢日志(弹窗内按钮)
+    pub fn redis_fetch_slowlog(&mut self) {
+        let Some(st) = self.redis_info.as_ref() else {
+            return;
+        };
+        let conn_id = st.conn_id.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        net::spawn(async move {
+            let result = service.redis_slowlog(&conn_id, 20).await;
+            let _ = tx.send(BgEvent::RedisSlowlogLoaded { result });
+        });
+    }
 
     /// 打开会话面板(存在则聚焦)
     pub fn open_sessions(&mut self, conn_id: &str) {
@@ -5121,6 +5172,28 @@ impl ShujingApp {
                             self.kafka_reload_topics();
                         }
                         Err(e) => self.toast_error(e.clone()),
+                    }
+                    continue;
+                }
+                BgEvent::RedisInfoLoaded { result } => {
+                    if let Some(st) = self.redis_info.as_mut() {
+                        st.loading = false;
+                        match result {
+                            Ok(sections) => st.sections = sections,
+                            Err(e) => st.error = Some(e),
+                        }
+                    }
+                    continue;
+                }
+                BgEvent::RedisSlowlogLoaded { result } => {
+                    if let Some(st) = self.redis_info.as_mut() {
+                        match result {
+                            Ok(rows) => {
+                                st.slowlog = rows;
+                                st.slowlog_loaded = true;
+                            }
+                            Err(e) => st.error = Some(e),
+                        }
                     }
                     continue;
                 }

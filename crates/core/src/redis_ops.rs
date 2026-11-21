@@ -236,6 +236,76 @@ pub async fn key_detail_page(
     Ok(d)
 }
 
+/// INFO 解析结果:区块(名, 键值对列表)
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InfoSection {
+    pub name: String,
+    pub items: Vec<(String, String)>,
+}
+
+/// INFO 全量解析(# 分段,key:value 行)
+pub async fn server_info(backend: &mut Backend) -> Result<Vec<InfoSection>, String> {
+    let mut con = get_con(backend).await?;
+    let raw: String = redis::cmd("INFO").query_async(&mut con).await.map_err(es)?;
+    Ok(parse_info(&raw))
+}
+
+/// 纯函数:INFO 文本 → 区块列表(BOM/\r 容错)
+pub fn parse_info(raw: &str) -> Vec<InfoSection> {
+    let mut out: Vec<InfoSection> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim_start_matches('\u{FEFF}').trim_end_matches('\r').trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('#') {
+            out.push(InfoSection {
+                name: name.trim().to_string(),
+                items: Vec::new(),
+            });
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            if let Some(sec) = out.last_mut() {
+                sec.items.push((k.to_string(), v.to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// 慢日志条目
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlowEntry {
+    pub id: i64,
+    /// 微秒
+    pub duration_us: i64,
+    pub command: String,
+    pub args: String,
+}
+
+/// SLOWLOG GET 最近 n 条
+pub async fn slowlog(backend: &mut Backend, n: i64) -> Result<Vec<SlowEntry>, String> {
+    let mut con = get_con(backend).await?;
+    let raw: Vec<(i64, i64, i64, Vec<String>, String, String)> = redis::cmd("SLOWLOG")
+        .arg("GET")
+        .arg(n)
+        .query_async(&mut con)
+        .await
+        .map_err(es)?;
+    Ok(raw
+        .into_iter()
+        .map(|(id, _ts, dur, argv, _client, _name)| SlowEntry {
+            id,
+            duration_us: dur,
+            command: argv.first().cloned().unwrap_or_default(),
+            args: argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" "),
+        })
+        .collect())
+}
+
 /// Stream 消费者组(XINFO GROUPS)
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

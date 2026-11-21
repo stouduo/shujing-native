@@ -324,6 +324,37 @@ impl Service {
         }
     }
 
+    /// Redis:服务器 INFO(分区解析)
+    pub async fn redis_server_info(
+        &self,
+        id: &str,
+    ) -> Result<Vec<crate::redis_ops::InfoSection>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match guard.backend {
+            crate::model::Backend::Redis(_) => {
+                crate::redis_ops::server_info(&mut guard.backend).await
+            }
+            _ => Err("非 Redis 连接".into()),
+        }
+    }
+
+    /// Redis:慢日志最近 n 条
+    pub async fn redis_slowlog(
+        &self,
+        id: &str,
+        n: i64,
+    ) -> Result<Vec<crate::redis_ops::SlowEntry>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match guard.backend {
+            crate::model::Backend::Redis(_) => {
+                crate::redis_ops::slowlog(&mut guard.backend, n).await
+            }
+            _ => Err("非 Redis 连接".into()),
+        }
+    }
+
     /// Kafka:消费组列表
     pub async fn kafka_groups(
         &self,

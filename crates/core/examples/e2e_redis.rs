@@ -44,14 +44,24 @@ async fn main() {
         Err(e) => fail("connect", &e),
     }
 
+    // 1b) 清残留(幂等:上次运行的 e2e:* keys)
+    let (_, old_keys) = service.redis_scan("e2e-redis", 0, "e2e:*", 0, 1000).await.unwrap();
+    for k in &old_keys {
+        let _ = service.redis_del("e2e-redis", 0, k).await;
+    }
+
     // 2) 五类型写入(string/hash/list/set/zset),key 统一前缀
     service.redis_set("e2e-redis", 0, "e2e:str", "你好 Redis").await.unwrap();
     // hash: text 供 string 用;hash 走 pairs(键值对)
     service.redis_new_key("e2e-redis", 0, "e2e:h", "hash", "", &[("field1".into(), "值1".into()), ("field2".into(), "值2".into())]).await.unwrap();
-    service.redis_new_key("e2e-redis", 0, "e2e:l", "list", "a\nb\nc", &[]).await.unwrap();
-    service.redis_new_key("e2e-redis", 0, "e2e:s", "set", "x\ny", &[]).await.unwrap();
+    service
+        .redis_new_key("e2e-redis", 0, "e2e:l", "list", "", &[("".into(), "a".into()), ("".into(), "b".into()), ("".into(), "c".into())])
+        .await.unwrap();
+    service
+        .redis_new_key("e2e-redis", 0, "e2e:s", "set", "", &[("".into(), "x".into()), ("".into(), "y".into())])
+        .await.unwrap();
     // zset: pairs=(score, member)
-    service.redis_new_key("e2e-redis", 0, "e2e:z", "zset", "", &[("100".into(), "m1".into()), ("200".into(), "m2".into())]).await.unwrap();
+    service.redis_new_key("e2e-redis", 0, "e2e:z", "zset", "", &[("m1".into(), "100".into()), ("m2".into(), "200".into())]).await.unwrap();
     pass("seed_5_types", "string/hash/list/set/zset");
 
     // 3) SCAN 命中全部 5 个 + 中文值读回

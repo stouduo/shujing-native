@@ -161,6 +161,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         mongo_indexes: None,
         mongo_import: None,
         save_result_modal: None,
+        redis_info: None,
         kafka_tab: None,
         session_tab: None,
         transfer: None,

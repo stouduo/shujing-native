@@ -64,6 +64,16 @@ pub fn draw_redis_view(
                         reset: true,
                     });
                 }
+                let sib = theme::button(
+                    ui,
+                    ui_kit::t!("Server Info", "服务器信息"),
+                    theme::BtnKind::Secondary,
+                );
+                if sib.clicked() {
+                    actions.push(TabAction::OpenRedisInfo {
+                        conn_id: rt.conn_id.clone(),
+                    });
+                }
                 // spinner 与「继续扫描」恒定占位:扫描状态异步翻转时工具栏其余
                 // 按钮的坐标绝不能跳(按压窗口内控件平移=点击被 egui 静默取消)
                 let (spin_r, _) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::hover());
