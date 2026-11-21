@@ -236,7 +236,8 @@ pub async fn apply_changes(
         Backend::Redis(_)
         | Backend::Kafka(_)
         | Backend::Rabbit(_)
-        | Backend::Mqtt(_) => {
+        | Backend::Mqtt(_)
+        | Backend::Kv(_) => {
             let _e: String = "该数据源无 SQL 回写".into();
             0u64
         }

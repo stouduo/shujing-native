@@ -2,6 +2,7 @@
 //! 每文件 = `impl Service` 的一组同源方法;lib.rs 仅保留通用方法。
 
 mod kafka;
+mod kv;
 mod mongo;
 mod mqtt;
 mod rabbit;

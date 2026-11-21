@@ -6,6 +6,7 @@ mod er;
 mod grid;
 mod icons;
 mod kafka;
+mod kv_console;
 mod modals;
 mod mqtt_console;
 mod net;

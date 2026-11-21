@@ -629,14 +629,20 @@ impl ShujingApp {
                 // Redis 伪条目(redis-db:idx:keys)走 draw_table_row 内置分流
                 let table_count = tables
                     .iter()
-                    .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:") || m.kind.starts_with("kafka-console:"))
+                    .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:") || m.kind.starts_with("kafka-console:")
+                        || m.kind.starts_with("rabbit-console:")
+                        || m.kind.starts_with("mqtt-console")
+                        || m.kind.starts_with("kv-console:"))
                     .count();
                 ui.push_id(("dbhdr", conn_id, &db), |ui| {
                 self.draw_db_header(ui, conn_id, &db, loading, table_count);
             });
                 for m in tables
                     .iter()
-                    .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:") || m.kind.starts_with("kafka-console:"))
+                    .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:") || m.kind.starts_with("kafka-console:")
+                        || m.kind.starts_with("rabbit-console:")
+                        || m.kind.starts_with("mqtt-console")
+                        || m.kind.starts_with("kv-console:"))
                 {
                     ui.push_id(("tblrow", conn_id, &db, &m.name), |ui| {
                                 self.draw_table_row(ui, conn_id, &db, &m.name);
@@ -1117,7 +1123,10 @@ impl ShujingApp {
             .and_then(|t| t.tables_by_db.get(db))
             .map(|v| {
                 v.iter()
-                    .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:") || m.kind.starts_with("kafka-console:"))
+                    .filter(|m| m.kind == "table" || m.kind.starts_with("redis-db:") || m.kind.starts_with("kafka-console:")
+                        || m.kind.starts_with("rabbit-console:")
+                        || m.kind.starts_with("mqtt-console")
+                        || m.kind.starts_with("kv-console:"))
                     .count()
             })
             .unwrap_or(0);
@@ -1217,6 +1226,130 @@ impl ShujingApp {
             .and_then(|v| v.iter().find(|m| m.name == name))
             .map(|m| m.kind.clone())
             .unwrap_or_default();
+        // ── 中间件控制台伪条目分流(Rabbit/MQTT/KV 与 Kafka 同模板)──
+        if let Some(rest) = redis_kind.strip_prefix("rabbit-console:") {
+            let _ = rest;
+            ui.push_id(("rabbitconsole", conn_id), |ui| {
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+                    Sense::click(),
+                );
+                let hl = egui::Rect::from_min_max(
+                    egui::pos2(rect.left() - 4.0, rect.top() + 2.0),
+                    egui::pos2(rect.right() + 2.0, rect.bottom() - 2.0),
+                );
+                let active = self
+                    .tabs
+                    .iter()
+                    .any(|t| matches!(&t.kind, TabKind::Rabbit(r) if r.conn_id == conn_id));
+                if active {
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                }
+                icons::paint_table(
+                    ui.painter(),
+                    egui::Rect::from_center_size(
+                        egui::pos2(rect.left() + 34.0, rect.center().y),
+                        Vec2::splat(14.0),
+                    ),
+                    if active { p.accent } else { p.muted },
+                );
+                ui.painter().text(
+                    egui::pos2(rect.left() + 48.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    ui_kit::t!("Queues Console", "队列控制台"),
+                    theme::mono(12.0),
+                    if active { p.text } else { p.text2 },
+                );
+                if resp.clicked() {
+                    self.open_rabbit(conn_id);
+                }
+            });
+            return;
+        }
+        if let Some(rest) = redis_kind.strip_prefix("mqtt-console") {
+            let _ = rest;
+            ui.push_id(("mqttconsole", conn_id), |ui| {
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+                    Sense::click(),
+                );
+                let hl = egui::Rect::from_min_max(
+                    egui::pos2(rect.left() - 4.0, rect.top() + 2.0),
+                    egui::pos2(rect.right() + 2.0, rect.bottom() - 2.0),
+                );
+                let active = self
+                    .tabs
+                    .iter()
+                    .any(|t| matches!(&t.kind, TabKind::Mqtt(m) if m.conn_id == conn_id));
+                if active {
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                }
+                icons::paint_table(
+                    ui.painter(),
+                    egui::Rect::from_center_size(
+                        egui::pos2(rect.left() + 34.0, rect.center().y),
+                        Vec2::splat(14.0),
+                    ),
+                    if active { p.accent } else { p.muted },
+                );
+                ui.painter().text(
+                    egui::pos2(rect.left() + 48.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    ui_kit::t!("Topics Console", "主题控制台"),
+                    theme::mono(12.0),
+                    if active { p.text } else { p.text2 },
+                );
+                if resp.clicked() {
+                    self.open_mqtt(conn_id);
+                }
+            });
+            return;
+        }
+        if let Some(rest) = redis_kind.strip_prefix("kv-console:") {
+            let _ = rest;
+            ui.push_id(("kvconsole", conn_id), |ui| {
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+                    Sense::click(),
+                );
+                let hl = egui::Rect::from_min_max(
+                    egui::pos2(rect.left() - 4.0, rect.top() + 2.0),
+                    egui::pos2(rect.right() + 2.0, rect.bottom() - 2.0),
+                );
+                let active = self
+                    .tabs
+                    .iter()
+                    .any(|t| matches!(&t.kind, TabKind::Kv(k) if k.conn_id == conn_id));
+                if active {
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                }
+                icons::paint_table(
+                    ui.painter(),
+                    egui::Rect::from_center_size(
+                        egui::pos2(rect.left() + 34.0, rect.center().y),
+                        Vec2::splat(14.0),
+                    ),
+                    if active { p.accent } else { p.muted },
+                );
+                ui.painter().text(
+                    egui::pos2(rect.left() + 48.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    ui_kit::t!("Keys Console", "键值控制台"),
+                    theme::mono(12.0),
+                    if active { p.text } else { p.text2 },
+                );
+                if resp.clicked() {
+                    self.open_kv(conn_id);
+                }
+            });
+            return;
+        }
         if let Some(rest) = redis_kind.strip_prefix("kafka-console:") {
             let _ = rest;
             ui.push_id(("kafkaconsole", conn_id), |ui| {

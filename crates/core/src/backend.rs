@@ -74,6 +74,46 @@ pub async fn connect(
             crate::mqtt::probe(&st).await?;
             Ok(Backend::Mqtt(st))
         }
+        DbType::Nacos | DbType::Consul | DbType::Etcd => {
+            let host = req(&info.host, "缺少配置中心地址")?;
+            let default_port = match info.db_type {
+                DbType::Nacos => 8848,
+                DbType::Consul => 8500,
+                _ => 2379,
+            };
+            let base = if host.starts_with("http://") || host.starts_with("https://") {
+                host.trim_end_matches('/').to_string()
+            } else if host.contains(':') {
+                format!("http://{host}")
+            } else {
+                format!("http://{host}:{default_port}")
+            };
+            let base = if info.db_type == DbType::Nacos && !base.contains("/nacos") {
+                format!("{base}/nacos")
+            } else {
+                base
+            };
+            let user = info
+                .user
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let auth = user.map(|u| (u, info.password.clone().unwrap_or_default()));
+            let kind = match info.db_type {
+                DbType::Nacos => crate::kv::KvKind::Nacos,
+                DbType::Consul => crate::kv::KvKind::Consul,
+                _ => crate::kv::KvKind::Etcd,
+            };
+            let st = crate::kv::connect(
+                kind,
+                base,
+                auth,
+                info.database.clone().filter(|d| !d.trim().is_empty()),
+            )
+            .await?;
+            Ok(Backend::Kv(st))
+        }
         DbType::Kafka => {
             let host = req(&info.host, "缺少 Kafka bootstrap 地址")?;
             let port = info.port.unwrap_or(9092);
@@ -723,6 +763,18 @@ impl Backend {
                 ))
             }
             Backend::Mqtt(_) => Ok("MQTT broker".into()),
+            Backend::Kv(st) => {
+                let entries = crate::kv::list(st, "").await?;
+                Ok(format!(
+                    "{} · {} keys",
+                    match st.kind {
+                        crate::kv::KvKind::Nacos => "Nacos",
+                        crate::kv::KvKind::Consul => "Consul",
+                        crate::kv::KvKind::Etcd => "etcd",
+                    },
+                    entries.len()
+                ))
+            }
         }
     }
 }

@@ -113,6 +113,12 @@ pub enum BgEvent {
     TransferSrcCols {
         cols: Option<Vec<String>>,
     },
+    KvLoaded {
+        result: Result<Vec<shujing_core::kv::KvEntry>, String>,
+    },
+    KvSaved {
+        result: Result<(), String>,
+    },
     MqttBrowseDone {
         result: Result<Vec<shujing_core::mqtt::MqttMsg>, String>,
     },
@@ -423,6 +429,7 @@ pub struct ShujingApp {
     pub redis_info: Option<RedisInfoState>,
     pub rabbit_tab: Option<RabbitTab>,
     pub mqtt_tab: Option<MqttTab>,
+    pub kv_tab: Option<KvTab>,
     /// 查询结果存为新表:命名弹窗(tab_id, 表名草稿)
     pub save_result_modal: Option<(String, String)>,
     pub mongo_import: Option<MongoImportState>,
@@ -552,6 +559,7 @@ impl ShujingApp {
             redis_info: None,
             rabbit_tab: None,
             mqtt_tab: None,
+            kv_tab: None,
             save_result_modal: None,
             mongo_import: None,
             transfer: None,
@@ -1282,6 +1290,97 @@ impl ShujingApp {
         self.rabbit_load_queues();
     }
 
+    /// 打开配置中心控制台
+    pub fn open_kv(&mut self, conn_id: &str) {
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.kind, TabKind::Kv(k) if k.conn_id == conn_id))
+        {
+            self.active_tab = i;
+            return;
+        }
+        let id = format!("kv{}", rand_suffix());
+        self.kv_tab = Some(KvTab {
+            conn_id: conn_id.to_string(),
+            entries: Vec::new(),
+            selected: None,
+            edit_value: None,
+            filter: String::new(),
+            new_key: String::new(),
+            loading: false,
+            busy: false,
+            error: None,
+            drop_arm: false,
+        });
+        self.tabs.push(Tab {
+            id: id.clone(),
+            title: ui_kit::t!("KV Console", "KV 控制台").to_string(),
+            kind: TabKind::Kv(
+                self.kv_tab.as_ref().expect("kv_tab 未初始化").clone_shell(&id),
+            ),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.kv_load();
+    }
+
+    /// KV:重新加载
+    pub fn kv_load(&mut self) {
+        let Some(k) = self.kv_tab.as_ref() else {
+            return;
+        };
+        if k.loading {
+            return;
+        }
+        let conn_id = k.conn_id.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.kv_tab.as_mut().unwrap().loading = true;
+        net::spawn(async move {
+            let result = service.kv_list(&conn_id, "").await;
+            let _ = tx.send(BgEvent::KvLoaded { result });
+        });
+    }
+
+    /// KV:保存(含新建)
+    pub fn kv_save(&mut self, key: &str, value: &str) {
+        let Some(k) = self.kv_tab.as_ref() else {
+            return;
+        };
+        if k.busy {
+            return;
+        }
+        let conn_id = k.conn_id.clone();
+        let key = key.to_string();
+        let value = value.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.kv_tab.as_mut().unwrap().busy = true;
+        net::spawn(async move {
+            let result = service.kv_put(&conn_id, &key, &value).await;
+            let _ = tx.send(BgEvent::KvSaved { result });
+        });
+    }
+
+    /// KV:删除(armed 后调用)
+    pub fn kv_delete(&mut self, key: &str) {
+        let Some(k) = self.kv_tab.as_ref() else {
+            return;
+        };
+        if k.busy {
+            return;
+        }
+        let conn_id = k.conn_id.clone();
+        let key = key.to_string();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.kv_tab.as_mut().unwrap().busy = true;
+        net::spawn(async move {
+            let result = service.kv_delete(&conn_id, &key).await;
+            let _ = tx.send(BgEvent::KvSaved { result });
+        });
+    }
+
     /// 打开 MQTT 控制台
     pub fn open_mqtt(&mut self, conn_id: &str) {
         if let Some(i) = self
@@ -1672,6 +1771,7 @@ impl ShujingApp {
         Some(match &t.kind {
             TabKind::Session(s) => (s.conn_id.as_str(), "", None),
             TabKind::Mqtt(m) => (m.conn_id.as_str(), "", None),
+            TabKind::Kv(k) => (k.conn_id.as_str(), "", None),
             TabKind::Rabbit(r) => (r.conn_id.as_str(), "", None),
             TabKind::Kafka(k) => (k.conn_id.as_str(), "", None),
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
@@ -2195,6 +2295,7 @@ impl ShujingApp {
                 TabKind::Kafka(k) => k.conn_id.clone(),
                 TabKind::Rabbit(r) => r.conn_id.clone(),
                 TabKind::Mqtt(m) => m.conn_id.clone(),
+                TabKind::Kv(k) => k.conn_id.clone(),
                 TabKind::Session(s) => s.conn_id.clone(),
             })
         });
@@ -2210,6 +2311,7 @@ impl ShujingApp {
             TabKind::Session(_) => None,
             TabKind::Rabbit(_) => None,
             TabKind::Mqtt(_) => None,
+            TabKind::Kv(_) => None,
         });
         // 指定了连接(侧栏右键"新建查询")时,取侧栏展开的库;
         // 仅限无默认库的 MySQL 连接——有默认库的连接保持 None 走默认,
@@ -2319,6 +2421,7 @@ impl ShujingApp {
                 TabKind::Kafka(k) => k.conn_id == conn_id,
                 TabKind::Rabbit(r) => r.conn_id == conn_id,
                 TabKind::Mqtt(m) => m.conn_id == conn_id,
+                TabKind::Kv(k) => k.conn_id == conn_id,
                 TabKind::Session(s) => s.conn_id == conn_id,
             };
             if belongs {
@@ -3807,6 +3910,7 @@ impl ShujingApp {
                 TabKind::Kafka(_) => {}
                 TabKind::Rabbit(_) => {}
                 TabKind::Mqtt(_) => {}
+                TabKind::Kv(_) => {}
                 TabKind::Session(_) => {}
                 TabKind::Ddl(d) => tabs.push(SessionTab::Ddl {
                     conn: d.conn_id.clone(),
@@ -4679,6 +4783,33 @@ impl ShujingApp {
                 BgEvent::TransferSrcCols { cols } => {
                     if let Some(st) = self.transfer.as_mut() {
                         st.map_srcs = cols;
+                    }
+                    continue;
+                }
+                BgEvent::KvLoaded { result } => {
+                    if let Some(k) = self.kv_tab.as_mut() {
+                        k.loading = false;
+                        match result {
+                            Ok(entries) => {
+                                k.entries = entries;
+                                k.error = None;
+                            }
+                            Err(e) => k.error = Some(e),
+                        }
+                    }
+                    continue;
+                }
+                BgEvent::KvSaved { result, .. } => {
+                    let had = self.kv_tab.is_some();
+                    if let Some(k) = self.kv_tab.as_mut() {
+                        k.busy = false;
+                        match &result {
+                            Ok(_) => self.toast_error(ui_kit::t!("Saved", "已保存").to_string()),
+                            Err(e) => self.toast_error(e.clone()),
+                        }
+                    }
+                    if had {
+                        self.kv_load();
                     }
                     continue;
                 }

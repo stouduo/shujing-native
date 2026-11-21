@@ -21,6 +21,12 @@ pub enum DbType {
     Rabbit,
         #[serde(rename = "mqtt")]
     Mqtt,
+    #[serde(rename = "nacos")]
+    Nacos,
+    #[serde(rename = "consul")]
+    Consul,
+    #[serde(rename = "etcd")]
+    Etcd,
 }
 
 /// 数据源能力矩阵(策略模式+表驱动):新数据源只在此声明一次能力,
@@ -87,6 +93,10 @@ impl DbType {
                 ..SQL_DB
             },
             DbType::Redis | DbType::Kafka | DbType::Rabbit | DbType::Mqtt => Capabilities {
+                middleware: true,
+                ..Capabilities::none()
+            },
+            DbType::Nacos | DbType::Consul | DbType::Etcd => Capabilities {
                 middleware: true,
                 ..Capabilities::none()
             },
@@ -505,6 +515,8 @@ pub enum Backend {
     Kafka(crate::kafka::KafkaState),
     Rabbit(crate::rabbit::RabbitState),
     Mqtt(crate::mqtt::MqttState),
+    /// 配置中心三件(Nacos/Consul/Etcd)共用一个 KV 后端
+    Kv(crate::kv::KvState),
 }
 
 /// ClickHouse 连接:HTTP 接口(8123;reqwest 自带连接池)

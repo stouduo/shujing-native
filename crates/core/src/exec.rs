@@ -448,7 +448,8 @@ impl Backend {
             // 中间件族(Kafka/Rabbit/Mqtt/后续新增)统一无 SQL 执行面
             Backend::Kafka(_)
             | Backend::Rabbit(_)
-            | Backend::Mqtt(_) => Err("该数据源无 SQL 执行面(浏览请用专属控制台)".into()),
+            | Backend::Mqtt(_)
+            | Backend::Kv(_) => Err("该数据源无 SQL 执行面(浏览请用专属控制台)".into()),
         }
     }
 

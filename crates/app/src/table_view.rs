@@ -311,6 +311,25 @@ pub enum TabAction {
     OpenRedisInfo {
         conn_id: String,
     },
+    /// 打开配置中心控制台
+    OpenKvConsole {
+        conn_id: String,
+    },
+    /// KV:刷新
+    KvLoad {
+        tab_id: String,
+    },
+    /// KV:保存键
+    KvSave {
+        tab_id: String,
+        key: String,
+        value: String,
+    },
+    /// KV:删除键
+    KvDelete {
+        tab_id: String,
+        key: String,
+    },
     /// 打开 MQTT 控制台
     OpenMqttConsole {
         conn_id: String,
@@ -534,6 +553,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Kafka(_) => 7,
                                 TabKind::Rabbit(_) => 9,
                                 TabKind::Mqtt(_) => 10,
+                                TabKind::Kv(_) => 11,
                                 TabKind::Session(_) => 8,
                                 TabKind::Er(_) => 5,
                                 TabKind::Ddl(_) => 6,
@@ -4200,6 +4220,14 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             query_only,
         } => app.session_kill(&sid, query_only),
         TabAction::OpenRedisInfo { conn_id } => app.open_redis_info(&conn_id),
+        TabAction::OpenKvConsole { conn_id } => app.open_kv(&conn_id),
+        TabAction::KvLoad { tab_id: _ } => app.kv_load(),
+        TabAction::KvSave {
+            tab_id: _,
+            key,
+            value,
+        } => app.kv_save(&key, &value),
+        TabAction::KvDelete { tab_id: _, key } => app.kv_delete(&key),
         TabAction::OpenMqttConsole { conn_id } => app.open_mqtt(&conn_id),
         TabAction::MqttBrowse { tab_id: _ } => app.mqtt_browse(),
         TabAction::MqttPublish {
@@ -5205,19 +5233,8 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
 
 /// iOS 分段控件:轨道 + 选中凸起
 fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width: f32) -> bool {
-    let mut changed = false;
-    let p = theme::c();
-    let h = 30.0;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(8), p.bg);
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(8),
-        egui::Stroke::new(1.0, p.border),
-        egui::StrokeKind::Inside,
-    );
-    let opts = [
+    // 13 类型分段放不下(440px/13≈34px),改下拉(DBX 同款交互);函数签名不变
+    let opts: &[(shujing_core::DbType, &str)] = &[
         (shujing_core::DbType::MySql, "MySQL"),
         (shujing_core::DbType::Sqlite, "SQLite"),
         (shujing_core::DbType::Postgres, "PostgreSQL"),
@@ -5227,47 +5244,32 @@ fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width:
         (shujing_core::DbType::ClickHouse, "ClickHouse"),
         (shujing_core::DbType::Kafka, "Kafka"),
         (shujing_core::DbType::Rabbit, "RabbitMQ"),
+        (shujing_core::DbType::Mqtt, "MQTT"),
+        (shujing_core::DbType::Nacos, "Nacos"),
+        (shujing_core::DbType::Consul, "Consul"),
+        (shujing_core::DbType::Etcd, "etcd"),
     ];
-    let seg_w = (width - 6.0) / opts.len() as f32;
-    for (i, (t, label)) in opts.iter().enumerate() {
-        let srect = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + 3.0 + i as f32 * seg_w, rect.top() + 3.0),
-            egui::vec2(seg_w, h - 6.0),
-        );
-        let resp = ui.allocate_rect(srect, Sense::click());
-        let selected = *value == *t;
-        if selected {
-            ui.painter()
-                .rect_filled(srect, egui::CornerRadius::same(6), p.elevated);
-        } else if resp.hovered() {
-            ui.painter()
-                .rect_filled(srect, egui::CornerRadius::same(6), p.hover);
-        }
-        let font = if selected {
-            theme::bold(if *t == shujing_core::DbType::Postgres {
-                10.5
-            } else {
-                12.0
-            })
-        } else {
-            egui::FontId::proportional(if *t == shujing_core::DbType::Postgres {
-                10.5
-            } else {
-                12.0
-            })
-        };
-        ui.painter().text(
-            srect.center(),
-            egui::Align2::CENTER_CENTER,
-            *label,
-            font,
-            if selected { p.text } else { p.text2 },
-        );
-        if resp.clicked() {
-            changed = *value != *t;
-            *value = *t;
-        }
-    }
+    let selected_label = opts
+        .iter()
+        .find(|(t, _)| t == value)
+        .map(|(_, l)| *l)
+        .unwrap_or("MySQL");
+    let mut changed = false;
+    egui::ComboBox::from_id_salt("conn-dbtype")
+        .width(width)
+        .selected_text(selected_label)
+        .show_ui(ui, |ui| {
+            for (t, label) in opts {
+                if ui
+                    .selectable_label(*t == *value, RichText::new(*label).size(12.0))
+                    .clicked()
+                    && *value != *t
+                {
+                    *value = *t;
+                    changed = true;
+                }
+            }
+        });
     changed
 }
 
@@ -5281,6 +5283,9 @@ fn default_port(t: shujing_core::DbType) -> &'static str {
         shujing_core::DbType::ClickHouse => "8123",
         shujing_core::DbType::Kafka => "9092",
         shujing_core::DbType::Rabbit => "15672",
+        shujing_core::DbType::Nacos => "8848",
+        shujing_core::DbType::Consul => "8500",
+        shujing_core::DbType::Etcd => "2379",
         shujing_core::DbType::Mqtt => "1883",
         shujing_core::DbType::Sqlite => "",
     }
@@ -5687,6 +5692,7 @@ impl eframe::App for ShujingApp {
                 TabKind::Kafka(k) => crate::kafka::draw_kafka_view(ctx, &tab_id, k),
                 TabKind::Rabbit(r) => crate::rabbit::draw_rabbit_view(ctx, &tab_id, r),
                 TabKind::Mqtt(m) => crate::mqtt_console::draw_mqtt_view(ctx, &tab_id, m),
+                TabKind::Kv(k) => crate::kv_console::draw_kv_view(ctx, &tab_id, k),
                 TabKind::Session(s) => crate::sessions::draw_sessions_view(ctx, &tab_id, s),
                 TabKind::Ddl(d) => structure::draw_ddl_view(ctx, &tab_id, d),
             };

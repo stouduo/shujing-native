@@ -155,6 +155,7 @@ pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<V
         Backend::Kafka(_) => Ok(vec![]),
         Backend::Rabbit(_) => Ok(vec![]),
         Backend::Mqtt(_) => Ok(vec![]),
+        Backend::Kv(_) => Ok(vec![]),
         Backend::Mssql(st) => {
             let mut c = Backend::mssql_client(st).await?;
             let rows = c
@@ -650,7 +651,10 @@ pub async fn object_ddl(
         | (crate::model::DbType::ClickHouse, _)
         | (crate::model::DbType::Kafka, _)
         | (crate::model::DbType::Rabbit, _)
-        | (crate::model::DbType::Mqtt, _) => String::new(),
+        | (crate::model::DbType::Mqtt, _)
+        | (crate::model::DbType::Nacos, _)
+        | (crate::model::DbType::Consul, _)
+        | (crate::model::DbType::Etcd, _) => String::new(),
         (crate::model::DbType::Sqlite, _) => format!(
             "SELECT sql FROM sqlite_master WHERE name = {}",
             format!("'{}'", name.replace('\'', "''"))
@@ -768,6 +772,14 @@ impl Backend {
                     owner: None,
                 }])
             }
+            Backend::Kv(st) => {
+                let entries = crate::kv::list(st, "").await?;
+                Ok(vec![crate::model::TableMeta {
+                    name: format!("Keys ({})", entries.len()),
+                    kind: format!("kv-console:{}", entries.len()),
+                    owner: None,
+                }])
+            }
             Backend::Mssql(st) => {
                 let db = database
                     .map(str::trim)
@@ -862,7 +874,8 @@ async fn resolve_mysql_db(
             Backend::Redis(_)
             | Backend::Kafka(_)
             | Backend::Rabbit(_)
-            | Backend::Mqtt(_) => Err("该数据源无表结构".into()),
+            | Backend::Mqtt(_)
+            | Backend::Kv(_) => Err("该数据源无表结构".into()),
         }
     }
 
@@ -883,7 +896,8 @@ async fn resolve_mysql_db(
             Backend::Redis(_)
             | Backend::Kafka(_)
             | Backend::Rabbit(_)
-            | Backend::Mqtt(_) => Err("该数据源无表计数(中间件请用专属控制台)".into()),
+            | Backend::Mqtt(_)
+            | Backend::Kv(_) => Err("该数据源无表计数(中间件请用专属控制台)".into()),
         }
     }
 
@@ -910,6 +924,7 @@ async fn resolve_mysql_db(
             Backend::Kafka(_) => Ok(vec![]),
             Backend::Rabbit(_) => Ok(vec![]),
             Backend::Mqtt(_) => Ok(vec![]),
+            Backend::Kv(_) => Ok(vec![]),
         Backend::Rabbit(_) => Ok(vec![]),
         }
     }

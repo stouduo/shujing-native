@@ -6,6 +6,7 @@ pub mod backend;
 pub mod clickhouse;
 pub mod composite;
 pub mod kafka;
+pub mod kv;
 pub mod mqtt;
 pub mod rabbit;
 pub mod designer;
@@ -374,6 +375,9 @@ impl Service {
                 crate::model::DbType::Kafka => 9092,
                 crate::model::DbType::Rabbit => 15672,
                 crate::model::DbType::Mqtt => 1883,
+                crate::model::DbType::Nacos => 8848,
+                crate::model::DbType::Consul => 8500,
+                crate::model::DbType::Etcd => 2379,
                 crate::model::DbType::Sqlite => 0,
             });
             let g = ssh::open_tunnel(&ssh_cfg, &target_host, target_port).await?;
@@ -450,6 +454,9 @@ impl Service {
             crate::model::DbType::Kafka => 9092,
             crate::model::DbType::Rabbit => 15672,
             crate::model::DbType::Mqtt => 1883,
+            crate::model::DbType::Nacos => 8848,
+            crate::model::DbType::Consul => 8500,
+            crate::model::DbType::Etcd => 2379,
             crate::model::DbType::Sqlite => 0,
         });
         let guard = ssh::open_tunnel(ssh_cfg, &target_host, target_port).await?;

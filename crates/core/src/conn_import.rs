@@ -16,6 +16,9 @@ fn conn_id(name: &str, db_type: &DbType) -> String {
         DbType::Kafka => "kafka",
         DbType::Rabbit => "rabbit",
         DbType::Mqtt => "mqtt",
+        DbType::Nacos => "nacos",
+        DbType::Consul => "consul",
+        DbType::Etcd => "etcd",
     };
     // 稳定 id:导入重跑不会因时间戳不同而重复
     format!("imp-{t}-{}", sanitize(name))
@@ -58,6 +61,10 @@ fn dbeaver_provider_to_type(provider: &str) -> Option<DbType> {
         "clickhouse" => Some(DbType::ClickHouse),
         "kafka" => Some(DbType::Kafka),
         "rabbitmq" => Some(DbType::Rabbit),
+        "mqtt" => Some(DbType::Mqtt),
+        "nacos" => Some(DbType::Nacos),
+        "consul" => Some(DbType::Consul),
+        "etcd" => Some(DbType::Etcd),
         _ => None,
     }
 }

@@ -463,6 +463,38 @@ impl MqttTab {
     }
 }
 
+/// 配置中心控制台标签(Nacos/Consul/Etcd 三类型共用)
+pub struct KvTab {
+    pub conn_id: String,
+    pub entries: Vec<shujing_core::kv::KvEntry>,
+    pub selected: Option<String>,
+    pub edit_value: Option<String>,
+    pub filter: String,
+    pub new_key: String,
+    pub loading: bool,
+    pub busy: bool,
+    pub error: Option<String>,
+    pub drop_arm: bool,
+}
+
+impl KvTab {
+    /// 用于 tabs 的独立实例(状态从零)
+    pub fn clone_shell(&self, _new_id: &str) -> KvTab {
+        KvTab {
+            conn_id: self.conn_id.clone(),
+            entries: self.entries.clone(),
+            selected: None,
+            edit_value: None,
+            filter: String::new(),
+            new_key: String::new(),
+            loading: false,
+            busy: false,
+            error: None,
+            drop_arm: false,
+        }
+    }
+}
+
 /// RabbitMQ 控制台标签(概览/队列/消息取回/发送/清空)
 pub struct RabbitTab {
     pub conn_id: String,
@@ -781,6 +813,8 @@ pub enum TabKind {
     Rabbit(RabbitTab),
     /// MQTT 控制台(不参与会话恢复)
     Mqtt(MqttTab),
+    /// 配置中心控制台(不参与会话恢复)
+    Kv(KvTab),
     /// 服务器会话面板(不参与会话恢复)
     Session(SessionsTab),
     Ddl(DdlTab),

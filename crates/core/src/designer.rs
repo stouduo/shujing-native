@@ -310,7 +310,10 @@ pub fn designer_sql(
             | DbType::ClickHouse
             | DbType::Kafka
             | DbType::Rabbit
-            | DbType::Mqtt => {}
+            | DbType::Mqtt
+            | DbType::Nacos
+            | DbType::Consul
+            | DbType::Etcd => {}
             DbType::Mssql => {
                 // T-SQL:ALTER COLUMN 语法(SQL Server 不支持 MODIFY)
                 alters.push(format!(
