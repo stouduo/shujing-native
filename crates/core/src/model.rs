@@ -19,6 +19,8 @@ pub enum DbType {
     Kafka,
     #[serde(rename = "rabbitmq")]
     Rabbit,
+    #[serde(rename = "mqtt")]
+    Mqtt,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -431,6 +433,7 @@ pub enum Backend {
     ClickHouse(ClickHouseState),
     Kafka(crate::kafka::KafkaState),
     Rabbit(crate::rabbit::RabbitState),
+    Mqtt(crate::mqtt::MqttState),
 }
 
 /// ClickHouse 连接:HTTP 接口(8123;reqwest 自带连接池)

@@ -212,7 +212,8 @@ pub fn plan_check(db_type: DbType, r: &ExecResult) -> Vec<Finding> {
         | DbType::Mssql
         | DbType::ClickHouse
         | DbType::Kafka
-        | DbType::Rabbit => {}
+        | DbType::Rabbit
+        | DbType::Mqtt => {}
     }
     out
 }

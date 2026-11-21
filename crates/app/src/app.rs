@@ -110,6 +110,12 @@ pub enum BgEvent {
     TransferSrcCols {
         cols: Option<Vec<String>>,
     },
+    MqttBrowseDone {
+        result: Result<Vec<shujing_core::mqtt::MqttMsg>, String>,
+    },
+    MqttPublishDone {
+        result: Result<usize, String>,
+    },
     RabbitQueuesLoaded {
         tab_id: String,
         result: Result<(shujing_core::rabbit::RabbitOverview, Vec<shujing_core::rabbit::RabbitQueue>), String>,
@@ -774,6 +780,36 @@ pub struct RedisInfoState {
     pub error: Option<String>,
 }
 
+/// MQTT 控制台标签(主题采样浏览/载荷/发布)
+pub struct MqttTab {
+    pub conn_id: String,
+    pub topics: Vec<shujing_core::mqtt::MqttMsg>,
+    pub selected: Option<String>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub pub_topic: String,
+    pub pub_payload: String,
+    pub pub_retain: bool,
+    pub sending: bool,
+}
+
+impl MqttTab {
+    /// 用于 tabs 的独立实例(状态从零)
+    pub fn clone_shell(&self, _new_id: &str) -> MqttTab {
+        MqttTab {
+            conn_id: self.conn_id.clone(),
+            topics: self.topics.clone(),
+            selected: None,
+            loading: false,
+            error: None,
+            pub_topic: String::new(),
+            pub_payload: String::new(),
+            pub_retain: false,
+            sending: false,
+        }
+    }
+}
+
 /// RabbitMQ 控制台标签(概览/队列/消息取回/发送/清空)
 pub struct RabbitTab {
     pub conn_id: String,
@@ -1090,6 +1126,8 @@ pub enum TabKind {
     Kafka(KafkaTab),
     /// RabbitMQ 控制台(不参与会话恢复)
     Rabbit(RabbitTab),
+    /// MQTT 控制台(不参与会话恢复)
+    Mqtt(MqttTab),
     /// 服务器会话面板(不参与会话恢复)
     Session(SessionsTab),
     Ddl(DdlTab),
@@ -1296,6 +1334,7 @@ pub struct ShujingApp {
     pub session_tab: Option<SessionsTab>,
     pub redis_info: Option<RedisInfoState>,
     pub rabbit_tab: Option<RabbitTab>,
+    pub mqtt_tab: Option<MqttTab>,
     /// 查询结果存为新表:命名弹窗(tab_id, 表名草稿)
     pub save_result_modal: Option<(String, String)>,
     pub mongo_import: Option<MongoImportState>,
@@ -1424,6 +1463,7 @@ impl ShujingApp {
             session_tab: None,
             redis_info: None,
             rabbit_tab: None,
+            mqtt_tab: None,
             save_result_modal: None,
             mongo_import: None,
             transfer: None,
@@ -2154,6 +2194,81 @@ impl ShujingApp {
         self.rabbit_load_queues();
     }
 
+    /// 打开 MQTT 控制台
+    pub fn open_mqtt(&mut self, conn_id: &str) {
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.kind, TabKind::Mqtt(m) if m.conn_id == conn_id))
+        {
+            self.active_tab = i;
+            return;
+        }
+        let id = format!("mq{}", rand_suffix());
+        self.mqtt_tab = Some(MqttTab {
+            conn_id: conn_id.to_string(),
+            topics: Vec::new(),
+            selected: None,
+            loading: false,
+            error: None,
+            pub_topic: String::new(),
+            pub_payload: String::new(),
+            pub_retain: false,
+            sending: false,
+        });
+        self.tabs.push(Tab {
+            id: id.clone(),
+            title: ui_kit::t!("MQTT Console", "MQTT 控制台").to_string(),
+            kind: TabKind::Mqtt(
+                self.mqtt_tab.as_ref().expect("mqtt_tab 未初始化").clone_shell(&id),
+            ),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.mqtt_browse();
+    }
+
+    /// MQTT:采样浏览(订阅 # 3 秒)
+    pub fn mqtt_browse(&mut self) {
+        let Some(m) = self.mqtt_tab.as_ref() else {
+            return;
+        };
+        if m.loading {
+            return;
+        }
+        let conn_id = m.conn_id.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.mqtt_tab.as_mut().unwrap().loading = true;
+        net::spawn(async move {
+            let result = service.mqtt_browse(&conn_id, 3).await;
+            let _ = tx.send(BgEvent::MqttBrowseDone { result });
+        });
+    }
+
+    /// MQTT:发布
+    pub fn mqtt_publish(&mut self, topic: &str, retain: bool) {
+        let Some(m) = self.mqtt_tab.as_ref() else {
+            return;
+        };
+        if m.sending {
+            return;
+        }
+        if m.pub_payload.trim().is_empty() {
+            self.toast_error(ui_kit::t!("Payload is empty", "消息体为空").to_string());
+            return;
+        }
+        let conn_id = m.conn_id.clone();
+        let topic = topic.to_string();
+        let payload = m.pub_payload.clone();
+        let tx = self.event_tx.clone();
+        let service = self.service.clone();
+        self.mqtt_tab.as_mut().unwrap().sending = true;
+        net::spawn(async move {
+            let result = service.mqtt_publish(&conn_id, &topic, &payload, retain).await;
+            let _ = tx.send(BgEvent::MqttPublishDone { result });
+        });
+    }
+
     /// RabbitMQ:拉取概览+队列列表
     pub fn rabbit_load_queues(&mut self) {
         let Some(r) = self.rabbit_tab.as_ref() else {
@@ -2468,6 +2583,7 @@ impl ShujingApp {
         let t = self.tabs.get(self.active_tab)?;
         Some(match &t.kind {
             TabKind::Session(s) => (s.conn_id.as_str(), "", None),
+            TabKind::Mqtt(m) => (m.conn_id.as_str(), "", None),
             TabKind::Rabbit(r) => (r.conn_id.as_str(), "", None),
             TabKind::Kafka(k) => (k.conn_id.as_str(), "", None),
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
@@ -2990,6 +3106,7 @@ impl ShujingApp {
                 TabKind::Ddl(d) => d.conn_id.clone(),
                 TabKind::Kafka(k) => k.conn_id.clone(),
                 TabKind::Rabbit(r) => r.conn_id.clone(),
+                TabKind::Mqtt(m) => m.conn_id.clone(),
                 TabKind::Session(s) => s.conn_id.clone(),
             })
         });
@@ -3004,6 +3121,7 @@ impl ShujingApp {
             TabKind::Kafka(_) => None,
             TabKind::Session(_) => None,
             TabKind::Rabbit(_) => None,
+            TabKind::Mqtt(_) => None,
         });
         // 指定了连接(侧栏右键"新建查询")时,取侧栏展开的库;
         // 仅限无默认库的 MySQL 连接——有默认库的连接保持 None 走默认,
@@ -3112,6 +3230,7 @@ impl ShujingApp {
                 TabKind::Ddl(d) => d.conn_id == conn_id,
                 TabKind::Kafka(k) => k.conn_id == conn_id,
                 TabKind::Rabbit(r) => r.conn_id == conn_id,
+                TabKind::Mqtt(m) => m.conn_id == conn_id,
                 TabKind::Session(s) => s.conn_id == conn_id,
             };
             if belongs {
@@ -4596,9 +4715,10 @@ impl ShujingApp {
                     conn: e.conn_id.clone(),
                     database: e.database.clone(),
                 }),
-                // Kafka/Rabbit/会话面板不入会话(重启后从侧栏重开)
+                // Kafka/Rabbit/MQTT/会话面板不入会话(重启后从侧栏重开)
                 TabKind::Kafka(_) => {}
                 TabKind::Rabbit(_) => {}
+                TabKind::Mqtt(_) => {}
                 TabKind::Session(_) => {}
                 TabKind::Ddl(d) => tabs.push(SessionTab::Ddl {
                     conn: d.conn_id.clone(),
@@ -5471,6 +5591,38 @@ impl ShujingApp {
                 BgEvent::TransferSrcCols { cols } => {
                     if let Some(st) = self.transfer.as_mut() {
                         st.map_srcs = cols;
+                    }
+                    continue;
+                }
+                BgEvent::MqttBrowseDone { result } => {
+                    if let Some(m) = self.mqtt_tab.as_mut() {
+                        m.loading = false;
+                        match result {
+                            Ok(topics) => {
+                                m.topics = topics;
+                                m.error = None;
+                                m.selected = m.topics.first().map(|t| t.topic.clone());
+                            }
+                            Err(e) => m.error = Some(e),
+                        }
+                    }
+                    continue;
+                }
+                BgEvent::MqttPublishDone { result, .. } => {
+                    let had_tab = self.mqtt_tab.is_some();
+                    if let Some(m) = self.mqtt_tab.as_mut() {
+                        m.sending = false;
+                        match &result {
+                            Ok(n) => self.toast_error(format!(
+                                "{} · {} B",
+                                ui_kit::t!("Published", "已发布"),
+                                n
+                            )),
+                            Err(e) => self.toast_error(e.clone()),
+                        }
+                    }
+                    if had_tab {
+                        self.mqtt_browse();
                     }
                     continue;
                 }

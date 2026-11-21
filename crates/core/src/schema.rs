@@ -105,6 +105,11 @@ async fn fk_pg(client: &tokio_postgres::Client) -> Result<Vec<FkMeta>, String> {
 
 /// 表名来自我们查出的列表,仍做标识符转义防注入
 /// 列出服务器上所有数据库
+/// MQTT 伪条目显示名(中文 UI 常量在 app 层;core 无 i18n 依赖)
+fn ui_kit_noop() -> String {
+    "Topics Console".to_string()
+}
+
 pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<Vec<String>, String> {
     match backend {
         Backend::Sqlite(_) => Ok(vec![]),
@@ -149,6 +154,7 @@ pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<V
         Backend::ClickHouse(st) => crate::clickhouse::list_databases(st).await,
         Backend::Kafka(_) => Ok(vec![]),
         Backend::Rabbit(_) => Ok(vec![]),
+        Backend::Mqtt(_) => Ok(vec![]),
         Backend::Mssql(st) => {
             let mut c = Backend::mssql_client(st).await?;
             let rows = c
@@ -643,7 +649,8 @@ pub async fn object_ddl(
         | (crate::model::DbType::Mssql, _)
         | (crate::model::DbType::ClickHouse, _)
         | (crate::model::DbType::Kafka, _)
-        | (crate::model::DbType::Rabbit, _) => String::new(),
+        | (crate::model::DbType::Rabbit, _)
+        | (crate::model::DbType::Mqtt, _) => String::new(),
         (crate::model::DbType::Sqlite, _) => format!(
             "SELECT sql FROM sqlite_master WHERE name = {}",
             format!("'{}'", name.replace('\'', "''"))
@@ -753,6 +760,14 @@ impl Backend {
                     owner: None,
                 }])
             }
+            Backend::Mqtt(_) => {
+                // MQTT 无主题枚举语义:伪条目进控制台(浏览=订阅 # 采样)
+                Ok(vec![crate::model::TableMeta {
+                    name: ui_kit_noop(),
+                    kind: "mqtt-console".into(),
+                    owner: None,
+                }])
+            }
             Backend::Mssql(st) => {
                 let db = database
                     .map(str::trim)
@@ -846,6 +861,7 @@ async fn resolve_mysql_db(
             Backend::ClickHouse(st) => crate::clickhouse::structure(st, database, table).await,
             Backend::Kafka(_) => Err("Kafka 无表结构".into()),
             Backend::Rabbit(_) => Err("RabbitMQ 无表结构".into()),
+            Backend::Mqtt(_) => Err("MQTT 无表结构".into()),
         }
     }
 
@@ -866,6 +882,7 @@ async fn resolve_mysql_db(
             Backend::ClickHouse(st) => crate::clickhouse::count(st, None, table).await,
             Backend::Kafka(_) => Err("Kafka 计数请打开消息浏览".into()),
             Backend::Rabbit(_) => Err("RabbitMQ 计数请打开队列控制台".into()),
+            Backend::Mqtt(_) => Err("MQTT 计数请打开主题控制台".into()),
         }
     }
 
@@ -891,6 +908,7 @@ async fn resolve_mysql_db(
             Backend::ClickHouse(_) => Ok(vec![]),
             Backend::Kafka(_) => Ok(vec![]),
             Backend::Rabbit(_) => Ok(vec![]),
+            Backend::Mqtt(_) => Ok(vec![]),
         Backend::Rabbit(_) => Ok(vec![]),
         }
     }

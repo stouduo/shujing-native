@@ -15,6 +15,7 @@ fn conn_id(name: &str, db_type: &DbType) -> String {
         DbType::ClickHouse => "clickhouse",
         DbType::Kafka => "kafka",
         DbType::Rabbit => "rabbit",
+        DbType::Mqtt => "mqtt",
     };
     // 稳定 id:导入重跑不会因时间戳不同而重复
     format!("imp-{t}-{}", sanitize(name))

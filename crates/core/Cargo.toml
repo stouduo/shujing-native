@@ -23,6 +23,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
 rdkafka = { workspace = true }
+rumqttc = { workspace = true }
 reqwest = { workspace = true }
 parquet = { workspace = true }
 redis = { workspace = true }

@@ -56,6 +56,24 @@ pub async fn connect(
             let st = crate::rabbit::connect(base, auth).await?;
             Ok(Backend::Rabbit(st))
         }
+        DbType::Mqtt => {
+            let host = req(&info.host, "缺少 MQTT broker 地址")?;
+            let port = info.port.unwrap_or(1883);
+            let user = info
+                .user
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let auth = user.map(|u| (u, info.password.clone().unwrap_or_default()));
+            let st = crate::mqtt::MqttState {
+                host: host.to_string(),
+                port,
+                auth,
+            };
+            crate::mqtt::probe(&st).await?;
+            Ok(Backend::Mqtt(st))
+        }
         DbType::Kafka => {
             let host = req(&info.host, "缺少 Kafka bootstrap 地址")?;
             let port = info.port.unwrap_or(9092);
@@ -704,6 +722,7 @@ impl Backend {
                     o.version, o.queue_count, o.msg_total
                 ))
             }
+            Backend::Mqtt(_) => Ok("MQTT broker".into()),
         }
     }
 }

@@ -7,6 +7,7 @@ mod grid;
 mod icons;
 mod kafka;
 mod modals;
+mod mqtt_console;
 mod net;
 mod query;
 mod rabbit;

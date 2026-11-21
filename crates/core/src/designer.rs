@@ -305,7 +305,12 @@ pub fn designer_sql(
             DbType::Sqlite => {
                 warnings.push(format!("SQLite 无法修改已有列「{}」,已跳过", c.name));
             }
-            DbType::Redis | DbType::Mongo | DbType::ClickHouse | DbType::Kafka | DbType::Rabbit => {}
+            DbType::Redis
+            | DbType::Mongo
+            | DbType::ClickHouse
+            | DbType::Kafka
+            | DbType::Rabbit
+            | DbType::Mqtt => {}
             DbType::Mssql => {
                 // T-SQL:ALTER COLUMN 语法(SQL Server 不支持 MODIFY)
                 alters.push(format!(

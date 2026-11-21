@@ -163,6 +163,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         save_result_modal: None,
         redis_info: None,
         rabbit_tab: None,
+        mqtt_tab: None,
         kafka_tab: None,
         session_tab: None,
         transfer: None,
@@ -444,6 +445,9 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         }
         TabKind::Rabbit(r) => {
             let _ = crate::rabbit::draw_rabbit_view(ctx, &tab_id, r);
+        }
+        TabKind::Mqtt(m) => {
+            let _ = crate::mqtt_console::draw_mqtt_view(ctx, &tab_id, m);
         }
         TabKind::Ddl(d) => {
             let _ = crate::structure::draw_ddl_view(ctx, &tab_id, d);

@@ -231,7 +231,7 @@ pub async fn apply_changes(
             // mutation 异步生效,affected 不可得
             0u64
         }
-        Backend::Kafka(_) | Backend::Rabbit(_) => {
+        Backend::Kafka(_) | Backend::Rabbit(_) | Backend::Mqtt(_) => {
             let _e: String = "无 SQL 回写".into();
             0u64
         }

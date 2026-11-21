@@ -6,6 +6,7 @@ pub mod backend;
 pub mod clickhouse;
 pub mod composite;
 pub mod kafka;
+pub mod mqtt;
 pub mod rabbit;
 pub mod designer;
 pub mod edits;
@@ -101,7 +102,8 @@ pub fn build_save_table_stmts(
         | DbType::Mssql
         | DbType::ClickHouse
         | DbType::Kafka
-        | DbType::Rabbit => {
+        | DbType::Rabbit
+        | DbType::Mqtt => {
             return Err("该数据库类型暂不支持结果存为新表".into());
         }
         _ => {}
@@ -441,6 +443,41 @@ impl Service {
                 crate::rabbit::publish(st, vhost, "", queue, payload).await
             }
             _ => Err("非 RabbitMQ 连接".into()),
+        }
+    }
+
+    /// MQTT:主题采样浏览(订阅 # secs 秒)
+    pub async fn mqtt_browse(
+        &self,
+        id: &str,
+        secs: u64,
+    ) -> Result<Vec<crate::mqtt::MqttMsg>, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        match &mut guard.backend {
+            crate::model::Backend::Mqtt(st) => crate::mqtt::browse_snapshot(st, secs).await,
+            _ => Err("非 MQTT 连接".into()),
+        }
+    }
+
+    /// MQTT:发布一条(可 retain)
+    pub async fn mqtt_publish(
+        &self,
+        id: &str,
+        topic: &str,
+        payload: &str,
+        retain: bool,
+    ) -> Result<usize, String> {
+        let live = self.state.live(id).ok_or("连接未建立或已断开")?;
+        let mut guard = live.lock().await;
+        if guard.info.read_only {
+            return Err("只读连接不允许发布".into());
+        }
+        match &mut guard.backend {
+            crate::model::Backend::Mqtt(st) => {
+                crate::mqtt::publish(st, topic, payload, retain).await
+            }
+            _ => Err("非 MQTT 连接".into()),
         }
     }
 
@@ -876,6 +913,7 @@ impl Service {
                 crate::model::DbType::ClickHouse => 8123,
                 crate::model::DbType::Kafka => 9092,
                 crate::model::DbType::Rabbit => 15672,
+                crate::model::DbType::Mqtt => 1883,
                 crate::model::DbType::Sqlite => 0,
             });
             let g = ssh::open_tunnel(&ssh_cfg, &target_host, target_port).await?;
@@ -949,6 +987,7 @@ impl Service {
             crate::model::DbType::ClickHouse => 8123,
             crate::model::DbType::Kafka => 9092,
             crate::model::DbType::Rabbit => 15672,
+            crate::model::DbType::Mqtt => 1883,
             crate::model::DbType::Sqlite => 0,
         });
         let guard = ssh::open_tunnel(ssh_cfg, &target_host, target_port).await?;

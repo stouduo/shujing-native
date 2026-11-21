@@ -311,6 +311,20 @@ pub enum TabAction {
     OpenRedisInfo {
         conn_id: String,
     },
+    /// 打开 MQTT 控制台
+    OpenMqttConsole {
+        conn_id: String,
+    },
+    /// MQTT:采样浏览
+    MqttBrowse {
+        tab_id: String,
+    },
+    /// MQTT:发布
+    MqttPublish {
+        tab_id: String,
+        topic: String,
+        retain: bool,
+    },
     /// 打开 RabbitMQ 控制台
     OpenRabbitConsole {
         conn_id: String,
@@ -519,6 +533,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Redis(_) => 4,
                                 TabKind::Kafka(_) => 7,
                                 TabKind::Rabbit(_) => 9,
+                                TabKind::Mqtt(_) => 10,
                                 TabKind::Session(_) => 8,
                                 TabKind::Er(_) => 5,
                                 TabKind::Ddl(_) => 6,
@@ -4185,6 +4200,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             query_only,
         } => app.session_kill(&sid, query_only),
         TabAction::OpenRedisInfo { conn_id } => app.open_redis_info(&conn_id),
+        TabAction::OpenMqttConsole { conn_id } => app.open_mqtt(&conn_id),
+        TabAction::MqttBrowse { tab_id: _ } => app.mqtt_browse(),
+        TabAction::MqttPublish {
+            tab_id: _,
+            topic,
+            retain,
+        } => app.mqtt_publish(&topic, retain),
         TabAction::OpenRabbitConsole { conn_id } => app.open_rabbit(&conn_id),
         TabAction::RabbitLoadQueues { tab_id: _ } => app.rabbit_load_queues(),
         TabAction::RabbitGetMsgs {
@@ -5259,6 +5281,7 @@ fn default_port(t: shujing_core::DbType) -> &'static str {
         shujing_core::DbType::ClickHouse => "8123",
         shujing_core::DbType::Kafka => "9092",
         shujing_core::DbType::Rabbit => "15672",
+        shujing_core::DbType::Mqtt => "1883",
         shujing_core::DbType::Sqlite => "",
     }
 }
@@ -5663,6 +5686,7 @@ impl eframe::App for ShujingApp {
                 TabKind::Er(e) => crate::er::draw_er_view(ctx, &tab_id, e),
                 TabKind::Kafka(k) => crate::kafka::draw_kafka_view(ctx, &tab_id, k),
                 TabKind::Rabbit(r) => crate::rabbit::draw_rabbit_view(ctx, &tab_id, r),
+                TabKind::Mqtt(m) => crate::mqtt_console::draw_mqtt_view(ctx, &tab_id, m),
                 TabKind::Session(s) => crate::sessions::draw_sessions_view(ctx, &tab_id, s),
                 TabKind::Ddl(d) => structure::draw_ddl_view(ctx, &tab_id, d),
             };
