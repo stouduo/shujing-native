@@ -174,6 +174,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         transfer: None,
         backup: None,
         plugin_run: None,
+        query_history: None,
         plugins: std::sync::Arc::new(shujing_core::plugins::PluginManager::load_all(std::path::Path::new("/tmp/definitely-missing-plugins-dir"))),
         data_diff: None,
         conn_crypto: None,
@@ -1177,6 +1178,40 @@ fn render_modals_visual_sweep2() {
         let mut b = app.borrow_mut();
         draw_app(&mut b, ctx);
         crate::modals::draw_plugin_modal(&mut b, ctx);
+    });
+
+    // 3d) 查询历史弹窗
+    let mut app = test_app(vec![], 0);
+    app.query_history = Some(crate::app::HistoryState {
+        tab_id: "q1".into(),
+        items: vec![
+            shujing_core::history::HistoryEntry {
+                ts: 1_763_700_000_000,
+                conn: "dramato-dev".into(),
+                db: "dramato".into(),
+                sql: "SELECT id, name FROM users WHERE name = '张三' LIMIT 10".into(),
+                ok: true,
+                rows: 3,
+                elapsed_ms: 12,
+                ..Default::default()
+            },
+            shujing_core::history::HistoryEntry {
+                ts: 1_763_690_000_000,
+                conn: "dramato-dev".into(),
+                db: "dramato".into(),
+                sql: "UPDATE users SET score = 0 WHERE id = 5".into(),
+                ok: false,
+                err: "权限不足".into(),
+                ..Default::default()
+            },
+        ],
+        filter: String::new(),
+    });
+    let app = std::cell::RefCell::new(app);
+    render("modal_query_history", 760.0, 560.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+        crate::modals::draw_history_modal(&mut b, ctx);
     });
 
     // 4) 快速打开(输入过滤态)

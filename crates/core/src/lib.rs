@@ -8,6 +8,7 @@ pub mod composite;
 #[cfg(feature = "heavy-mw")]
 pub mod kafka;
 pub mod kv;
+pub mod history;
 pub mod lineage;
 #[cfg(feature = "heavy-mw")]
 pub mod mqtt;

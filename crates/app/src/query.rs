@@ -200,6 +200,12 @@ pub fn draw_query_view(
                             tab_id: tab_id.to_string(),
                         });
                     }
+                    let hist = theme::button(ui, ui_kit::t!("History", "历史"), theme::BtnKind::Secondary);
+                    if hist.clicked() {
+                        actions.push(TabAction::OpenQueryHistory {
+                            tab_id: tab_id.to_string(),
+                        });
+                    }
                     if !is_redis {
                         let ai = theme::button(ui, "AI", theme::BtnKind::Secondary);
                         let ai_clicked = ai.clicked();

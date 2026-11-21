@@ -264,6 +264,9 @@ pub enum TabAction {
     PluginRun {
         tab_id: String,
     },
+    OpenQueryHistory {
+        tab_id: String,
+    },
     /// 确认建表并写入
     SaveResultAsTableCommit {
         tab_id: String,
@@ -4212,6 +4215,7 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
         TabAction::MongoImport { tab_id } => app.open_mongo_import(&tab_id),
         TabAction::MongoExportJson { tab_id } => app.mongo_export_json(&tab_id),
         TabAction::PluginRun { tab_id } => app.open_plugin_run(&tab_id),
+        TabAction::OpenQueryHistory { tab_id } => app.open_query_history(&tab_id),
         TabAction::RedisStreamAdd { tab_id, key } => app.redis_stream_add(&tab_id, &key),
         TabAction::RedisStreamGroups { tab_id, key } => {
             app.redis_stream_groups(&tab_id, &key)
@@ -5771,6 +5775,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_transfer_modal(self, ctx);
         crate::modals::draw_backup_modal(self, ctx);
         crate::modals::draw_plugin_modal(self, ctx);
+        crate::modals::draw_history_modal(self, ctx);
         crate::modals::draw_data_diff_modal(self, ctx);
         crate::modals::draw_conn_crypto_modal(self, ctx);
         crate::modals::draw_redis_batch_modal(self, ctx);

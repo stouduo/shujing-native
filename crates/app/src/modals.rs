@@ -2175,6 +2175,146 @@ pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     let _ = modal.should_close();
 }
 
+/// 查询历史弹窗:过滤 + 列表(新在前),点击回填来源标签编辑器
+pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    let Some(h) = app.query_history.clone() else { return };
+    let p = theme::c();
+    let mut close = false;
+    let mut pick: Option<String> = None;
+    let mut clear = false;
+    let modal = egui::Modal::new(egui::Id::new("query-history-modal"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(720.0);
+            theme::modal_title(ui, ui_kit::t!("Query History", "查询历史"));
+            ui.label(
+                RichText::new(ui_kit::t!(
+                    "Persisted locally (~/.shujing-native/query_history.jsonl, latest 500); click a row to fill the editor",
+                    "本地持久化(~/.shujing-native/query_history.jsonl,保留 500 条);点击行回填编辑器"
+                ))
+                    .size(10.5)
+                    .color(p.muted),
+            );
+            ui.add_space(6.0);
+            let f = app.query_history.as_mut().map(|x| x.filter.clone()).unwrap_or_default();
+            let mut f = f;
+            theme::search_box(
+                ui,
+                "query-history-filter",
+                &mut f,
+                ui_kit::t!("Filter by SQL or connection…", "按 SQL 或连接过滤…"),
+                700.0,
+            );
+            if let Some(hm) = app.query_history.as_mut() {
+                hm.filter = f;
+            }
+            ui.add_space(6.0);
+            let filter_low = h.filter.to_lowercase();
+            let shown: Vec<&shujing_core::history::HistoryEntry> = h
+                .items
+                .iter()
+                .filter(|it| {
+                    filter_low.is_empty()
+                        || it.sql.to_lowercase().contains(&filter_low)
+                        || it.conn.to_lowercase().contains(&filter_low)
+                        || it.db.to_lowercase().contains(&filter_low)
+                })
+                .take(200)
+                .collect();
+            egui::ScrollArea::vertical()
+                .id_salt("query-history-list")
+                .max_height(380.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    if shown.is_empty() {
+                        ui.label(
+                            RichText::new(ui_kit::t!("No history yet", "暂无历史"))
+                                .size(12.0)
+                                .color(p.muted),
+                        );
+                    }
+                    for it in shown {
+                        let time = {
+                            shujing_core::history::format_ts_local(it.ts)
+                        };
+                        let head = if it.db.is_empty() {
+                            format!("{} · {}", time, it.conn)
+                        } else {
+                            format!("{} · {} · {}", time, it.conn, it.db)
+                        };
+                        let status_icon = if it.ok { "✓" } else { "✗" };
+                        let status_color = if it.ok { p.green } else { p.red };
+                        let first_line: String = it
+                            .sql
+                            .lines()
+                            .find(|l| !l.trim().is_empty())
+                            .unwrap_or("")
+                            .trim()
+                            .chars()
+                            .take(70)
+                            .collect();
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 40.0),
+                            egui::Sense::click(),
+                        );
+                        ui.painter().rect_filled(
+                            rect,
+                            egui::CornerRadius::same(6),
+                            if resp.hovered() { p.hover } else { egui::Color32::TRANSPARENT },
+                        );
+                        ui.painter().text(
+                            egui::pos2(rect.left() + 10.0, rect.top() + 11.0),
+                            egui::Align2::LEFT_CENTER,
+                            format!("{} {}", status_icon, head),
+                            egui::FontId::proportional(10.5),
+                            status_color,
+                        );
+                        ui.painter().text(
+                            egui::pos2(rect.left() + 10.0, rect.bottom() - 11.0),
+                            egui::Align2::LEFT_CENTER,
+                            format!("{} {}", first_line, if it.ok { format!("({} rows)", it.rows) } else { format!("({})", it.err) }),
+                            egui::FontId::monospace(10.5),
+                            p.text2,
+                        );
+                        if resp.clicked() {
+                            pick = Some(it.sql.clone());
+                        }
+                        ui.add_space(2.0);
+                    }
+                });
+            ui.add_space(4.0);
+            theme::modal_footer(ui, |ui| {
+                if theme::button(
+                    ui,
+                    ui_kit::t!("Clear History", "清空历史"),
+                    theme::BtnKind::Secondary,
+                )
+                .clicked()
+                {
+                    clear = true;
+                }
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if let Some(sql) = pick {
+        app.pick_history(sql);
+        return;
+    }
+    if clear {
+        let hp = app.config_dir.join("query_history.jsonl");
+        let _ = std::fs::remove_file(&hp);
+        let tid = app.query_history.as_ref().map(|h| h.tab_id.clone()).unwrap_or_default();
+        app.open_query_history(&tid);
+    }
+    if close {
+        app.query_history = None;
+    }
+    let _ = modal.should_close();
+}
+
 pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if app.transfer.is_none() {
         return;

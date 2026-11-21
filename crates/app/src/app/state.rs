@@ -377,6 +377,24 @@ pub struct TransferState {
     pub error: Option<String>,
 }
 
+/// 查询执行元信息(随 QueryDone 事件走,供历史记录)
+#[derive(Clone)]
+pub struct QueryMeta {
+    pub sql: String,
+    /// 连接名(展示用)
+    pub conn: String,
+    pub db: String,
+}
+
+/// 查询历史弹窗状态(持久化 jsonl,点击回填编辑器)
+#[derive(Clone)]
+pub struct HistoryState {
+    pub tab_id: String,
+    /// 新的在前
+    pub items: Vec<shujing_core::history::HistoryEntry>,
+    pub filter: String,
+}
+
 /// 插件处理弹窗状态(查询结果 → WASM 插件 → 输出)
 #[derive(Clone)]
 pub struct PluginRunState {

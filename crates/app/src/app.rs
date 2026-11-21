@@ -238,6 +238,7 @@ pub enum BgEvent {
     QueryDone {
         tab_id: String,
         result: Result<Vec<shujing_core::ExecResult>, String>,
+        meta: crate::app::QueryMeta,
     },
     AutoTables {
         conn_id: String,
@@ -461,6 +462,7 @@ pub struct ShujingApp {
     pub transfer: Option<TransferState>,
     pub backup: Option<crate::app::BackupState>,
     pub plugin_run: Option<crate::app::PluginRunState>,
+    pub query_history: Option<crate::app::HistoryState>,
     pub plugins: std::sync::Arc<shujing_core::plugins::PluginManager>,
     /// 数据对比弹窗
     pub data_diff: Option<DataDiffState>,
@@ -608,6 +610,7 @@ impl ShujingApp {
             transfer: None,
             backup: None,
             plugin_run: None,
+            query_history: None,
             plugins,
             data_diff: None,
             conn_crypto: None,
@@ -2737,9 +2740,16 @@ impl ShujingApp {
         q.history.truncate(20);
         let conn_id = q.conn_id.clone();
         let db = q.database.clone();
+        let conn_name = self
+            .conns
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        let meta = crate::app::QueryMeta { sql: sql.clone(), conn: conn_name, db: db.clone().unwrap_or_default() };
         net::spawn(async move {
             let result = service.run_sql_db(&conn_id, sql, None, db.as_deref()).await;
-            let _ = tx.send(BgEvent::QueryDone { tab_id, result });
+            let _ = tx.send(BgEvent::QueryDone { tab_id, result, meta });
         });
     }
 
@@ -2764,6 +2774,8 @@ impl ShujingApp {
         let explain = shujing_core::sql_advisor::explain_sql(conn.db_type, &sql);
         let conn_id = q.conn_id.clone();
         let db = q.database.clone();
+        let conn_name = conn.name.clone();
+        let hist_sql = sql.clone();
         let tid = tab_id.to_string();
         if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tid) {
             if let TabKind::Query(q) = &mut t.kind {
@@ -2780,6 +2792,7 @@ impl ShujingApp {
             let _ = tx.send(BgEvent::QueryDone {
                 tab_id: tid,
                 result,
+                meta: crate::app::QueryMeta { sql: hist_sql, conn: conn_name, db: db.clone().unwrap_or_default() },
             });
         });
     }
@@ -2805,9 +2818,16 @@ impl ShujingApp {
         q.history.truncate(20);
         let conn_id = q.conn_id.clone();
         let db = q.database.clone();
+        let conn_name = self
+            .conns
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        let meta = crate::app::QueryMeta { sql: sql.clone(), conn: conn_name, db: db.clone().unwrap_or_default() };
         net::spawn(async move {
             let result = service.run_sql_db(&conn_id, sql, None, db.as_deref()).await;
-            let _ = tx.send(BgEvent::QueryDone { tab_id, result });
+            let _ = tx.send(BgEvent::QueryDone { tab_id, result, meta });
         });
     }
 
@@ -2840,6 +2860,13 @@ impl ShujingApp {
         q.history.insert(0, cmd.clone());
         q.history.truncate(20);
         let conn_id = q.conn_id.clone();
+        let conn_name = self
+            .conns
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        let meta = crate::app::QueryMeta { sql: cmd.clone(), conn: conn_name, db: q.database.clone().unwrap_or_default() };
         net::spawn(async move {
             let result = service.redis_run(&conn_id, &cmd).await.map(|lines| {
                 vec![shujing_core::ExecResult {
@@ -2850,7 +2877,7 @@ impl ShujingApp {
                     truncated: false,
                 }]
             });
-            let _ = tx.send(BgEvent::QueryDone { tab_id, result });
+            let _ = tx.send(BgEvent::QueryDone { tab_id, result, meta });
         });
     }
 
@@ -3243,6 +3270,27 @@ impl ShujingApp {
             error: None,
             running: false,
         });
+    }
+
+    /// 打开查询历史弹窗(读持久化 jsonl,新的在前)
+    pub fn open_query_history(&mut self, tab_id: &str) {
+        let hp = self.config_dir.join("query_history.jsonl");
+        self.query_history = Some(crate::app::HistoryState {
+            tab_id: tab_id.to_string(),
+            items: shujing_core::history::load(&hp, 500),
+            filter: String::new(),
+        });
+    }
+
+    /// 历史选中:回填到来源标签的编辑器并关弹窗
+    pub fn pick_history(&mut self, sql: String) {
+        let Some(h) = self.query_history.take() else { return };
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == h.tab_id) {
+            if let TabKind::Query(q) = &mut tab.kind {
+                q.sql = sql;
+                q.error = None;
+            }
+        }
     }
 
     /// 重新扫描插件目录(设置弹窗入口)
@@ -4746,7 +4794,32 @@ impl ShujingApp {
                         }
                     }
                 }
-                BgEvent::QueryDone { tab_id, result } => {
+                BgEvent::QueryDone { tab_id, result, meta } => {
+                    // 查询历史(成功/失败都记):jsonl 滚动 500 条
+                    let (h_ok, h_rows, h_elapsed, h_err) = match &result {
+                        Ok(rs) => (
+                            true,
+                            rs.first().map(|r| r.rows.len() as u64).unwrap_or(0),
+                            rs.first().map(|r| r.elapsed_ms).unwrap_or(0),
+                            String::new(),
+                        ),
+                        Err(e) => (false, 0, 0, e.clone()),
+                    };
+                    let entry = shujing_core::history::HistoryEntry {
+                        ts: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0),
+                        conn: meta.conn.clone(),
+                        db: meta.db.clone(),
+                        sql: meta.sql.clone(),
+                        ok: h_ok,
+                        rows: h_rows,
+                        elapsed_ms: h_elapsed,
+                        err: h_err,
+                    };
+                    let hp = self.config_dir.join("query_history.jsonl");
+                    let _ = shujing_core::history::append(&hp, &entry, 500);
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                         if let TabKind::Query(q) = &mut tab.kind {
                             q.running = false;
