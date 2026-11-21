@@ -334,7 +334,48 @@ async fn main() {
         Ok(_) => pass("idle_cancel", "空闲取消无害通过"),
     }
 
-    // 13) 清理
+    // 13) 截断即停:10 万行递归 CTE 按 max=10 截断,KILL 后连接池自愈
+    match service
+        .run_sql_db(
+            "e2e-mysql",
+            "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1000) SELECT n FROM seq".into(),
+            Some(10),
+            None,
+        )
+        .await
+    {
+        Ok(rs) => {
+            let r = rs.first().expect("结果集");
+            if r.rows.len() != 10 || !r.truncated {
+                fail(
+                    "truncate_kill",
+                    &format!("rows={} truncated={}", r.rows.len(), r.truncated),
+                );
+            }
+            if r.rows[0][0].as_deref() != Some("1") || r.rows[9][0].as_deref() != Some("10") {
+                fail("truncate_kill", "截断行内容错位");
+            }
+            pass("truncate_kill", "千行 10 截断,服务端已停");
+        }
+        Err(e) => fail("truncate_kill", &e),
+    }
+    match service.run_sql("e2e-mysql", "SELECT 43".into(), None).await {
+        Ok(rs) => {
+            let v = rs
+                .first()
+                .and_then(|r| r.rows.first())
+                .and_then(|r| r.first())
+                .cloned()
+                .flatten();
+            if v.as_deref() != Some("43") {
+                fail("post_truncate_pool", &format!("池未自愈: {v:?}"));
+            }
+            pass("post_truncate_pool", "KILL 后连接池自愈");
+        }
+        Err(e) => fail("post_truncate_pool", &e),
+    }
+
+    // 14) 清理
     {
         let mut conn = mysql_async::Conn::new(opts()).await.unwrap();
         let _ = conn.query_drop("DROP DATABASE IF EXISTS e2e_mysql2").await;

@@ -339,7 +339,7 @@ impl Service {
         // 走通用执行臂(复用 run_sql 的事务/方言处理),最后一条 INSERT 影响行数累加
         let mut affected_total = 0u64;
         for s in &stmts {
-            let rs = guard.backend.run_sql(s, 1, None).await?;
+            let rs = guard.backend.run_sql(s, 1, None, None).await?;
             if let Some(r) = rs.first() {
                 if r.affected > 0 {
                     affected_total += r.affected;
@@ -785,7 +785,12 @@ impl Service {
         let max_rows = max_rows.unwrap_or(exec::DEFAULT_MAX_ROWS);
         match guard
             .backend
-            .run_sql(&sql, max_rows, Some(&cancel_state.mysql_id))
+            .run_sql(
+                &sql,
+                max_rows,
+                Some(&cancel_state.mysql_id),
+                Some(cancel_state.as_ref()),
+            )
             .await
         {
             Ok(r) => Ok(r),
@@ -812,7 +817,12 @@ impl Service {
                     .map_err(|e2| format!("连接已断开,自动重连失败: {e2}(原错误: {e})"))?;
                 nb.set_session_db(session_db.as_deref());
                 let r = nb
-                    .run_sql(&sql, max_rows, Some(&cancel_state.mysql_id))
+                    .run_sql(
+                &sql,
+                max_rows,
+                Some(&cancel_state.mysql_id),
+                Some(cancel_state.as_ref()),
+            )
                     .await
                     .map_err(|e2| format!("{e2}(已自动重连)"))?;
                 guard.backend = nb;

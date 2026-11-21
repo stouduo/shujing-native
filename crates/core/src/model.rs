@@ -715,6 +715,7 @@ pub struct LiveConn {
 }
 
 /// 取消查询所需的目标信息(独立于执行锁:正在跑的查询不会阻塞取消)
+#[derive(Clone)]
 pub struct CancelState {
     pub db_type: DbType,
     pub host: Option<String>,

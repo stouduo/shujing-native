@@ -240,7 +240,12 @@ fn run_sqlite(conn: &rusqlite::Connection, sql: &str, max: usize) -> Result<Vec<
     }
 }
 
-async fn run_mysql_single(conn: &mut mysql_async::Conn, sql: &str, max: usize) -> Result<ExecResult, String> {
+async fn run_mysql_single(
+    conn: &mut mysql_async::Conn,
+    sql: &str,
+    max: usize,
+    cancel: Option<&crate::model::CancelState>,
+) -> Result<ExecResult, String> {
     use mysql_async::prelude::*;
     let started = Instant::now();
     let mut result = conn.query_iter(sql).await.map_err(es)?;
@@ -258,20 +263,42 @@ async fn run_mysql_single(conn: &mut mysql_async::Conn, sql: &str, max: usize) -
     } else {
         let mut out: Vec<Vec<Option<String>>> = Vec::new();
         let mut truncated = false;
-        result
-            .for_each(|row| {
-                if out.len() < max {
-                    out.push(
-                        (0..row.len())
-                            .map(|i| row.as_ref(i).and_then(|v| fmt_mysql_value(v)))
-                            .collect(),
-                    );
-                } else {
-                    truncated = true;
+        // 截断即停:首次超限 KILL QUERY 自己的连接(与 PG 超限带外取消同语义),
+        // 服务端立即停发;连接作废由 mysql_async 池重建
+        loop {
+            match result.next().await {
+                Ok(Some(row)) => {
+                    if out.len() < max {
+                        out.push(
+                            (0..row.len())
+                                .map(|i| row.as_ref(i).and_then(|v| fmt_mysql_value(v)))
+                                .collect(),
+                        );
+                    } else {
+                        truncated = true;
+                        if let Some(cs) = cancel {
+                            let cid = cs.mysql_id.load(std::sync::atomic::Ordering::Relaxed);
+                            if cid != 0 {
+                                let cs2 = cs.clone();
+                                let sid = cid.to_string();
+                                tokio::spawn(async move {
+                                    let _ = Backend::kill_session_standalone(&cs2, &sid, true).await;
+                                });
+                            }
+                        }
+                        break;
+                    }
                 }
-            })
-            .await
-            .map_err(es)?;
+                Ok(None) => break,
+                Err(e) => {
+                    if truncated {
+                        // KILL 生效:连接报错视为自然终止
+                        break;
+                    }
+                    return Err(es(e));
+                }
+            }
+        }
         let affected = out.len() as u64;
         Ok(ExecResult {
             columns,
@@ -283,7 +310,12 @@ async fn run_mysql_single(conn: &mut mysql_async::Conn, sql: &str, max: usize) -
     }
 }
 
-async fn run_mysql(conn: &mut mysql_async::Conn, sql: &str, max: usize) -> Result<Vec<ExecResult>, String> {
+async fn run_mysql(
+    conn: &mut mysql_async::Conn,
+    sql: &str,
+    max: usize,
+    cancel: Option<&crate::model::CancelState>,
+) -> Result<Vec<ExecResult>, String> {
     // 多语句:拆分逐条执行聚合结果集(query_iter 只返回第一个结果集)
     let stmts = split_statements(sql);
     if stmts.len() > 1 {
@@ -291,7 +323,7 @@ async fn run_mysql(conn: &mut mysql_async::Conn, sql: &str, max: usize) -> Resul
         let mut results = Vec::new();
         let mut budget = max;
         for s in &stmts {
-            let mut r = run_mysql_single(conn, s, budget).await?;
+            let mut r = run_mysql_single(conn, s, budget, cancel).await?;
             if !r.columns.is_empty() {
                 budget = budget.saturating_sub(r.rows.len());
             }
@@ -303,7 +335,7 @@ async fn run_mysql(conn: &mut mysql_async::Conn, sql: &str, max: usize) -> Resul
         }
         return Ok(results);
     }
-    let r = run_mysql_single(conn, sql, max).await?;
+    let r = run_mysql_single(conn, sql, max, cancel).await?;
     Ok(vec![r])
 }
 
@@ -457,6 +489,7 @@ impl Backend {
         sql: &str,
         max: usize,
         running_id: Option<&std::sync::atomic::AtomicU64>,
+        cancel: Option<&crate::model::CancelState>,
     ) -> Result<Vec<ExecResult>, String> {
         let max = max.clamp(1, HARD_MAX_ROWS);
         match self {
@@ -471,7 +504,7 @@ impl Backend {
                 if let Some(rid) = running_id {
                     rid.store(conn.id() as u64, std::sync::atomic::Ordering::Relaxed);
                 }
-                let r = run_mysql(&mut conn, sql, max).await;
+                let r = run_mysql(&mut conn, sql, max, cancel).await;
                 if let Some(rid) = running_id {
                     rid.store(0, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -520,7 +553,7 @@ impl Backend {
 
     /// 单结果便捷取用(编辑回写等只关心 affected)
     pub async fn run_one(&mut self, sql: &str, max: usize) -> Result<ExecResult, String> {
-        let mut results = self.run_sql(sql, max, None).await?;
+        let mut results = self.run_sql(sql, max, None, None).await?;
         if results.is_empty() {
             return Ok(ExecResult {
                 columns: vec![],
