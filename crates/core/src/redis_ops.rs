@@ -737,7 +737,8 @@ pub async fn member_op(
         }
         ("list", "del") => {
             // list 成员可重复,按值 LREM 会删掉第一个匹配而非用户点的行:
-            // 先把目标下标改写成唯一哨兵,再按哨兵删(extra=下标)
+            // 先把目标下标改写成唯一哨兵,再按哨兵删(extra=下标)。
+            // MULTI 原子提交:此前 LSET 与 LREM 分离,断连窗口可能残留哨兵值
             let idx: i64 = extra.trim().parse().map_err(|_| "list 下标无效")?;
             let sentinel = format!(
                 "__shujing_del_{}__",
@@ -746,8 +747,14 @@ pub async fn member_op(
                     .map(|d| d.as_nanos())
                     .unwrap_or(0)
             );
-            redis::cmd("LSET").arg(key).arg(idx).arg(&sentinel).query_async::<()>(&mut con).await.map_err(es)?;
-            redis::cmd("LREM").arg(key).arg(1).arg(&sentinel).query_async::<()>(&mut con).await.map_err(es)?
+            redis::pipe()
+                .atomic()
+                .cmd("LSET").arg(key).arg(idx).arg(&sentinel)
+                .cmd("LREM").arg(key).arg(1).arg(&sentinel)
+                .ignore()
+                .query_async::<()>(&mut con)
+                .await
+                .map_err(es)?
         }
         ("list", "add") => redis::cmd("RPUSH").arg(key).arg(member).query_async::<()>(&mut con).await.map_err(es)?,
         ("list", "lset") => {

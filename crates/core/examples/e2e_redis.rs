@@ -120,5 +120,34 @@ async fn main() {
     }
     pass("batch_delete", &format!("SCAN 计数 {before} → 删 {deleted} → 余 {after}"));
 
+    // 8) list 按下标删除(MULTI 原子哨兵):重复成员不误删首行、无哨兵残留
+    {
+        let _ = service.redis_del("e2e-redis", 0, "e2e:l3").await;
+        let _ = service.redis_run("e2e-redis", "RPUSH e2e:l3 甲 乙 甲").await;
+        match service.redis_member_op("e2e-redis", 0, "e2e:l3", "list", "del", "甲", "2").await {
+            Ok(_) => {
+                // LRANGE 验证:删的是下标 2 的甲,首个甲保留,且无哨兵残留
+                let vals = service
+                    .redis_run("e2e-redis", "LRANGE e2e:l3 0 -1".into())
+                    .await
+                    .unwrap();
+                let joined = vals.join(",");
+                if joined.contains("__shujing_del") {
+                    fail("list_del_sentinel", &format!("哨兵残留: {joined}"));
+                }
+                // redis_run 输出带 "1)" 序号前缀;按序数与行尾断言
+                if vals.len() != 2
+                    || !vals[0].ends_with("甲")
+                    || !vals[1].ends_with("乙")
+                {
+                    fail("list_del_sentinel", &format!("内容异常: {joined}"));
+                }
+                pass("list_del_sentinel", "重复成员按下标删除,无哨兵残留");
+            }
+            Err(e) => fail("list_del_sentinel", &e),
+        }
+        let _ = service.redis_del("e2e-redis", 0, "e2e:l3").await;
+    }
+
     println!("\n全部通过 ✓");
 }
