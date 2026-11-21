@@ -1,0 +1,10 @@
+[package]
+name = "shujing-cli"
+version = "0.1.0"
+edition = "2021"
+description = "数镜 CLI:命令行查询已配置的数据库连接(与桌面端共用 ~/.shujing-native 配置)"
+
+[dependencies]
+shujing-core = { path = "../core" }
+tokio = { workspace = true }
+serde_json = { workspace = true }

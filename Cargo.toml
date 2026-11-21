@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/app", "crates/ui-kit", "crates/mcp-server"]
+members = ["crates/core", "crates/app", "crates/ui-kit", "crates/mcp-server",
+        "crates/cli"]
 
 [workspace.dependencies]
 rdkafka = { version = "0.39.0", features = ["cmake-build", "tokio"] }

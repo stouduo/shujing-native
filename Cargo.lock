@@ -5915,6 +5915,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shujing-cli"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "shujing-core",
+ "tokio",
+]
+
+[[package]]
 name = "shujing-core"
 version = "0.1.0"
 dependencies = [
