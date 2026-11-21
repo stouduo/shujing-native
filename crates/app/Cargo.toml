@@ -16,13 +16,18 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rfd = "0.15"
+
+# Linux 桌面必需(winit 在 Linux 无平台 feature 会 compile_error)
+[target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 
 [features]
-default = ["renderer-glow"]
+default = ["renderer-glow", "x11"]
 # 渲染层双轨:glow(native 默认)/ wgpu(wasm 与 kittest 共用路径)
 renderer-glow = ["eframe/glow"]
 renderer-wgpu = ["eframe/wgpu"]
+x11 = ["eframe/x11"]
+wayland = ["eframe/wayland"]
 
 [dev-dependencies]
 egui_kittest = { version = "0.31.0", features = ["snapshot", "wgpu", "eframe"] }
