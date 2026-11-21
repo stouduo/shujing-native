@@ -208,6 +208,7 @@ pub fn plan_check(db_type: DbType, r: &ExecResult) -> Vec<Finding> {
         DbType::Sqlite => check_sqlite(r, &mut out),
         DbType::Postgres => check_pg(r, &mut out),
         DbType::Redis
+        | DbType::Plugin
         | DbType::Mongo
         | DbType::Mssql
         | DbType::ClickHouse

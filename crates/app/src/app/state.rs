@@ -936,6 +936,8 @@ pub struct ConnModal {
     pub perm: shujing_core::Perm,
     /// 侧栏分组(空 = 不分组)
     pub group: String,
+    /// 驱动插件名(连接类型 = 插件驱动 时填)
+    pub plugin: String,
     /// 标识色板索引
     pub color_idx: Option<u8>,
     /// SSH 隧道开关
@@ -964,6 +966,7 @@ impl ConnModal {
             test_result: None,
             perm: shujing_core::Perm::Full,
             group: String::new(),
+            plugin: String::new(),
             color_idx: None,
             ssh_enabled: false,
             ssh_host: String::new(),
@@ -990,6 +993,7 @@ impl ConnModal {
             test_result: None,
             perm: c.perm(),
             group: c.group.clone().unwrap_or_default(),
+            plugin: c.plugin.clone().unwrap_or_default(),
             ssh_enabled: c.ssh.is_some(),
             ssh_host: c.ssh.as_ref().map(|x| x.host.clone()).unwrap_or_default(),
             ssh_port: c

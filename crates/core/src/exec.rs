@@ -495,6 +495,48 @@ impl Backend {
         match self {
             // sqlite 驱动是同步的;本地文件查询通常很快,占用一个 runtime worker 可接受
             Backend::Sqlite(conn) => run_sqlite(conn, sql, max),
+            Backend::Plugin(s) => {
+                let started2 = Instant::now();
+                let mut ag = s.agent.lock().await;
+                let params = serde_json::json!({
+                    "database": s.database,
+                    "sql": sql,
+                    "max": max,
+                });
+                let r = ag.call("query", &params).await?;
+                let columns: Vec<String> = r
+                    .get("columns")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                let rows: Vec<Vec<Option<String>>> = r
+                    .get("rows")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .map(|row| {
+                                row.as_array()
+                                    .map(|cells| {
+                                        cells
+                                            .iter()
+                                            .map(|c| c.as_str().map(str::to_string))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default()
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let affected = r.get("affected").and_then(|v| v.as_u64()).unwrap_or(0);
+                let truncated = r.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false);
+                return Ok(vec![ExecResult {
+                    columns,
+                    rows,
+                    affected,
+                    truncated,
+                    elapsed_ms: started2.elapsed().as_millis() as u64,
+                }]);
+            }
             Backend::MySql(mp) => {
                 // 统一走 mysql_conn:自动恢复会话库上下文
                 let mut conn = Backend::mysql_conn(mp).await?;

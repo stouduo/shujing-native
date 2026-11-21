@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 fn conn_id(name: &str, db_type: &DbType) -> String {
     let t = match db_type {
+        DbType::Plugin => "plugin",
         DbType::MySql => "mysql",
         DbType::Postgres => "pg",
         DbType::Sqlite => "sqlite",
@@ -131,6 +132,7 @@ fn parse_dbeaver_json(text: &str) -> Result<Vec<ConnInfo>, String> {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: cfg
                 .get("configuration")
                 .map(|c| {
@@ -271,6 +273,7 @@ fn parse_navicat_ncx(text: &str) -> Result<Vec<ConnInfo>, String> {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: xml_attr(tag, "SshHost")
                 .filter(|h| !h.is_empty())
                 .map(|ssh_host| SshConfig {
@@ -386,6 +389,7 @@ mod tests {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         }];
         let imported = vec![ConnInfo {
@@ -402,6 +406,7 @@ mod tests {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         }];
         let (added, skipped) = merge_into(&existing, imported);

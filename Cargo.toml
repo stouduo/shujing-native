@@ -9,7 +9,7 @@ rdkafka = { version = "0.39.0", features = ["cmake-build", "tokio"] }
 rumqttc = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process"] }
 tokio-postgres = "0.7"
 mysql_async = { version = "0.37", default-features = false, features = ["minimal", "default-rustls"] }
 rusqlite = { version = "0.33", features = ["bundled"] }

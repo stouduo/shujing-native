@@ -112,6 +112,17 @@ fn ui_kit_noop() -> String {
 
 pub async fn list_databases(backend: &mut Backend, _info: &ConnInfo) -> Result<Vec<String>, String> {
     match backend {
+        Backend::Plugin(s) => {
+            let mut ag = s.agent.lock().await;
+            let r = ag
+                .call("databases", &serde_json::json!({}))
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(r.get("databases")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default())
+        }
         Backend::Sqlite(_) => Ok(vec![]),
         Backend::MySql(mp) => {
             use mysql_async::prelude::*;
@@ -652,6 +663,7 @@ pub async fn object_ddl(
         (crate::model::DbType::Mongo, _)
         | (crate::model::DbType::Mssql, _)
         | (crate::model::DbType::ClickHouse, _)
+        | (crate::model::DbType::Plugin, _)
         | (crate::model::DbType::Kafka, _)
         | (crate::model::DbType::Rabbit, _)
         | (crate::model::DbType::Mqtt, _)
@@ -707,6 +719,35 @@ impl Backend {
 
     pub async fn list_tables_in(&mut self, _info: &crate::model::ConnInfo, database: Option<&str>) -> Result<Vec<TableMeta>, String> {
         match self {
+            Backend::Plugin(s) => {
+                let mut ag = s.agent.lock().await;
+                let r = ag
+                    .call("tables", &serde_json::json!({ "database": s.database }))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let tables: Vec<TableMeta> = r
+                    .get("tables")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|t| {
+                                let name = t.get("name")?.as_str()?.to_string();
+                                let kind = t
+                                    .get("kind")
+                                    .and_then(|k| k.as_str())
+                                    .unwrap_or("table")
+                                    .to_string();
+                                Some(TableMeta {
+                                    name,
+                                    kind,
+                                    owner: None,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Ok(tables)
+            }
             Backend::Sqlite(conn) => schema_sqlite(conn),
             Backend::MySql(mp) => {
                 let mut conn = Backend::mysql_conn(mp).await?;
@@ -856,6 +897,53 @@ async fn resolve_mysql_db(
         database: Option<&str>,
     ) -> Result<TableStructure, String> {
         match self {
+            Backend::Plugin(s) => {
+                let mut ag = s.agent.lock().await;
+                let r = ag
+                    .call(
+                        "structure",
+                        &serde_json::json!({ "database": s.database, "table": table }),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let columns: Vec<crate::model::ColumnDef> = r
+                    .get("columns")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|c| {
+                                let name = c.get("name")?.as_str()?.to_string();
+                                Some(crate::model::ColumnDef {
+                                    name,
+                                    data_type: c
+                                        .get("type")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    nullable: c.get("nullable").and_then(|x| x.as_bool()).unwrap_or(true),
+                                    key: if c.get("pk").and_then(|x| x.as_bool()).unwrap_or(false) {
+                                        "PRI".to_string()
+                                    } else {
+                                        String::new()
+                                    },
+                                    default: c.get("default").and_then(|x| x.as_str()).map(str::to_string),
+                                    extra: String::new(),
+                                    comment: c
+                                        .get("comment")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                return Ok(crate::model::TableStructure {
+                    columns,
+                    indexes: vec![],
+                    ddl: String::new(),
+                });
+            }
             Backend::Sqlite(conn) => struct_sqlite(conn, table),
             Backend::MySql(mp) => {
                 let mut conn = Backend::mysql_conn(mp).await?;
@@ -888,6 +976,14 @@ async fn resolve_mysql_db(
 
     pub async fn count_rows(&mut self, table: &str) -> Result<u64, String> {
         match self {
+            Backend::Plugin(s) => {
+                let mut ag = s.agent.lock().await;
+                let r = ag
+                    .call("count", &serde_json::json!({ "database": s.database, "table": table }))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(r.get("count").and_then(|v| v.as_u64()).unwrap_or(0))
+            }
             Backend::Sqlite(conn) => count_sqlite(conn, table),
             Backend::MySql(mp) => {
                 let mut conn = Backend::mysql_conn(mp).await?;
@@ -928,6 +1024,7 @@ async fn resolve_mysql_db(
                 fk_pg(&client).await
             }
             Backend::Redis(_) => Ok(vec![]),
+            Backend::Plugin(_) => Ok(vec![]),
             #[cfg(feature = "heavy-mw")]
             Backend::Mongo(_) => Ok(vec![]),
             Backend::Mssql(_) => Ok(vec![]),

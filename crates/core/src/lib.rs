@@ -386,6 +386,8 @@ impl Service {
                 crate::model::DbType::Consul => 8500,
                 crate::model::DbType::Etcd => 2379,
                 crate::model::DbType::Sqlite => 0,
+                // 驱动插件:端口语义由 agent 决定,留空
+                crate::model::DbType::Plugin => 0,
             });
             let g = ssh::open_tunnel(&ssh_cfg, &target_host, target_port).await?;
             endpoint.host = Some("127.0.0.1".into());
@@ -399,6 +401,11 @@ impl Service {
 
 
     pub async fn connect(&self, info: ConnInfo) -> Result<ConnectResult, String> {
+        // 驱动插件拦截:插件目录来自本 Service 的 config_dir(与 backend 兜底臂的
+        // 环境变量路径不同源——Service 语义优先)
+        if info.db_type == model::DbType::Plugin {
+            return self.connect_plugin(info).await;
+        }
         let mut endpoint = info.clone();
         if let Some(ssh_cfg) = info.ssh.clone() {
             let port = self.ensure_tunnel(&info.id, &ssh_cfg, &info).await?;
@@ -421,6 +428,37 @@ impl Service {
         backend.set_session_db(prev.as_deref());
         let version = backend.server_info().await?;
         self.state.insert(LiveConn { info: endpoint, backend }, cancel);
+        Ok(ConnectResult { version })
+    }
+
+    /// 驱动插件连接:spawn agent + 契约 connect;参数透传,方言由 agent 解释
+    async fn connect_plugin(&self, info: ConnInfo) -> Result<ConnectResult, String> {
+        let name = info
+            .plugin
+            .clone()
+            .ok_or("未指定驱动插件名")?;
+        let dir = self.config_dir.join("plugins");
+        let drivers = crate::plugins::scan_drivers(&dir);
+        let drv = drivers
+            .iter()
+            .find(|d| d.name.as_str() == name.as_str() || d.db_types.iter().any(|t| t.as_str() == name.as_str()))
+            .ok_or_else(|| {
+                format!("驱动插件 {name} 未安装(应位于 {}/<名>/plugin.toml)", dir.display())
+            })?;
+        let params = serde_json::json!({
+            "host": info.host,
+            "port": info.port,
+            "user": info.user,
+            "password": info.password,
+            "database": info.database,
+        });
+        let session = crate::plugins::DriverSession::start(drv, &params).await?;
+        let cancel = std::sync::Arc::new(model::CancelState::new(
+            &info,
+            std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        ));
+        let version = session.version.clone();
+        self.state.insert(LiveConn { info: info.clone(), backend: model::Backend::Plugin(session) }, cancel);
         Ok(ConnectResult { version })
     }
 
@@ -465,6 +503,8 @@ impl Service {
             crate::model::DbType::Consul => 8500,
             crate::model::DbType::Etcd => 2379,
             crate::model::DbType::Sqlite => 0,
+            // 驱动插件:端口语义由 agent 决定,留空
+            crate::model::DbType::Plugin => 0,
         });
         let guard = ssh::open_tunnel(ssh_cfg, &target_host, target_port).await?;
         let port = guard.local_port;
@@ -1081,6 +1121,7 @@ mod save_table_tests {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         }
     }
@@ -1184,6 +1225,7 @@ mod tests {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         }
     }
@@ -1468,6 +1510,7 @@ mod tests {
             read_only: true,
             perm: Some(Perm::ReadOnly),
             group: None,
+            plugin: None,
             ..old
         };
         let s = serde_json::to_string(&ro).unwrap();

@@ -106,6 +106,7 @@ fn cmd_connections(conns: &[ConnInfo]) -> i32 {
                 shujing_core::DbType::Nacos => "nacos",
                 shujing_core::DbType::Consul => "consul",
                 shujing_core::DbType::Etcd => "etcd",
+                shujing_core::DbType::Plugin => "plugin",
             },
             c.host.as_deref().or(c.file_path.as_deref()).unwrap_or("-"),
             c.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),

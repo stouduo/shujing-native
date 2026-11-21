@@ -194,6 +194,9 @@ pub async fn apply_changes(
             affected
         }
         Backend::Redis(_) => return Err("Redis 请使用专门的命令通道".into()),
+        Backend::Plugin(_) => {
+            return Err("插件驱动暂不支持表格回写(SQL 直接执行可用)".into())
+        }
         #[cfg(feature = "heavy-mw")]
         Backend::Mongo(_) => return Err("MongoDB 不支持 SQL 回写".into()),
         Backend::Mssql(st) => {
@@ -289,6 +292,7 @@ mod tests {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         };
         let stmts = build_change_stmts(
@@ -333,6 +337,7 @@ fn build_change_stmts_shapes() {
         read_only: false,
         perm: None,
         group: None,
+        plugin: None,
         ssh: None,
     };
     let updates = vec![crate::edits::CellUpdate {
@@ -369,6 +374,7 @@ mod tx_tests {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         };
         let b = crate::backend::connect(&info, None, None).await.unwrap();

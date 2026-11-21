@@ -21,6 +21,9 @@ pub enum DbType {
     Rabbit,
         #[serde(rename = "mqtt")]
     Mqtt,
+    /// 驱动插件提供的自定义类型(v2;具体是哪个插件见 ConnInfo.plugin)
+    #[serde(rename = "plugin")]
+    Plugin,
     #[serde(rename = "nacos")]
     Nacos,
     #[serde(rename = "consul")]
@@ -96,6 +99,8 @@ impl DbType {
                 middleware: true,
                 ..Capabilities::none()
             },
+            // 驱动插件:能力由 agent 契约保证(SQL+结构);SQL 回写/传输等按不支持走既有拒绝
+            DbType::Plugin => SQL_DB,
             DbType::Nacos | DbType::Consul | DbType::Etcd => Capabilities {
                 middleware: true,
                 ..Capabilities::none()
@@ -129,6 +134,9 @@ pub struct ConnInfo {
     /// 侧栏分组(文件夹);None = 不分组,排在所有组之后
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// 驱动插件名(db_type == Plugin 时指向 plugins/ 下 kind=driver 的插件)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
     /// SSH 隧道:开启后 host/port 指的是"从 SSH 服务器可达"的数据库地址
     #[serde(default)]
     pub ssh: Option<SshConfig>,
@@ -558,6 +566,8 @@ pub enum Backend {
     Mqtt(crate::mqtt::MqttState),
     /// 配置中心三件(Nacos/Consul/Etcd)共用一个 KV 后端
     Kv(crate::kv::KvState),
+    /// 驱动插件(sidecar 子进程;数据库语义由插件 agent 解释)
+    Plugin(crate::plugins::DriverSession),
 }
 
 /// ClickHouse 连接:HTTP 接口(8123;reqwest 自带连接池)

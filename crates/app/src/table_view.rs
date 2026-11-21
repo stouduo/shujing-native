@@ -5226,6 +5226,26 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                 );
             });
 
+            // 驱动插件名(连接类型 = 插件驱动 时显示;须与 plugins/<名>/plugin.toml 的 name 一致)
+            let is_plugin = m.db_type == shujing_core::DbType::Plugin;
+            if is_plugin {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(ui_kit::t!("Driver Plugin", "驱动插件")).size(11.5).color(p.text2),
+                    );
+                    theme::field(ui, "conn-driver-plugin", &mut m.plugin, 200.0, false);
+                    ui.label(
+                        RichText::new(ui_kit::t!(
+                            "Name of an installed driver plugin (plugins/ dir)",
+                            "已安装驱动插件的名称(plugins/ 目录)"
+                        ))
+                            .size(10.5)
+                            .color(p.muted),
+                    );
+                });
+            }
+
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if theme::button(ui, ui_kit::t!("Test Connection", "测试连接"), theme::BtnKind::Secondary).clicked() {
@@ -5292,6 +5312,7 @@ fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width:
         (shujing_core::DbType::Kafka, "Kafka"),
         (shujing_core::DbType::Rabbit, "RabbitMQ"),
         (shujing_core::DbType::Mqtt, "MQTT"),
+        (shujing_core::DbType::Plugin, "Plugin"),
         (shujing_core::DbType::Nacos, "Nacos"),
         (shujing_core::DbType::Consul, "Consul"),
         (shujing_core::DbType::Etcd, "etcd"),
@@ -5334,6 +5355,7 @@ fn default_port(t: shujing_core::DbType) -> &'static str {
         shujing_core::DbType::Consul => "8500",
         shujing_core::DbType::Etcd => "2379",
         shujing_core::DbType::Mqtt => "1883",
+        shujing_core::DbType::Plugin => "",
         shujing_core::DbType::Sqlite => "",
     }
 }
@@ -5381,6 +5403,8 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
             let g = m.group.trim();
             (!g.is_empty()).then(|| g.to_string())
         },
+
+        plugin: (!m.plugin.trim().is_empty()).then(|| m.plugin.trim().to_string()),
         ssh: m.ssh_enabled.then(|| shujing_core::SshConfig {
             host: m.ssh_host.trim().to_string(),
             port: m.ssh_port.trim().parse().unwrap_or(22),

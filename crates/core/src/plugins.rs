@@ -271,3 +271,313 @@ mod tests {
         assert_eq!(m.ok_count(), 0);
     }
 }
+
+// ================================================================
+// 驱动插件(v2):sidecar 子进程插件,让使用者接入"无 Rust 客户端"的数据库。
+//
+// plugin.toml:
+//   kind = "driver"
+//   name = "oracle-driver"
+//   version = "0.1.0"
+//   description = "Oracle 驱动(使用者自备驱动与实现)"
+//   db_types = ["oracle"]      # 该插件提供的自定义连接类型名
+//   exec = "./agent"           # 可执行文件(相对插件目录);也可含参数占位
+//
+// 通信:宿主 spawn exec,stdio 上每行一个 JSON-RPC 2.0(与数镜 MCP 同构):
+//   connect  {host,port,user,password,database} -> {version}
+//   databases {}                                 -> {databases:[".."]}
+//   tables    {database}                         -> {tables:[{name,kind}]}
+//   structure {database,table}                   -> {columns:[{name,type,nullable,
+//                                                   default,comment}], pk:[".."]}
+//   query    {database,sql,max}                  -> {columns:[".."],rows:[["v"..]..],
+//                                                   affected,truncated}
+//   count    {database,table}                    -> {count}
+//   ping     {}                                  -> {ok:true}
+// 数据库语义完全由 agent 解释:数镜零方言知识。
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+#[derive(Debug, Clone)]
+pub struct DriverPlugin {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub dir: PathBuf,
+    pub exec: String,
+    pub db_types: Vec<String>,
+}
+
+/// 插件目录(SHUJING_CONFIG_DIR 优先,默认 ~/.shujing-native)
+pub fn plugin_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let base = std::env::var("SHUJING_CONFIG_DIR")
+        .unwrap_or_else(|_| format!("{home}/.shujing-native"));
+    PathBuf::from(base).join("plugins")
+}
+
+/// 扫描插件目录,提取 kind="driver" 的插件(与 transform 型 WASM 同目录共存)
+pub fn scan_drivers(dir: &Path) -> Vec<DriverPlugin> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    for d in dirs {
+        let Ok(mf) = std::fs::read_to_string(d.join("plugin.toml")) else {
+            continue;
+        };
+        let (name, version, description, _sha) = parse_manifest(&mf);
+        // 逐行抓 driver 专属键(kind/exec/db_types;parse_manifest 不含这些)
+        let mut kind = String::new();
+        let mut exec = String::new();
+        let mut db_types = Vec::new();
+        for line in mf.lines() {
+            let line = line.trim();
+            if line.starts_with('#') {
+                continue;
+            }
+            let Some((k, v)) = line.split_once('=') else { continue };
+            let k = k.trim();
+            let v = v.trim().trim_matches('"');
+            match k {
+                "kind" => kind = v.to_string(),
+                "exec" => exec = v.to_string(),
+                "db_types" => {
+                    // ["a","b"] 或 "a" 宽容解析
+                    let inner = v.trim_start_matches('[').trim_end_matches(']');
+                    db_types = inner
+                        .split(',')
+                        .map(|s| s.trim().trim_matches('"').to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+                _ => {}
+            }
+        }
+        if kind != "driver" || exec.is_empty() {
+            continue;
+        }
+        out.push(DriverPlugin {
+            name: if name.is_empty() {
+                d.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+            } else {
+                name
+            },
+            version,
+            description,
+            dir: d.clone(),
+            exec,
+            db_types,
+        });
+    }
+    out
+}
+
+/// 一个驱动插件 agent 的运行实例:子进程 + 串行请求/响应
+pub struct DriverAgent {
+    pub plugin_name: String,
+    child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: BufReader<tokio::process::ChildStdout>,
+    next_id: AtomicU64,
+}
+
+impl DriverAgent {
+    /// 启动 agent 并做协议握手(ping)
+    pub async fn spawn(plugin: &DriverPlugin) -> Result<Self, String> {
+        let exec_path = {
+            let p = PathBuf::from(&plugin.exec);
+            if p.is_absolute() {
+                p
+            } else {
+                plugin.dir.join(p)
+            }
+        };
+        #[cfg(target_os = "macos")]
+        {
+            // 允许执行位缺失(脚本场景)——由使用者保证可执行
+        }
+        let mut cmd = tokio::process::Command::new(&exec_path);
+        cmd.current_dir(&plugin.dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(md) = std::fs::metadata(&exec_path) {
+                if md.permissions().mode() & 0o111 == 0 {
+                    // 无执行位:尝试 chmod(使用者自备文件常见疏漏)
+                    let _ = std::fs::set_permissions(
+                        &exec_path,
+                        std::fs::Permissions::from_mode(md.permissions().mode() | 0o111),
+                    );
+                }
+            }
+        }
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("驱动插件启动失败({}): {e}", exec_path.display()))?;
+        let stdin = child.stdin.take().ok_or("agent stdin 缺失")?;
+        let stdout = child.stdout.take().ok_or("agent stdout 缺失")?;
+        let mut agent = Self {
+            plugin_name: plugin.name.clone(),
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            next_id: AtomicU64::new(1),
+        };
+        // 协议握手
+        let pong: serde_json::Value = agent
+            .call("ping", &serde_json::json!({}))
+            .await
+            .map_err(|e| format!("驱动插件握手失败: {e}"))?;
+        if pong.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+            return Err("驱动插件握手失败(ping 未回 ok)".into());
+        }
+        Ok(agent)
+    }
+
+    /// 单次请求(串行;调用方负责持锁)。子进程已死时返回明确错误。
+    pub async fn call(
+        &mut self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        if self
+            .child
+            .try_wait()
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            return Err(format!("驱动插件 {} 进程已退出", self.plugin_name));
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let line = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        })
+        .to_string();
+        self.stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| format!("驱动插件写失败: {e}"))?;
+        self.stdin.write_all(b"\n").await.map_err(|e| format!("驱动插件写失败: {e}"))?;
+        self.stdin.flush().await.map_err(|e| format!("驱动插件写失败: {e}"))?;
+        loop {
+            let mut buf = String::new();
+            let n = self
+                .stdout
+                .read_line(&mut buf)
+                .await
+                .map_err(|e| format!("驱动插件读失败: {e}"))?;
+            if n == 0 {
+                return Err(format!("驱动插件 {} 意外退出", self.plugin_name));
+            }
+            let buf = buf.trim();
+            if buf.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(buf)
+                .map_err(|e| format!("驱动插件回包不是 JSON: {e}"))?;
+            let rid = v.get("id").and_then(|x| x.as_u64());
+            if rid != Some(id) {
+                continue; // 非本请求的回包(如通知)跳过
+            }
+            if let Some(err) = v.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("未知错误");
+                return Err(format!("驱动插件错误: {msg}"));
+            }
+            return Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null));
+        }
+    }
+
+    /// 关闭子进程(尽力)
+    pub async fn shutdown(&mut self) {
+        let _ = self.child.kill().await;
+        let _ = self.child.wait().await;
+    }
+}
+
+#[cfg(test)]
+mod driver_tests {
+    use super::*;
+
+    #[test]
+    fn scan_drivers_finds_kind_driver() {
+        let dir = std::env::temp_dir().join(format!("shujing_drv_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let d = dir.join("sample-driver");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("plugin.toml"),
+            "name = \"sample\"\nkind = \"driver\"\nversion = \"0.1.0\"\ndescription = \"测试\"\ndb_types = [\"sampledb\", \"other\"]\nexec = \"./agent.sh\"\n",
+        )
+        .unwrap();
+        // transform 型插件不应混入
+        let d2 = dir.join("wasm-thing");
+        std::fs::create_dir_all(&d2).unwrap();
+        std::fs::write(
+            d2.join("plugin.toml"),
+            "name = \"wasm1\"\nversion = \"0.1.0\"\nkind = \"transform\"\n",
+        )
+        .unwrap();
+        let drivers = scan_drivers(&dir);
+        assert_eq!(drivers.len(), 1);
+        assert_eq!(drivers[0].name, "sample");
+        assert_eq!(drivers[0].db_types, vec!["sampledb", "other"]);
+        assert_eq!(drivers[0].exec, "./agent.sh");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_drivers_missing_dir_empty() {
+        assert!(scan_drivers(Path::new("/tmp/definitely-missing-driver-dir")).is_empty());
+    }
+}
+
+/// 驱动插件会话:agent 进程 + 连接参数缓存 + 会话库记忆
+pub struct DriverSession {
+    pub agent: tokio::sync::Mutex<DriverAgent>,
+    /// 连接参数(connect 用;Redis 式重连时重建 agent 用)
+    pub cfg: serde_json::Value,
+    /// agent connect 返回的版本串
+    pub version: String,
+    /// 会话库记忆(USE 类语义由 agent 侧维护;数镜侧只透传)
+    pub database: Option<String>,
+}
+
+impl DriverSession {
+    pub async fn start(
+        plugin: &DriverPlugin,
+        params: &serde_json::Value,
+    ) -> Result<Self, String> {
+        let mut agent = DriverAgent::spawn(plugin).await?;
+        let result = agent
+            .call("connect", params)
+            .await
+            .map_err(|e| format!("驱动插件连接失败: {e}"))?;
+        let version = result
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("插件驱动")
+            .to_string();
+        Ok(Self {
+            agent: tokio::sync::Mutex::new(agent),
+            cfg: params.clone(),
+            version,
+            database: None,
+        })
+    }
+}

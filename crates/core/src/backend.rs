@@ -29,6 +29,35 @@ pub async fn connect(
     gen: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<Backend, String> {
     match info.db_type {
+        #[cfg(feature = "heavy-mw")]
+        DbType::Plugin => {
+            // 驱动插件:scan plugins 目录,spawn agent,契约 connect
+            let name = info
+                .plugin
+                .clone()
+                .ok_or("未指定驱动插件名")?;
+            let dir = crate::plugins::plugin_dir();
+            let drivers = crate::plugins::scan_drivers(&dir);
+            let drv = drivers
+                .iter()
+                .find(|d| d.name.as_str() == name.as_str() || d.db_types.iter().any(|t| t.as_str() == name.as_str()))
+                .ok_or_else(|| {
+                    format!("驱动插件 {name} 未安装(应位于 {}/<名>/plugin.toml)", dir.display())
+                })?;
+            let params = serde_json::json!({
+                "host": info.host,
+                "port": info.port,
+                "user": info.user,
+                "password": info.password,
+                "database": info.database,
+            });
+            let session = crate::plugins::DriverSession::start(drv, &params).await?;
+            Ok(Backend::Plugin(session))
+        }
+        #[cfg(not(feature = "heavy-mw"))]
+        DbType::Plugin => {
+            Err("此构建未包含驱动插件支持(桌面完整版包含)".into())
+        }
         DbType::Rabbit => {
             let host = req(&info.host, "缺少 RabbitMQ management 地址")?;
             let port = info.port.unwrap_or(15672);
@@ -815,7 +844,9 @@ impl Backend {
                 ))
             }
             #[cfg(feature = "heavy-mw")]
+            #[cfg(feature = "heavy-mw")]
             Backend::Mqtt(_) => Ok("MQTT broker".into()),
+            Backend::Plugin(s) => Ok(s.version.clone()),
             Backend::Kv(st) => {
                 let entries = crate::kv::list(st, "").await?;
                 Ok(format!(

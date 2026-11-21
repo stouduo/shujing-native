@@ -37,6 +37,7 @@ async fn main() {
         read_only: false,
         perm: None,
         group: None,
+        plugin: None,
         ssh: None,
     };
 

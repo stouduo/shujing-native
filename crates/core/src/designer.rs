@@ -230,6 +230,8 @@ pub fn designer_sql(
             continue;
         }
         match db_type {
+            // 插件驱动:方言未知,设计器改列 v1 不支持(不生成语句,交由 agent 侧工具)
+            DbType::Plugin => {}
             DbType::MySql => {
                 alters.push(format!(
                     "ALTER TABLE {} MODIFY COLUMN {};",

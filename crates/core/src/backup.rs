@@ -269,6 +269,7 @@ mod tests {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         }
     }
@@ -333,6 +334,7 @@ mod tests {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         })
         .unwrap();
@@ -350,6 +352,7 @@ mod tests {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         })
         .await

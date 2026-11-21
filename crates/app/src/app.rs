@@ -4682,6 +4682,7 @@ impl ShujingApp {
             read_only: false,
             perm: None,
             group: None,
+            plugin: None,
             ssh: None,
         };
         // 让压测/演示入口也出现在侧栏(否则只有标签页,看不到连接树)

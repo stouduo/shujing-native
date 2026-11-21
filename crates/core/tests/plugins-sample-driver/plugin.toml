@@ -1,0 +1,6 @@
+name = "sample"
+kind = "driver"
+version = "0.1.0"
+description = "测试用示例驱动(内存假数据,验证插件契约)"
+db_types = ["sampledb"]
+exec = "./agent.py"
