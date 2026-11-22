@@ -315,7 +315,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
         ] {
             header.col(|ui| {
                 let rect = ui.max_rect();
-                ui.painter().rect_filled(rect, 0, p.panel);
+                ui.painter().rect_filled(rect, 0, p.elevated);
                 ui.painter().text(
                     egui::pos2(rect.left() + 12.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
@@ -345,6 +345,8 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                 let rect = ui.max_rect();
                 if hovered {
                     ui.painter().rect_filled(rect, 0, p.row_hover);
+                } else if ri % 2 == 1 {
+                    ui.painter().rect_filled(rect, 0, p.stripe);
                 }
                 icons::paint_baseline_text(
                     ui.painter(),
@@ -361,6 +363,8 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                 let rect = ui.max_rect();
                 if hovered {
                     ui.painter().rect_filled(rect, 0, p.row_hover);
+                } else if ri % 2 == 1 {
+                    ui.painter().rect_filled(rect, 0, p.stripe);
                 }
                 icons::paint_baseline_text(
                     ui.painter(),
@@ -377,6 +381,8 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                 let rect = ui.max_rect();
                 if hovered {
                     ui.painter().rect_filled(rect, 0, p.row_hover);
+                } else if ri % 2 == 1 {
+                    ui.painter().rect_filled(rect, 0, p.stripe);
                 }
                 icons::paint_baseline_text(
                     ui.painter(),
@@ -393,6 +399,8 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                 let rect = ui.max_rect();
                 if hovered {
                     ui.painter().rect_filled(rect, 0, p.row_hover);
+                } else if ri % 2 == 1 {
+                    ui.painter().rect_filled(rect, 0, p.stripe);
                 }
                 if is_pk {
                     paint_pk(ui, rect.left() + 12.0, rect.center().y);
@@ -413,6 +421,8 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                 let rect = ui.max_rect();
                 if hovered {
                     ui.painter().rect_filled(rect, 0, p.row_hover);
+                } else if ri % 2 == 1 {
+                    ui.painter().rect_filled(rect, 0, p.stripe);
                 }
                 let def = c.default.clone().unwrap_or_else(|| "null".into());
                 icons::paint_baseline_text(
@@ -434,6 +444,8 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                 let rect = ui.max_rect();
                 if hovered {
                     ui.painter().rect_filled(rect, 0, p.row_hover);
+                } else if ri % 2 == 1 {
+                    ui.painter().rect_filled(rect, 0, p.stripe);
                 }
                 icons::paint_baseline_text(
                     ui.painter(),
@@ -450,6 +462,8 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                 let rect = ui.max_rect();
                 if hovered {
                     ui.painter().rect_filled(rect, 0, p.row_hover);
+                } else if ri % 2 == 1 {
+                    ui.painter().rect_filled(rect, 0, p.stripe);
                 }
                 icons::paint_baseline_text(
                     ui.painter(),

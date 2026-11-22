@@ -29,6 +29,15 @@ impl ShujingApp {
             )
             .show(ctx, |ui| {
                 self.draw_sidebar(ctx, ui);
+                // 侧栏右缘分隔线:与标签条底线同语义,和内容区明确分层
+                let r = ui.max_rect();
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(r.right() + 9.5, r.top()),
+                        egui::pos2(r.right() + 9.5, r.bottom()),
+                    ],
+                    egui::Stroke::new(1.0, theme::c().border),
+                );
             });
     }
 
