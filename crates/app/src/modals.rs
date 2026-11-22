@@ -1947,6 +1947,12 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_width(460.0);
             theme::modal_title(ui, ui_kit::t!("Backup Database", "备份数据库"));
+            // 表单体可滚动:小屏视口下超高内容不再被裁(footer 固定可见)
+            egui::ScrollArea::vertical()
+                .id_salt("backup-modal-scroll")
+                .auto_shrink([false, false])
+                .max_height(ui.ctx().screen_rect().height() - 150.0)
+                .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
             ui.label(
                 RichText::new(ui_kit::t!(
@@ -2047,6 +2053,8 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         }
                     });
             }
+
+            });
 
             theme::modal_footer(ui, |ui| {
                 if theme::button(
@@ -2229,6 +2237,12 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_width(720.0);
             theme::modal_title(ui, ui_kit::t!("Query History", "查询历史"));
+            // 表单体可滚动:小屏视口下超高内容不再被裁(footer 固定可见)
+            egui::ScrollArea::vertical()
+                .id_salt("history-modal-scroll")
+                .auto_shrink([false, false])
+                .max_height(ui.ctx().screen_rect().height() - 150.0)
+                .show(ui, |ui| {
             ui.label(
                 RichText::new(ui_kit::t!(
                     "Persisted locally (~/.shujing-native/query_history.jsonl, latest 500); click a row to fill the editor",
@@ -2325,6 +2339,8 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     }
                 });
             ui.add_space(4.0);
+            });
+
             theme::modal_footer(ui, |ui| {
                 if theme::button(
                     ui,
@@ -3344,6 +3360,12 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_width(360.0);
             theme::modal_title(ui, ui_kit::t!("Appearance", "外观设置"));
+            // 表单体可滚动:小屏视口下超高内容不再被裁(footer 固定可见)
+            egui::ScrollArea::vertical()
+                .id_salt("settings-modal-scroll")
+                .auto_shrink([false, false])
+                .max_height(ui.ctx().screen_rect().height() - 150.0)
+                .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 10.0;
             ui.label(RichText::new(ui_kit::t!("Accent Color", "强调色")).size(11.0).color(p.muted));
             ui.horizontal(|ui| {
@@ -3589,6 +3611,8 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 ui_kit::i18n::set_english(en);
                 let _ = en;
             }
+            });
+
             theme::modal_footer(ui, |ui| {
                 if theme::button(ui, ui_kit::t!("Done", "完成"), theme::BtnKind::Primary).clicked() {
                     close = true;

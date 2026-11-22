@@ -4999,6 +4999,12 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
         .show(ctx, |ui| {
             ui.set_width(440.0);
             theme::modal_title(ui, ui_kit::t!("Connection Settings", "连接配置"));
+            // 表单体可滚动:SSH/插件等条件块多时高度会超小屏视口,此前顶部被裁
+            egui::ScrollArea::vertical()
+                .id_salt("conn-modal-scroll")
+                .auto_shrink([false, false])
+                .max_height(ui.ctx().screen_rect().height() - 150.0)
+                .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 12.0;
 
             theme::form_field(ui, ui_kit::t!("Name", "名称"), "conn-name", &mut m.name, 440.0, false);
@@ -5225,36 +5231,38 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                         m.color_idx = Some(i as u8);
                     }
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    // 权限三档:完整(DDL+DML)/仅数据操作/只读;旧"只读"复选框升级而来
-                    ui.label(
-                        RichText::new(ui_kit::t!("Permissions", "权限")).size(11.5).color(p.text2),
-                    );
-                    egui::ComboBox::from_id_salt("conn-perm")
-                        .width(190.0)
-                        .selected_text(match m.perm {
-                            shujing_core::Perm::ReadOnly => ui_kit::t!("Read-only", "只读"),
-                            shujing_core::Perm::Dml => ui_kit::t!("DML only", "仅 DML"),
-                            shujing_core::Perm::Full => ui_kit::t!("Full", "完整"),
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut m.perm,
-                                shujing_core::Perm::Full,
-                                ui_kit::t!("Full (DDL + DML)", "完整(DDL+DML)"),
-                            );
-                            ui.selectable_value(
-                                &mut m.perm,
-                                shujing_core::Perm::Dml,
-                                ui_kit::t!("Data ops only, no DDL", "仅数据操作(无 DDL)"),
-                            );
-                            ui.selectable_value(
-                                &mut m.perm,
-                                shujing_core::Perm::ReadOnly,
-                                ui_kit::t!("Read-only (queries only)", "只读(仅查询)"),
-                            );
-                        });
-                });
+            });
+            // 权限独立一行(此前与色板挤同一行,基线不齐)
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                // 权限三档:完整(DDL+DML)/仅数据操作/只读;旧"只读"复选框升级而来
+                ui.label(
+                    RichText::new(ui_kit::t!("Permissions", "权限")).size(11.5).color(p.text2),
+                );
+                egui::ComboBox::from_id_salt("conn-perm")
+                    .width(190.0)
+                    .selected_text(match m.perm {
+                        shujing_core::Perm::ReadOnly => ui_kit::t!("Read-only", "只读"),
+                        shujing_core::Perm::Dml => ui_kit::t!("DML only", "仅 DML"),
+                        shujing_core::Perm::Full => ui_kit::t!("Full", "完整"),
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut m.perm,
+                            shujing_core::Perm::Full,
+                            ui_kit::t!("Full (DDL + DML)", "完整(DDL+DML)"),
+                        );
+                        ui.selectable_value(
+                            &mut m.perm,
+                            shujing_core::Perm::Dml,
+                            ui_kit::t!("Data ops only, no DDL", "仅数据操作(无 DDL)"),
+                        );
+                        ui.selectable_value(
+                            &mut m.perm,
+                            shujing_core::Perm::ReadOnly,
+                            ui_kit::t!("Read-only (queries only)", "只读(仅查询)"),
+                        );
+                    });
             });
 
             ui.add_space(2.0);
@@ -5263,6 +5271,7 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                     RichText::new(ui_kit::t!("Group", "分组")).size(11.5).color(p.text2),
                 );
                 theme::field(ui, "conn-group", &mut m.group, 200.0, false);
+                ui.add_space(8.0);
                 ui.label(
                     RichText::new(ui_kit::t!(
                         "Optional; groups connections in the sidebar",
@@ -5323,6 +5332,7 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                     );
                 }
             });
+                });
 
             theme::modal_footer(ui, |ui| {
                 if theme::button(ui, ui_kit::t!("Save", "保存"), theme::BtnKind::Primary).clicked() {
