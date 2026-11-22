@@ -353,12 +353,30 @@ impl ShujingApp {
         // 同一行里不同字号的文字统一按基线排,而不是各自垂直居中
         let baseline = rect.center().y + 5.0;
         let name_font = theme::bold(theme::FS_CONN);
+        // 版本串先测宽(限 96pt 截断):PG/Redis 等的完整 version 可达 ~170pt,
+        // 此前固定预留 110pt 被长版本串穿透——名字与版本灰字直接重叠
+        let ver_galley_opt = if online && c.db_type != shujing_core::DbType::Sqlite {
+            let ver = self
+                .trees
+                .get(&c.id)
+                .map(|t| t.version.clone())
+                .unwrap_or_default();
+            (!ver.is_empty()).then(|| {
+                let g = icons::text_galley(&painter, ver, theme::mono(10.5), Color32::PLACEHOLDER, 96.0);
+                (g, 8.0)
+            })
+        } else {
+            None
+        };
+        let right_reserve = 24.0
+            + ver_galley_opt.as_ref().map(|(g, _)| g.size().x + 8.0).unwrap_or(0.0)
+            + if online { 26.0 } else { 0.0 }; // 漏斗位(已连且多库时;保守常备)
         let name_galley = icons::text_galley(
             &painter,
             c.name.clone(),
             name_font,
             Color32::PLACEHOLDER,
-            rect.width() - 110.0,
+            (rect.width() - right_reserve).max(60.0),
         );
         painter.galley(
             egui::pos2(
@@ -616,24 +634,17 @@ impl ShujingApp {
                 self.open_db_filter(&c.id);
             }
         }
-        if online && c.db_type != shujing_core::DbType::Sqlite {
-            let ver = self
-                .trees
-                .get(&c.id)
-                .map(|t| t.version.clone())
-                .unwrap_or_default();
-            if !ver.is_empty() {
-                let vg = painter.layout_no_wrap(ver, theme::mono(10.5), Color32::PLACEHOLDER);
-                let right_edge = if filter_db_avail { 28.0 } else { 2.0 };
-                painter.galley(
-                    egui::pos2(
-                        rect.right() - vg.size().x - right_edge,
-                        baseline - icons::baseline_top(&vg, 10.5),
-                    ),
-                    vg,
-                    p.muted,
-                );
-            }
+        // 版本号:用预计算的截断 galley(限宽 96pt),不再用 layout_no_wrap 全串
+        if let Some((vg, right_edge)) = ver_galley_opt {
+            let right_edge = if filter_db_avail { 28.0 } else { right_edge };
+            painter.galley(
+                egui::pos2(
+                    rect.right() - vg.size().x - right_edge,
+                    baseline - icons::baseline_top(&vg, 10.5),
+                ),
+                vg,
+                p.muted,
+            );
         }
         let cid = c.id.clone();
         self.draw_tree(ui, &cid, online);
