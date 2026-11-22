@@ -119,7 +119,7 @@ pub fn result_rows(
                     if geom.header_top.is_none() {
                         geom.header_top = Some(rect.top());
                     }
-                    ui.painter().rect_filled(rect, 0, p.panel);
+                    ui.painter().rect_filled(rect, 0, p.elevated);
                     ui.painter().text(
                         egui::pos2(rect.right() - 14.0, rect.center().y),
                         egui::Align2::RIGHT_CENTER,
@@ -132,7 +132,7 @@ pub fn result_rows(
                 for (vw, c) in columns.iter().enumerate() {
                     header.col(|ui| {
                         let rect = ui.max_rect();
-                        ui.painter().rect_filled(rect, 0, p.panel);
+                        ui.painter().rect_filled(rect, 0, p.elevated);
                         let font = egui::FontId::proportional(theme::FS_HEADER);
                         let g = icons::text_galley(
                             ui.painter(),
@@ -153,7 +153,7 @@ pub fn result_rows(
                 }
                 header.col(|ui| {
                     let rect = ui.max_rect();
-                    ui.painter().rect_filled(rect, 0, p.panel);
+                    ui.painter().rect_filled(rect, 0, p.elevated);
                     header_line(ui, p.border);
                 });
             })
@@ -179,6 +179,8 @@ pub fn result_rows(
                             .unwrap_or(false);
                         if hovered {
                             ui.painter().rect_filled(rect, 0, p.row_hover);
+                        } else if ri % 2 == 1 {
+                            ui.painter().rect_filled(rect, 0, p.stripe);
                         }
                         ui.painter().text(
                             egui::pos2(rect.right() - 14.0, rect.center().y),
@@ -205,6 +207,8 @@ pub fn result_rows(
                             let painter = ui.painter().with_clip_rect(rect);
                             if hovered {
                                 painter.rect_filled(rect, 0, p.row_hover);
+                            } else if ri % 2 == 1 {
+                                painter.rect_filled(rect, 0, p.stripe);
                             }
                             if let Some((label, on)) = badge_value(col, v) {
                                 paint_badge(
@@ -240,6 +244,8 @@ pub fn result_rows(
                         let rect = ui.max_rect();
                         if hovered {
                             ui.painter().rect_filled(rect, 0, p.row_hover);
+                        } else if ri % 2 == 1 {
+                            ui.painter().rect_filled(rect, 0, p.stripe);
                         }
                         row_line(ui, p.row_line);
                     });
@@ -381,7 +387,7 @@ pub fn result_rows_editable(
                     if geom.header_top.is_none() {
                         geom.header_top = Some(rect.top());
                     }
-                    ui.painter().rect_filled(rect, 0, p.panel);
+                    ui.painter().rect_filled(rect, 0, p.elevated);
                     ui.painter().text(
                         egui::pos2(rect.right() - 14.0, rect.center().y),
                         egui::Align2::RIGHT_CENTER,
@@ -394,7 +400,7 @@ pub fn result_rows_editable(
                 for (vw, c) in columns.iter().enumerate() {
                     header.col(|ui| {
                         let rect = ui.max_rect();
-                        ui.painter().rect_filled(rect, 0, p.panel);
+                        ui.painter().rect_filled(rect, 0, p.elevated);
                         let g = icons::text_galley(
                             ui.painter(),
                             c.clone(),
@@ -414,7 +420,7 @@ pub fn result_rows_editable(
                 }
                 header.col(|ui| {
                     let rect = ui.max_rect();
-                    ui.painter().rect_filled(rect, 0, p.panel);
+                    ui.painter().rect_filled(rect, 0, p.elevated);
                     header_line(ui, p.border);
                 });
             })
@@ -440,6 +446,8 @@ pub fn result_rows_editable(
                             .unwrap_or(false);
                         if hovered {
                             ui.painter().rect_filled(rect, 0, p.row_hover);
+                        } else if ri % 2 == 1 {
+                            ui.painter().rect_filled(rect, 0, p.stripe);
                         }
                         ui.painter().text(
                             egui::pos2(rect.right() - 14.0, rect.center().y),
@@ -476,6 +484,8 @@ pub fn result_rows_editable(
                                     0,
                                     if changed { p.change_bg } else { p.row_hover },
                                 );
+                            } else if ri % 2 == 1 {
+                                painter.rect_filled(rect, 0, p.stripe);
                             }
                             if is_editing {
                                 editing_rendered.set(true);
@@ -552,6 +562,8 @@ pub fn result_rows_editable(
                         let rect = ui.max_rect();
                         if hovered {
                             ui.painter().rect_filled(rect, 0, p.row_hover);
+                        } else if ri % 2 == 1 {
+                            ui.painter().rect_filled(rect, 0, p.stripe);
                         }
                         row_line(ui, p.row_line);
                     });
@@ -652,7 +664,7 @@ fn draw_frozen_grid_overlay(
     // 钉住的表头
     let header_rect =
         egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(region_w, theme::HEADER_H));
-    painter.rect_filled(header_rect, 0, p.panel);
+    painter.rect_filled(header_rect, 0, p.elevated);
     painter.text(
         egui::pos2(left + 48.0 - 14.0, header_rect.center().y),
         egui::Align2::RIGHT_CENTER,
@@ -735,6 +747,8 @@ fn draw_frozen_grid_overlay(
                     0,
                     if changed { p.change_bg } else { p.row_hover },
                 );
+            } else if ri % 2 == 1 {
+                cp.rect_filled(rect, 0, p.stripe);
             }
             let mut editing_now = false;
             if let Some(e) = edits.as_ref() {

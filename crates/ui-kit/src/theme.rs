@@ -33,7 +33,7 @@ pub const FS_AUX: f32 = 11.0;
 pub const TABBAR_H: f32 = 38.0;
 pub const TOOLBAR_H: f32 = 44.0;
 pub const HEADER_H: f32 = 36.0;
-pub const ROW_H: f32 = 32.0;
+pub const ROW_H: f32 = 36.0;
 pub const TREE_ROW_H: f32 = 34.0;
 pub const FOOTER_H: f32 = 34.0;
 
@@ -78,29 +78,30 @@ pub struct Palette {
 }
 
 pub const DARK: Palette = Palette {
-    // 石墨蓝:比纯黑柔和,卡片与背景有层次但不生硬
-    bg: Color32::from_rgb(0x0c, 0x0e, 0x12),
-    panel: Color32::from_rgb(0x15, 0x18, 0x1e),
-    elevated: Color32::from_rgb(0x1f, 0x23, 0x2a),
-    hover: Color32::from_rgb(0x26, 0x2b, 0x33),
-    border: Color32::from_rgb(0x2a, 0x2f, 0x38),
-    row_line: Color32::from_rgb(0x1b, 0x1f, 0x25),
+    // 石墨蓝:四级表面拉开层次(窗口底 → 面板 → 浮层/表头 → hover),
+    // 行状态色带主色倾向,斑马纹/悬停/选中肉眼可辨
+    bg: Color32::from_rgb(0x0b, 0x0d, 0x11),
+    panel: Color32::from_rgb(0x13, 0x16, 0x1c),
+    elevated: Color32::from_rgb(0x1d, 0x22, 0x2b),
+    hover: Color32::from_rgb(0x26, 0x2c, 0x36),
+    border: Color32::from_rgb(0x2c, 0x32, 0x3d),
+    row_line: Color32::from_rgb(0x22, 0x28, 0x32),
     text: Color32::from_rgb(0xed, 0xef, 0xf3),
     text2: Color32::from_rgb(0x9a, 0xa0, 0xaa),
     muted: Color32::from_rgb(0x6a, 0x70, 0x7a),
     cell_text: Color32::from_rgb(0xe8, 0xea, 0xee),
-    null_text: Color32::from_rgb(0x5a, 0x61, 0x6c),
+    null_text: Color32::from_rgb(0x4c, 0x53, 0x5e),
     accent: Color32::from_rgb(0x5b, 0x8c, 0xff),
     green: Color32::from_rgb(0x3d, 0xd6, 0x8c),
     red: Color32::from_rgb(0xef, 0x44, 0x44),
-    row_hover: Color32::from_rgba_premultiplied(7, 7, 7, 7),
-    active_row: Color32::from_rgb(0x16, 0x25, 0x3c),
-    selected_row: Color32::from_rgb(0x12, 0x1a, 0x29),
+    row_hover: Color32::from_rgba_premultiplied(48, 66, 106, 31),
+    active_row: Color32::from_rgb(0x1e, 0x2d, 0x49),
+    selected_row: Color32::from_rgb(0x19, 0x25, 0x3d),
     change_bg: Color32::from_rgb(0x10, 0x2a, 0x1d),
     change_fg: Color32::from_rgb(0x3d, 0xd6, 0x8c),
     dot_off: Color32::from_rgb(0x4b, 0x52, 0x5c),
-    stripe: Color32::from_rgb(0x10, 0x13, 0x18),
-    input_bg: Color32::from_rgb(0x15, 0x18, 0x1e),
+    stripe: Color32::from_rgb(0x14, 0x18, 0x1f),
+    input_bg: Color32::from_rgb(0x17, 0x1b, 0x22),
     overlay: Color32::from_black_alpha(150),
     shadow: Color32::from_black_alpha(180),
     sql_keyword: Color32::from_rgb(0x7b, 0xa7, 0xff),
@@ -110,13 +111,13 @@ pub const DARK: Palette = Palette {
 };
 
 pub const LIGHT: Palette = Palette {
-    // 雾白:冷调浅灰底 + 纯白卡片,选中用低饱和蓝
-    bg: Color32::from_rgb(0xf4, 0xf6, 0xf9),
-    panel: Color32::from_rgb(0xff, 0xff, 0xff),
-    elevated: Color32::from_rgb(0xea, 0xed, 0xf2),
-    hover: Color32::from_rgb(0xe2, 0xe6, 0xec),
-    border: Color32::from_rgb(0xd9, 0xde, 0xe6),
-    row_line: Color32::from_rgb(0xe7, 0xeb, 0xf0),
+    // 雾白:冷调浅灰底 + 纯白面板,选中/hover 带蓝,斑马纹可辨
+    bg: Color32::from_rgb(0xf2, 0xf4, 0xf8),
+    panel: Color32::from_rgb(0xfb, 0xfc, 0xfe),
+    elevated: Color32::from_rgb(0xff, 0xff, 0xff),
+    hover: Color32::from_rgb(0xe4, 0xe8, 0xef),
+    border: Color32::from_rgb(0xd5, 0xdb, 0xe4),
+    row_line: Color32::from_rgb(0xdf, 0xe4, 0xec),
     text: Color32::from_rgb(0x1b, 0x1f, 0x26),
     text2: Color32::from_rgb(0x5f, 0x66, 0x73),
     muted: Color32::from_rgb(0x8a, 0x92, 0x9e),
@@ -125,13 +126,13 @@ pub const LIGHT: Palette = Palette {
     accent: Color32::from_rgb(0x3b, 0x82, 0xf6),
     green: Color32::from_rgb(0x16, 0xa3, 0x4a),
     red: Color32::from_rgb(0xdc, 0x26, 0x26),
-    row_hover: Color32::from_rgba_premultiplied(0, 0, 0, 5),
-    active_row: Color32::from_rgb(0xdf, 0xea, 0xff),
-    selected_row: Color32::from_rgb(0xea, 0xf1, 0xff),
+    row_hover: Color32::from_rgba_premultiplied(96, 137, 214, 22),
+    active_row: Color32::from_rgb(0xdc, 0xe9, 0xff),
+    selected_row: Color32::from_rgb(0xe7, 0xf0, 0xff),
     change_bg: Color32::from_rgb(0xe7, 0xf8, 0xee),
     change_fg: Color32::from_rgb(0x15, 0x80, 0x3d),
     dot_off: Color32::from_rgb(0xc3, 0xc9, 0xd2),
-    stripe: Color32::from_rgb(0xee, 0xf1, 0xf6),
+    stripe: Color32::from_rgb(0xe9, 0xee, 0xf6),
     input_bg: Color32::from_rgb(0xff, 0xff, 0xff),
     overlay: Color32::from_black_alpha(64),
     shadow: Color32::from_black_alpha(45),
@@ -631,11 +632,11 @@ pub fn button_ex(
     } else {
         fill
     };
-    painter.rect_filled(rect, egui::CornerRadius::same(9), fill_now);
+    painter.rect_filled(rect, egui::CornerRadius::same(6), fill_now);
     if stroke_color != Color32::TRANSPARENT {
         painter.rect_stroke(
             rect,
-            egui::CornerRadius::same(9),
+            egui::CornerRadius::same(6),
             Stroke::new(1.0, if hovered { p.hover } else { stroke_color }),
             egui::StrokeKind::Inside,
         );
@@ -752,11 +753,18 @@ pub fn field(
     width: f32,
     pwd: bool,
 ) -> egui::Response {
-    let h = 30.0;
+    let h = 28.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
     let p = c();
     ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(8), p.input_bg);
+        .rect_filled(rect, egui::CornerRadius::same(6), p.input_bg);
+    // 描边与按钮同语义:输入框在工具栏/表单里有可辨边界
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(6),
+        egui::Stroke::new(1.0, p.border),
+        egui::StrokeKind::Inside,
+    );
     let inner = egui::Rect::from_min_max(
         egui::pos2(rect.left() + 10.0, rect.top() + 2.0),
         egui::pos2(rect.right() - 10.0, rect.bottom() - 2.0),

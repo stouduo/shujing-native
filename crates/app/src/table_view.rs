@@ -789,6 +789,14 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                     }
                 },
             );
+            // 标签条台阶:底缘 1px 分隔线,与下方工具栏/内容区分层
+            ui.painter().line_segment(
+                [
+                    egui::pos2(bar_rect.left(), bar_rect.bottom() - 0.5),
+                    egui::pos2(bar_rect.right(), bar_rect.bottom() - 0.5),
+                ],
+                egui::Stroke::new(1.0, p.border),
+            );
         });
 
     ctx.memory_mut(|m| {
@@ -951,6 +959,15 @@ fn draw_one_tab(
             },
             p.panel,
         );
+        // 激活标识:顶部 2px accent 条(成熟工具的 tab 语义)
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                rect.left_top(),
+                egui::pos2(rect.right(), rect.top() + 2.0),
+            ),
+            0,
+            p.accent,
+        );
     } else if resp.hovered() {
         painter.rect_filled(
             rect.shrink2(egui::vec2(0.0, 3.0)),
@@ -1102,7 +1119,7 @@ pub(crate) fn draw_table_view(
                     + icons::baseline_top(&title_g, theme::FS_TABLE_TITLE);
                 if let Some(db) = &tab.database {
                     ui.add_space(2.0);
-                    icons::chip_at_baseline(ui, db, p.text2, title_baseline);
+                    icons::chip_at_baseline(ui, db, p.muted, title_baseline);
                 }
                 ui.add_space(4.0);
                 if tab.loading {
@@ -2672,7 +2689,7 @@ fn draw_data_table(
         if show_rowno {
             header.col(|ui| {
                 let rect = ui.max_rect();
-                ui.painter().rect_filled(rect, 0, p.panel);
+                ui.painter().rect_filled(rect, 0, p.elevated);
                 ui.painter().text(
                     egui::pos2(rect.right() - 14.0, rect.center().y),
                     egui::Align2::RIGHT_CENTER,
@@ -2694,10 +2711,11 @@ fn draw_data_table(
                     geom.header_top = Some(rect.top());
                 }
                 let painter = ui.painter().with_clip_rect(rect);
+                // 表头整体浮起(elevated);排序列再亮一档(hover)以示状态
                 if sorted.is_some() {
-                    painter.rect_filled(rect, 0, p.elevated);
+                    painter.rect_filled(rect, 0, p.hover);
                 } else {
-                    painter.rect_filled(rect, 0, p.panel);
+                    painter.rect_filled(rect, 0, p.elevated);
                 }
                 let color = if sorted.is_some() { p.accent } else { p.text2 };
                 let font = egui::FontId::proportional(theme::FS_HEADER);
@@ -2824,6 +2842,8 @@ fn draw_data_table(
                         ui.painter().rect_filled(rect, 0, p.selected_row);
                     } else if hovered {
                         ui.painter().rect_filled(rect, 0, p.row_hover);
+                    } else if ri % 2 == 1 {
+                        ui.painter().rect_filled(rect, 0, p.stripe);
                     }
                     ui.painter().text(
                         egui::pos2(rect.right() - 14.0, rect.center().y),
@@ -2955,6 +2975,8 @@ fn draw_data_table(
                     ui.painter().rect_filled(rect, 0, p.selected_row);
                 } else if hovered {
                     ui.painter().rect_filled(rect, 0, p.row_hover);
+                } else if ri % 2 == 1 {
+                    ui.painter().rect_filled(rect, 0, p.stripe);
                 }
                 row_bottom_line(ui);
                 if ui.allocate_rect(rect, Sense::click()).clicked() {
@@ -3607,11 +3629,13 @@ fn draw_data_cell(
     let p = theme::c();
     let rect = ui.max_rect();
     let painter = ui.painter().with_clip_rect(rect);
+    // 行底色优先级:选中 > 悬停 > 奇偶斑马纹(Navicat 式可辨节奏)
     if row_selected {
         painter.rect_filled(rect, 0, p.selected_row);
-    }
-    if hovered_row && !row_selected {
+    } else if hovered_row {
         painter.rect_filled(rect, 0, p.row_hover);
+    } else if ri % 2 == 1 {
+        painter.rect_filled(rect, 0, p.stripe);
     }
     let _ = is_sel; // 原型为整行淡蓝底,不再单独加重单元格
     if changed {
