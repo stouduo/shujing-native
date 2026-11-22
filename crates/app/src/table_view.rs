@@ -1638,6 +1638,22 @@ pub(crate) fn draw_table_view(
                     vsep(ui);
                     ui.label(RichText::new(format!("{ms} ms")).size(11.5).color(p.text2));
                 }
+                // SQL 预览(DBX 式):底栏中段显示当前数据对应的 SQL,mono 灰字可截断,
+                // 悬停看全句——用户能随时知道表格当前"凭什么条件/排序"取数
+                if !tab.load_sql.is_empty() && !compact_footer {
+                    vsep(ui);
+                    let (slot, resp) =
+                        ui.allocate_exact_size(egui::vec2(240.0, 18.0), Sense::hover());
+                    let clip_sql = icons::clip(&tab.load_sql, 44);
+                    ui.painter().text(
+                        slot.left_top() + egui::vec2(0.0, slot.height() / 2.0),
+                        egui::Align2::LEFT_CENTER,
+                        clip_sql,
+                        theme::mono(10.0),
+                        p.muted,
+                    );
+                    resp.on_hover_text(&tab.load_sql);
+                }
                 // 每页行数快捷设置(底栏直达)
                 vsep(ui);
                 let size_opts = [50usize, 100, 200, 500];
@@ -2039,6 +2055,8 @@ pub(crate) fn draw_table_view(
                 draft,
                 changes,
                 pk_cols,
+                col_types,
+                conds,
                 sort,
                 selected,
                 multi_sel,
@@ -2116,6 +2134,8 @@ pub(crate) fn draw_table_view(
                             &tab_id_s,
                             rows,
                             columns,
+                            col_types,
+                            conds,
                             &vis_idx,
                             editing,
                             draft,
@@ -2712,6 +2732,8 @@ fn draw_data_table(
     tab_id: &str,
     rows: &[Vec<Option<String>>],
     columns: &[String],
+    col_types: &std::collections::HashMap<String, String>,
+    conds: &[(String, String, String)],
     vis_idx: &[usize],
     editing: &mut Option<(usize, usize)>,
     draft: &mut String,
@@ -2834,48 +2856,101 @@ fn draw_data_table(
                     painter.rect_filled(rect, 0, p.elevated);
                 }
                 let color = if sorted.is_some() { p.accent } else { p.text2 };
-                let font = egui::FontId::proportional(theme::FS_HEADER);
+                // ── DBX 式列头:名称 + 绿色类型小字,右侧内联排序箭头+筛选漏斗 ──
+                let ctl_w = 34.0; // 右侧控件区(箭头 16 + 漏斗 16 + 边距)
+                let name_w = (rect.width() - ctl_w - 24.0).max(30.0);
                 let g = icons::text_galley(
                     &painter,
                     c.clone(),
-                    font,
+                    egui::FontId::proportional(theme::FS_HEADER),
                     Color32::PLACEHOLDER,
-                    rect.width() - 24.0,
+                    name_w,
                 );
+                let name_h = g.size().y;
+                let name_y = rect.center().y - 3.0 - name_h / 2.0;
+                painter.galley(egui::pos2(rect.left() + 12.0, name_y), g, color);
+                // 类型标注(绿色 9.5px,名称右侧;DBX 的 int / varchar(32))
+                if let Some(ty) = col_types.get(c.as_str()) {
+                    let tg = painter.layout_no_wrap(
+                        ty.clone(),
+                        egui::FontId::proportional(9.5),
+                        Color32::PLACEHOLDER,
+                    );
+                    let tx = (rect.left() + 12.0
+                        + icons::text_galley(
+                            &painter,
+                            c.clone(),
+                            egui::FontId::proportional(theme::FS_HEADER),
+                            Color32::PLACEHOLDER,
+                            name_w,
+                        )
+                        .size()
+                        .x
+                        + 6.0)
+                        .min(rect.right() - ctl_w - 2.0 - tg.size().x);
+                    if tx > rect.left() + 12.0 {
+                        painter.galley(
+                            egui::pos2(tx, name_y),
+                            tg,
+                            Color32::from_rgb(0x4a, 0xde, 0x80),
+                        );
+                    }
+                }
+                // 排序箭头(常显,激活列 accent)
                 match sorted {
                     Some(asc) => {
-                        painter.galley(
-                            egui::pos2(
-                                rect.left() + 12.0,
-                                rect.center().y - 6.0 - g.size().y / 2.0,
-                            ),
-                            g.clone(),
-                            color,
-                        );
                         paint_sort_arrow(
                             &painter,
-                            rect.left() + 12.0 + g.size().x / 2.0,
-                            rect.center().y + 10.0,
+                            rect.right() - 26.0,
+                            rect.center().y,
                             asc,
-                            color,
+                            p.accent,
                         );
                     }
                     None => {
-                        painter.galley(
-                            egui::pos2(rect.left() + 12.0, rect.center().y - g.size().y / 2.0),
-                            g,
-                            color,
+                        paint_sort_arrow(
+                            &painter,
+                            rect.right() - 26.0,
+                            rect.center().y,
+                            true,
+                            p.muted,
                         );
                     }
                 }
-                let resp = ui.allocate_rect(rect, Sense::click());
-                let _ = resp.clone().on_hover_text(ui_kit::t!(
-                    "Click to sort: asc → desc → clear; drag column edge to resize",
-                    "点击排序:升序 → 降序 → 取消;拖动列边缘调宽"
-                ));
-                if resp.clicked() {
-                    *sc = Some(c.clone());
+                // 筛选漏斗:该列已有条件或悬停时显示;点击把该列推进筛选栏
+                let has_cond = conds.iter().any(|(cc, _, _)| cc == c);
+                let funnel_rect = egui::Rect::from_center_size(
+                    egui::pos2(rect.right() - 12.0, rect.center().y),
+                    egui::vec2(16.0, 16.0),
+                );
+                let pointer_here = ui
+                    .input(|i| i.pointer.latest_pos())
+                    .map(|pt| rect.contains(pt))
+                    .unwrap_or(false);
+                if has_cond || pointer_here {
+                    icons::funnel_glyph(
+                        &ui.painter(),
+                        funnel_rect.center(),
+                        if has_cond { p.accent } else { p.text2 },
+                    );
                 }
+                let resp = ui.allocate_rect(rect, Sense::click());
+                // 漏斗命中判定优先于整列排序点击
+                if resp.clicked() {
+                    if let Some(pt) = resp.interact_pointer_pos() {
+                        if funnel_rect.contains(pt) {
+                            *col_where_out = Some((c.clone(), "contains".into(), String::new()));
+                        } else {
+                            *sc = Some(c.clone());
+                        }
+                    } else {
+                        *sc = Some(c.clone());
+                    }
+                }
+                let _ = resp.clone().on_hover_text(ui_kit::t!(
+                    "Click to sort: asc → desc → clear; funnel: filter this column; drag column edge to resize",
+                    "点击排序:升序 → 降序 → 取消;漏斗:按本列筛选;拖动列边缘调宽"
+                ));
                 // 列头右键:排序/按列筛选/列统计/冻结(与冻结覆盖层共用)
                 header_col_menu(
                     &resp,

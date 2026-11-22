@@ -215,6 +215,7 @@ pub enum BgEvent {
         tab_id: String,
         seq: u64,
         result: Result<shujing_core::ExecResult, String>,
+        sql: String,
     },
     CountLoaded {
         tab_id: String,
@@ -223,7 +224,7 @@ pub enum BgEvent {
     },
     PkLoaded {
         tab_id: String,
-        result: Result<Vec<String>, String>,
+        result: Result<(Vec<String>, Vec<(String, String)>), String>,
     },
     ChangesSaved {
         tab_id: String,
@@ -2603,11 +2604,18 @@ impl ShujingApp {
                     .get_table_structure(&conn2, &table2, db2)
                     .await
                     .map(|s| {
-                        s.columns
+                        let pk = s
+                            .columns
                             .iter()
                             .filter(|c| c.key == "PRI")
                             .map(|c| c.name.clone())
-                            .collect()
+                            .collect();
+                        let types = s
+                            .columns
+                            .iter()
+                            .map(|c| (c.name.clone(), c.data_type.clone()))
+                            .collect();
+                        (pk, types)
                     });
                 let _ = tx2.send(BgEvent::PkLoaded { tab_id: id2, result });
             });
@@ -2629,12 +2637,13 @@ impl ShujingApp {
                 sql.push_str(&format!(" ORDER BY {o}"));
             }
             sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
-            let result = service.run_sql(&conn_id, sql, Some(limit)).await;
+            let result = service.run_sql(&conn_id, sql.clone(), Some(limit)).await;
             let result = result.map(|mut rs| rs.pop().unwrap_or_default());
             let _ = tx.send(BgEvent::RowsLoaded {
                 tab_id: tab_id.clone(),
                 seq,
                 result,
+                sql,
             });
             let mut cnt = format!("SELECT COUNT(*) FROM {full}");
             if let Some(w) = &where_clause {
@@ -2694,6 +2703,7 @@ impl ShujingApp {
                         )
                             .into(),
                     ),
+                    sql: String::new(),
                 });
                 return;
             }
@@ -2718,6 +2728,7 @@ impl ShujingApp {
                 tab_id: tab_id.clone(),
                 seq,
                 result,
+                    sql: String::new(),
             });
             let total = service
                 .mongo_count(&conn_id, database.as_deref(), &table)
@@ -4838,6 +4849,7 @@ impl ShujingApp {
                     tab_id,
                     seq,
                     result,
+                    sql,
                 } => {
                     if let Some(t) = self.table_tab_mut(&tab_id) {
                         // 丢弃过期请求(快速翻页/排序时旧请求可能后到)
@@ -4845,6 +4857,7 @@ impl ShujingApp {
                             continue;
                         }
                         t.loading = false;
+                        t.load_sql = sql;
                         t.selected = None; // 数据翻页后旧选中会指错行
                         t.sel_range = None;
                         t.drag_sel = None;
@@ -4891,7 +4904,10 @@ impl ShujingApp {
                 BgEvent::PkLoaded { tab_id, result } => {
                     if let Some(t) = self.table_tab_mut(&tab_id) {
                         match result {
-                            Ok(cols) => t.pk_cols = cols,
+                            Ok((cols, types)) => {
+                                t.pk_cols = cols;
+                                t.col_types = types.into_iter().collect();
+                            }
                             Err(_) => {
                                 // 拉取失败不等于"没有主键":复位标记,下次刷新重试(否则标签永久只读)
                                 t.pk_loaded = false;

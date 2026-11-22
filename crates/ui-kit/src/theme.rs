@@ -33,7 +33,8 @@ pub const FS_AUX: f32 = 11.0;
 pub const TABBAR_H: f32 = 38.0;
 pub const TOOLBAR_H: f32 = 44.0;
 pub const HEADER_H: f32 = 36.0;
-pub const ROW_H: f32 = 36.0;
+/// 数据行高:对齐 DBX 的 29-30(此前 36 偏松,同屏行数少约 17%)
+pub const ROW_H: f32 = 30.0;
 pub const TREE_ROW_H: f32 = 34.0;
 pub const FOOTER_H: f32 = 34.0;
 
