@@ -551,16 +551,21 @@ pub fn draw_query_view(
                                 );
                             }
                         });
-                // 行号 gutter:绝对坐标绘制,随 ScrollArea 滚动偏移同步
+                // 行号 gutter:画在 editor_frame 左侧 44pt 的留白里,
+                // 不能画在 content_rect 内部——否则行号会压在 SQL 代码上。
                 let off_y = sa.state.offset.y;
                 let clip = content_rect;
-                let gp = ui.painter().with_clip_rect(clip);
-                let gx = content_rect.left() + 30.0;
+                let gutter_clip = egui::Rect::from_min_max(
+                    egui::pos2(content_rect.left() - 44.0, clip.top()),
+                    egui::pos2(content_rect.left(), clip.bottom()),
+                );
+                let gp = ui.painter().with_clip_rect(gutter_clip);
+                let line_x = content_rect.left() - 6.0;
                 let nlines = q.sql.lines().count().max(1);
                 gp.line_segment(
                     [
-                        egui::pos2(gx + 7.0, clip.top()),
-                        egui::pos2(gx + 7.0, clip.bottom()),
+                        egui::pos2(line_x, clip.top()),
+                        egui::pos2(line_x, clip.bottom()),
                     ],
                     egui::Stroke::new(1.0, p.border),
                 );
@@ -570,7 +575,7 @@ pub fn draw_query_view(
                         continue;
                     }
                     gp.text(
-                        egui::pos2(gx, y),
+                        egui::pos2(line_x - 6.0, y),
                         egui::Align2::RIGHT_CENTER,
                         (i + 1).to_string(),
                         theme::mono(11.0),
@@ -869,7 +874,6 @@ pub fn draw_query_view(
     actions
 }
 
-
 /// SQL 优化分析弹窗:静态规则 + EXPLAIN 计划诊断
 pub fn draw_optimize_modal(
     ctx: &egui::Context,
@@ -913,22 +917,28 @@ pub fn draw_optimize_modal(
             if state.running {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(12.0).color(p.muted));
-                    ui.label(RichText::new(ui_kit::t!("EXPLAIN running…", "EXPLAIN 执行中…")).size(12.0).color(p.muted));
+                    ui.label(
+                        RichText::new(ui_kit::t!("EXPLAIN running…", "EXPLAIN 执行中…"))
+                            .size(12.0)
+                            .color(p.muted),
+                    );
                 });
             } else if let Some(err) = &state.error {
-                ui.label(
-                    RichText::new(icons::clip(err, 120))
-                        .size(12.0)
-                        .color(p.red),
-                );
+                ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(p.red));
             } else if state.ran {
                 // 诊断
                 let mut findings = shujing_core::sql_advisor::static_check(&sql);
                 if let Some(plan) = &state.plan {
                     findings.extend(shujing_core::sql_advisor::plan_check(db_type, plan));
                 }
-                let danger = findings.iter().filter(|f| f.level == shujing_core::sql_advisor::Level::Danger).count();
-                let warn = findings.iter().filter(|f| f.level == shujing_core::sql_advisor::Level::Warn).count();
+                let danger = findings
+                    .iter()
+                    .filter(|f| f.level == shujing_core::sql_advisor::Level::Danger)
+                    .count();
+                let warn = findings
+                    .iter()
+                    .filter(|f| f.level == shujing_core::sql_advisor::Level::Warn)
+                    .count();
                 let (grade, gcol) = if danger > 0 {
                     (ui_kit::t!("Needs Optimization", "需优化"), p.red)
                 } else if warn > 0 {
@@ -937,15 +947,26 @@ pub fn draw_optimize_modal(
                     (ui_kit::t!("Good", "良好"), p.green)
                 };
                 ui.horizontal(|ui| {
-                    let g = ui.painter().layout_no_wrap(grade.to_string(), theme::bold(13.0), Color32::PLACEHOLDER);
+                    let g = ui.painter().layout_no_wrap(
+                        grade.to_string(),
+                        theme::bold(13.0),
+                        Color32::PLACEHOLDER,
+                    );
                     let gr = egui::Rect::from_center_size(
                         ui.cursor().left_center() + egui::vec2(g.size().x / 2.0 + 10.0, 0.0),
                         egui::vec2(g.size().x + 20.0, 22.0),
                     );
                     ui.allocate_rect(gr, Sense::hover());
-                    ui.painter().rect_filled(gr, egui::CornerRadius::same(6), theme::tint(gcol, 36));
+                    ui.painter().rect_filled(
+                        gr,
+                        egui::CornerRadius::same(6),
+                        theme::tint(gcol, 36),
+                    );
                     ui.painter().galley(
-                        egui::pos2(gr.center().x - g.size().x / 2.0, gr.center().y - g.size().y / 2.0),
+                        egui::pos2(
+                            gr.center().x - g.size().x / 2.0,
+                            gr.center().y - g.size().y / 2.0,
+                        ),
                         g,
                         gcol,
                     );
@@ -967,14 +988,18 @@ pub fn draw_optimize_modal(
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let dialect = match db_type {
                             shujing_core::DbType::Sqlite => "sqlite · EXPLAIN QUERY PLAN",
-                            shujing_core::DbType::Postgres => "postgres · EXPLAIN (ANALYZE, BUFFERS)",
+                            shujing_core::DbType::Postgres => {
+                                "postgres · EXPLAIN (ANALYZE, BUFFERS)"
+                            }
                             _ => "mysql · EXPLAIN",
                         };
                         ui.label(RichText::new(dialect).size(11.0).color(p.muted));
                     });
                 });
                 ui.add_space(2.0);
-                ui.label(theme::strong(ui_kit::t!("Recommendations", "诊断建议"), 12.0).color(p.text2));
+                ui.label(
+                    theme::strong(ui_kit::t!("Recommendations", "诊断建议"), 12.0).color(p.text2),
+                );
                 // 建议列表有界滚动(按屏幕高度给足,小窗仍有界):原来无界,
                 // 计划行多时弹窗被撑得超出窗口、底部被硬裁(渲染巡检实测)
                 let scr_h = ui.ctx().screen_rect().height();
@@ -984,38 +1009,57 @@ pub fn draw_optimize_modal(
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for f in &findings {
-                    let (badge, col) = match f.level {
-                        shujing_core::sql_advisor::Level::Danger => (ui_kit::t!("Danger", "危险"), p.red),
-                        shujing_core::sql_advisor::Level::Warn => (ui_kit::t!("Warning", "警告"), ORANGE),
-                        shujing_core::sql_advisor::Level::Info => (ui_kit::t!("Info", "提示"), p.accent),
-                    };
-                    ui.horizontal(|ui| {
-                        let b = ui.painter().layout_no_wrap(badge.to_string(), theme::bold(9.5), Color32::PLACEHOLDER);
-                        let br = egui::Rect::from_center_size(
-                            ui.cursor().left_center() + egui::vec2(b.size().x / 2.0 + 5.0, 0.0),
-                            egui::vec2(b.size().x + 10.0, 16.0),
-                        );
-                        ui.allocate_rect(br, Sense::hover());
-                        ui.painter().rect_filled(br, egui::CornerRadius::same(4), theme::tint(col, 40));
-                        ui.painter().galley(
-                            egui::pos2(br.center().x - b.size().x / 2.0, br.center().y - b.size().y / 2.0),
-                            b,
-                            col,
-                        );
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&f.title).size(12.0).color(p.text));
-                                ui.label(
-                                    RichText::new(&f.detail).size(11.0).color(p.muted),
+                            let (badge, col) = match f.level {
+                                shujing_core::sql_advisor::Level::Danger => {
+                                    (ui_kit::t!("Danger", "危险"), p.red)
+                                }
+                                shujing_core::sql_advisor::Level::Warn => {
+                                    (ui_kit::t!("Warning", "警告"), ORANGE)
+                                }
+                                shujing_core::sql_advisor::Level::Info => {
+                                    (ui_kit::t!("Info", "提示"), p.accent)
+                                }
+                            };
+                            ui.horizontal(|ui| {
+                                let b = ui.painter().layout_no_wrap(
+                                    badge.to_string(),
+                                    theme::bold(9.5),
+                                    Color32::PLACEHOLDER,
                                 );
+                                let br = egui::Rect::from_center_size(
+                                    ui.cursor().left_center()
+                                        + egui::vec2(b.size().x / 2.0 + 5.0, 0.0),
+                                    egui::vec2(b.size().x + 10.0, 16.0),
+                                );
+                                ui.allocate_rect(br, Sense::hover());
+                                ui.painter().rect_filled(
+                                    br,
+                                    egui::CornerRadius::same(4),
+                                    theme::tint(col, 40),
+                                );
+                                ui.painter().galley(
+                                    egui::pos2(
+                                        br.center().x - b.size().x / 2.0,
+                                        br.center().y - b.size().y / 2.0,
+                                    ),
+                                    b,
+                                    col,
+                                );
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new(&f.title).size(12.0).color(p.text));
+                                    ui.label(RichText::new(&f.detail).size(11.0).color(p.muted));
+                                });
                             });
-                        });
-                    }
+                        }
                     });
                 // 执行计划网格
                 if let Some(plan) = &state.plan {
                     if !plan.columns.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(theme::strong(ui_kit::t!("Execution Plan", "执行计划"), 12.0).color(p.text2));
+                        ui.label(
+                            theme::strong(ui_kit::t!("Execution Plan", "执行计划"), 12.0)
+                                .color(p.text2),
+                        );
                         egui::ScrollArea::vertical()
                             .id_salt("optimize-plan-grid")
                             .max_height((scr_h * 0.3).clamp(120.0, 240.0))
@@ -1044,7 +1088,11 @@ pub fn draw_optimize_modal(
                     } else {
                         ui_kit::t!("Run Analysis", "运行分析")
                     },
-                    if runnable { theme::BtnKind::Primary } else { theme::BtnKind::Secondary },
+                    if runnable {
+                        theme::BtnKind::Primary
+                    } else {
+                        theme::BtnKind::Secondary
+                    },
                 )
                 .clicked()
                     && runnable
@@ -1079,13 +1127,15 @@ pub fn draw_optimize_modal(
 /// iOS 橙(警告级)
 const ORANGE: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
 
-
 /// 选中行注释切换:已注释的去 `-- `,未注释的加
 fn toggle_comment(sql: &mut String, sel_a: usize, sel_b: usize) {
     let char_at = |s: &str, n: usize| s.char_indices().nth(n).map(|(i, _)| i).unwrap_or(s.len());
     let (byte_a, byte_b) = (char_at(sql, sel_a), char_at(sql, sel_b));
     let line_start = sql[..byte_a].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let line_end = sql[byte_b..].find('\n').map(|i| byte_b + i).unwrap_or(sql.len());
+    let line_end = sql[byte_b..]
+        .find('\n')
+        .map(|i| byte_b + i)
+        .unwrap_or(sql.len());
     let block = &sql[line_start..line_end];
     let all_commented = block
         .lines()
@@ -1122,13 +1172,60 @@ fn toggle_comment(sql: &mut String, sel_a: usize, sel_b: usize) {
 // ---------------------------------------------------------------- SQL 自动补全
 
 const SQL_KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET",
-    "INSERT INTO", "VALUES", "UPDATE", "SET", "DELETE FROM", "CREATE TABLE", "ALTER TABLE",
-    "DROP TABLE", "JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "ON", "AS", "AND", "OR",
-    "NOT", "NULL", "IS NULL", "IS NOT NULL", "IN", "LIKE", "BETWEEN", "EXISTS", "DISTINCT",
-    "UNION ALL", "CASE", "WHEN", "THEN", "ELSE", "END", "COUNT(*)", "SUM(", "AVG(", "MIN(",
-    "MAX(", "PRIMARY KEY", "FOREIGN KEY", "REFERENCES", "DEFAULT", "AUTO_INCREMENT",
-    "EXPLAIN", "SHOW TABLES", "SHOW DATABASES", "DESCRIBE", "WITH",
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "GROUP BY",
+    "ORDER BY",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "INSERT INTO",
+    "VALUES",
+    "UPDATE",
+    "SET",
+    "DELETE FROM",
+    "CREATE TABLE",
+    "ALTER TABLE",
+    "DROP TABLE",
+    "JOIN",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "INNER JOIN",
+    "ON",
+    "AS",
+    "AND",
+    "OR",
+    "NOT",
+    "NULL",
+    "IS NULL",
+    "IS NOT NULL",
+    "IN",
+    "LIKE",
+    "BETWEEN",
+    "EXISTS",
+    "DISTINCT",
+    "UNION ALL",
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "END",
+    "COUNT(*)",
+    "SUM(",
+    "AVG(",
+    "MIN(",
+    "MAX(",
+    "PRIMARY KEY",
+    "FOREIGN KEY",
+    "REFERENCES",
+    "DEFAULT",
+    "AUTO_INCREMENT",
+    "EXPLAIN",
+    "SHOW TABLES",
+    "SHOW DATABASES",
+    "DESCRIBE",
+    "WITH",
 ];
 
 /// 从光标向前扫标识符词(字母数字_$ 与点,支持 表. / 库.表. 链)
@@ -1206,8 +1303,7 @@ fn build_candidates(
 
 /// 插入起点:词内含点时只替换最后一个点之后的部分("users.id"→只换 "id" 段)
 fn insert_start(word: &str, word_start: usize) -> usize {
-    word
-        .rfind('.')
+    word.rfind('.')
         .map(|d| word_start + word[..d].chars().count() + 1)
         .unwrap_or(word_start)
 }
@@ -1228,9 +1324,10 @@ fn ac_insert(
     q.sql = format!("{head}{repl}{tail}");
     let new_pos = word_start + repl.chars().count();
     if let Some(mut st) = egui::TextEdit::load_state(ctx, te_id) {
-        st.cursor.set_char_range(Some(egui::text_selection::CCursorRange::one(
-            egui::text::CCursor::new(new_pos),
-        )));
+        st.cursor
+            .set_char_range(Some(egui::text_selection::CCursorRange::one(
+                egui::text::CCursor::new(new_pos),
+            )));
         egui::TextEdit::store_state(ctx, te_id, st);
     }
 }
@@ -1284,11 +1381,10 @@ fn draw_autocomplete(
     let open = (forced && !cands.is_empty())
         || (word.chars().count() >= 2 && cands.iter().any(insertable));
     if open {
-        let reset = q
-            .ac
-            .as_ref()
-            .map(|a| a.word != word || a.forced != forced)
-            .unwrap_or(true);
+        let reset =
+            q.ac.as_ref()
+                .map(|a| a.word != word || a.forced != forced)
+                .unwrap_or(true);
         match &mut q.ac {
             Some(a) => {
                 a.word = word.clone();
@@ -1317,7 +1413,12 @@ fn draw_autocomplete(
     // 表.列 缺缓存时请求懒加载
     if word.contains('.') && cands.iter().any(|c| c.1 == "…") {
         if let Some(dot) = word.rfind('.') {
-            let table = word[..dot].rsplit('.').next().unwrap_or("").trim().to_string();
+            let table = word[..dot]
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if !table.is_empty() {
                 actions.push(TabAction::AcLoadColumns {
                     tab_id: tab_id.to_string(),
@@ -1332,7 +1433,9 @@ fn draw_autocomplete(
         let n = cands.iter().filter(|c| insertable(c)).count();
         match key {
             egui::Key::ArrowDown => a.selected = (a.selected + 1) % n.max(1),
-            egui::Key::ArrowUp => a.selected = a.selected.saturating_sub(1).max(n.saturating_sub(1)),
+            egui::Key::ArrowUp => {
+                a.selected = a.selected.saturating_sub(1).max(n.saturating_sub(1))
+            }
             egui::Key::Escape => q.ac = None,
             egui::Key::Enter | egui::Key::Tab => {
                 // 插入当前选中(按"可插入序号"映射回候选);
@@ -1394,7 +1497,11 @@ fn draw_autocomplete(
                                     let selected = selectable && Some(vi) == Some(a.selected);
                                     let (rect, resp) = ui.allocate_exact_size(
                                         egui::vec2(ui.available_width(), 24.0),
-                                        if selectable { Sense::click() } else { Sense::hover() },
+                                        if selectable {
+                                            Sense::click()
+                                        } else {
+                                            Sense::hover()
+                                        },
                                     );
                                     if selected {
                                         ui.painter().rect_filled(

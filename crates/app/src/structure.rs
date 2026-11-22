@@ -72,8 +72,12 @@ pub fn draw_structure_view(
                         });
                     }
                     if !s.loading
-                        && theme::button(ui, ui_kit::t!("Design", "设计"), theme::BtnKind::Secondary)
-                            .clicked()
+                        && theme::button(
+                            ui,
+                            ui_kit::t!("Design", "设计"),
+                            theme::BtnKind::Secondary,
+                        )
+                        .clicked()
                     {
                         actions.push(TabAction::OpenDesigner {
                             conn_id: s.conn_id.clone(),
@@ -82,8 +86,12 @@ pub fn draw_structure_view(
                         });
                     }
                     if let Some(d) = &s.data {
-                        if theme::button(ui, ui_kit::t!("Copy DDL", "复制 DDL"), theme::BtnKind::Secondary)
-                            .clicked()
+                        if theme::button(
+                            ui,
+                            ui_kit::t!("Copy DDL", "复制 DDL"),
+                            theme::BtnKind::Secondary,
+                        )
+                        .clicked()
                         {
                             ui.ctx().copy_text(d.ddl.clone());
                         }
@@ -105,7 +113,9 @@ pub fn draw_structure_view(
                     let msg = if s.loading {
                         ui_kit::t!("Loading…", "加载中…")
                     } else {
-                        s.error.as_deref().unwrap_or(ui_kit::t!("No data", "无数据"))
+                        s.error
+                            .as_deref()
+                            .unwrap_or(ui_kit::t!("No data", "无数据"))
                     };
                     ui.label(RichText::new(msg).size(12.0).color(p.muted));
                 });
@@ -222,6 +232,8 @@ pub fn draw_structure_view(
                             .corner_radius(egui::CornerRadius::same(8))
                             .inner_margin(egui::Margin::same(12))
                             .show(ui, |ui| {
+                                // 卡片必须铺满内容区;否则长 DDL 会按最长行收缩成一条窄卡片
+                                ui.set_min_width(ui.available_width());
                                 let galley = crate::sql_highlight::highlight_cached(
                                     ui.ctx(),
                                     &data.ddl,
@@ -627,8 +639,12 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
                     }
                     if let Some(ddl) = &d.ddl {
                         let ddl2 = ddl.clone();
-                        if theme::button(ui, ui_kit::t!("Copy DDL", "复制 DDL"), theme::BtnKind::Secondary)
-                            .clicked()
+                        if theme::button(
+                            ui,
+                            ui_kit::t!("Copy DDL", "复制 DDL"),
+                            theme::BtnKind::Secondary,
+                        )
+                        .clicked()
                         {
                             ui.ctx().copy_text(ddl2);
                         }
@@ -650,7 +666,9 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
                     let msg = if d.loading {
                         ui_kit::t!("Loading DDL…", "读取 DDL…")
                     } else {
-                        d.error.as_deref().unwrap_or(ui_kit::t!("No data", "无数据"))
+                        d.error
+                            .as_deref()
+                            .unwrap_or(ui_kit::t!("No data", "无数据"))
                     };
                     ui.label(RichText::new(msg).size(12.0).color(p.muted));
                 });

@@ -144,8 +144,12 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
                         .color(p.muted),
                     );
                     ui.add_space(8.0);
-                    if theme::button(ui, ui_kit::t!("New Connection", "新建连接"), theme::BtnKind::Secondary)
-                        .clicked()
+                    if theme::button(
+                        ui,
+                        ui_kit::t!("New Connection", "新建连接"),
+                        theme::BtnKind::Secondary,
+                    )
+                    .clicked()
                     {
                         new_conn = true;
                     }
@@ -509,7 +513,9 @@ pub fn draw_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 }
             }
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
                     open.set(false);
                 }
             });
@@ -595,8 +601,8 @@ pub fn draw_new_table_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         "Column definitions (CREATE TABLE body, without the table name)",
                         "列定义(CREATE TABLE 内容,不含表名)"
                     ))
-                        .size(11.0)
-                        .color(p.muted),
+                    .size(11.0)
+                    .color(p.muted),
                 );
                 ui.add_space(4.0);
                 egui::Frame::new()
@@ -636,7 +642,9 @@ pub fn draw_new_table_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         create = true;
                     }
                     ui.add_space(6.0);
-                    if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
+                    if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary)
+                        .clicked()
+                    {
                         close = true;
                     }
                 });
@@ -953,7 +961,9 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     let result = if all_dbs {
                         service.search_all_databases(&cid, &kw2, 50).await
                     } else {
-                        service.search_all_tables(&cid, db.as_deref(), &kw2, 50).await
+                        service
+                            .search_all_tables(&cid, db.as_deref(), &kw2, 50)
+                            .await
                     };
                     let _ = tx.send(BgEvent::SearchDone {
                         conn_id: cid,
@@ -1044,11 +1054,14 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 } else {
                     theme::BtnKind::Primary
                 };
-                if theme::button(ui, ui_kit::t!("Confirm", "确认"), kind).clicked() && !need_input {
+                if theme::button(ui, ui_kit::t!("Confirm", "确认"), kind).clicked() && !need_input
+                {
                     proceed = true;
                 }
                 ui.add_space(6.0);
-                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
                     cancel = true;
                 }
             });
@@ -1094,9 +1107,7 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 if !tid.is_empty() && !ris.is_empty() {
                     crate::table_view::run_delete_rows(app, tid, gen, &ris);
                 }
-            } else if let Some(rest) = action
-                .as_deref()
-                .and_then(|a| a.strip_prefix("mongo-del:"))
+            } else if let Some(rest) = action.as_deref().and_then(|a| a.strip_prefix("mongo-del:"))
             {
                 app.confirm = None;
                 let mut it = rest.splitn(2, '|');
@@ -1175,7 +1186,10 @@ pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(360.0);
-            theme::modal_title(ui, &format!("{} · {col}", ui_kit::t!("Column Stats", "列统计")));
+            theme::modal_title(
+                ui,
+                &format!("{} · {col}", ui_kit::t!("Column Stats", "列统计")),
+            );
             ui.spacing_mut().item_spacing.y = 6.0;
             ui.label(
                 RichText::new(ui_kit::t!("Based on current page data", "基于当前页数据"))
@@ -1193,7 +1207,8 @@ pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 theme::hairline_bottom(ui);
             }
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Primary).clicked() {
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Primary).clicked()
+                {
                     close = true;
                 }
             });
@@ -1220,14 +1235,20 @@ pub fn draw_mongo_doc_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(640.0);
-            let Some(st) = app.mongo_doc.as_mut() else { return };
+            let Some(st) = app.mongo_doc.as_mut() else {
+                return;
+            };
             let title = match &st.doc_id {
                 Some(id) => format!(
                     "{} · {}",
                     ui_kit::t!("Edit Document", "编辑文档"),
                     icons::clip(id, 30)
                 ),
-                None => format!("{} · {}", ui_kit::t!("Insert Document", "插入文档"), st.collection),
+                None => format!(
+                    "{} · {}",
+                    ui_kit::t!("Insert Document", "插入文档"),
+                    st.collection
+                ),
             };
             theme::modal_title(ui, &title);
             ui.label(
@@ -1235,8 +1256,8 @@ pub fn draw_mongo_doc_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "BSON document as JSON; write ObjectId as {\"$oid\": \"hex\"}",
                     "BSON 文档 JSON;ObjectId 写作 {\"$oid\": \"hex\"}"
                 ))
-                    .size(10.5)
-                    .color(p.muted),
+                .size(10.5)
+                .color(p.muted),
             );
             ui.add_space(4.0);
             theme::form_field_multiline(ui, "", "mongo-doc-json", &mut st.json, 620.0, 14);
@@ -1258,7 +1279,9 @@ pub fn draw_mongo_doc_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 {
                     save = true;
                 }
-                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
                     close = true;
                 }
             });
@@ -1518,7 +1541,8 @@ pub fn draw_save_result_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 .color(p.muted),
             );
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Create", "创建"), theme::BtnKind::Primary).clicked()
+                if theme::button(ui, ui_kit::t!("Create", "创建"), theme::BtnKind::Primary)
+                    .clicked()
                 {
                     commit = true;
                 }
@@ -1558,7 +1582,11 @@ pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             if st.loading {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(14.0).color(p.muted));
-                    ui.label(RichText::new(ui_kit::t!("Loading…", "加载中…")).size(11.5).color(p.muted));
+                    ui.label(
+                        RichText::new(ui_kit::t!("Loading…", "加载中…"))
+                            .size(11.5)
+                            .color(p.muted),
+                    );
                 });
             }
             if let Some(err) = &st.error {
@@ -1623,9 +1651,12 @@ pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             ui.add_space(8.0);
                             ui.separator();
                             ui.label(
-                                RichText::new(ui_kit::t!("Slowlog (latest 20)", "慢日志(最近 20 条)"))
-                                    .font(theme::bold(12.0))
-                                    .color(p.text2),
+                                RichText::new(ui_kit::t!(
+                                    "Slowlog (latest 20)",
+                                    "慢日志(最近 20 条)"
+                                ))
+                                .font(theme::bold(12.0))
+                                .color(p.text2),
                             );
                             if st.slowlog.is_empty() {
                                 ui.label(
@@ -1638,18 +1669,40 @@ pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .num_columns(3)
                                 .spacing([12.0, 3.0])
                                 .show(ui, |ui| {
-                                    ui.label(RichText::new(ui_kit::t!("Time", "耗时")).size(10.5).color(p.muted));
-                                    ui.label(RichText::new(ui_kit::t!("Command", "命令")).size(10.5).color(p.muted));
-                                    ui.label(RichText::new(ui_kit::t!("Args", "参数")).size(10.5).color(p.muted));
+                                    ui.label(
+                                        RichText::new(ui_kit::t!("Time", "耗时"))
+                                            .size(10.5)
+                                            .color(p.muted),
+                                    );
+                                    ui.label(
+                                        RichText::new(ui_kit::t!("Command", "命令"))
+                                            .size(10.5)
+                                            .color(p.muted),
+                                    );
+                                    ui.label(
+                                        RichText::new(ui_kit::t!("Args", "参数"))
+                                            .size(10.5)
+                                            .color(p.muted),
+                                    );
                                     ui.end_row();
                                     for e in &st.slowlog {
                                         ui.label(
                                             RichText::new(format!("{} ms", e.duration_us / 1000))
                                                 .font(theme::mono(11.0))
-                                                .color(if e.duration_us > 100_000 { DIFF_ORANGE } else { p.text }),
+                                                .color(if e.duration_us > 100_000 {
+                                                    DIFF_ORANGE
+                                                } else {
+                                                    p.text
+                                                }),
                                         );
-                                        ui.label(RichText::new(&e.command).size(11.5).color(p.text));
-                                        ui.label(RichText::new(icons::clip(&e.args, 40)).font(theme::mono(11.0)).color(p.text2));
+                                        ui.label(
+                                            RichText::new(&e.command).size(11.5).color(p.text),
+                                        );
+                                        ui.label(
+                                            RichText::new(icons::clip(&e.args, 40))
+                                                .font(theme::mono(11.0))
+                                                .color(p.text2),
+                                        );
                                         ui.end_row();
                                     }
                                 });
@@ -1657,7 +1710,9 @@ pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     });
             }
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
                     close = true;
                 }
             });
@@ -1863,8 +1918,17 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(520.0);
-            let Some(st) = app.redis_batch_del.as_mut() else { return };
-            theme::modal_title(ui, &format!("{} · db{}", ui_kit::t!("Batch Delete Keys", "批量删除 key"), st.db));
+            let Some(st) = app.redis_batch_del.as_mut() else {
+                return;
+            };
+            theme::modal_title(
+                ui,
+                &format!(
+                    "{} · db{}",
+                    ui_kit::t!("Batch Delete Keys", "批量删除 key"),
+                    st.db
+                ),
+            );
             let pattern_line = if ui_kit::i18n::is_english() {
                 format!("Pattern: {} (full SCAN cursor, limit 10,000)", st.pattern)
             } else {
@@ -1875,11 +1939,17 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             if st.deleting {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(12.0).color(p.muted));
-                    ui.label(RichText::new(ui_kit::t!("Deleting…", "删除中…")).size(12.0).color(p.muted));
+                    ui.label(
+                        RichText::new(ui_kit::t!("Deleting…", "删除中…"))
+                            .size(12.0)
+                            .color(p.muted),
+                    );
                 });
             } else if let Some(n) = st.counted {
                 let confirm_line = if ui_kit::i18n::is_english() {
-                    format!("Will delete {n} keys, this cannot be undone! Type the pattern to confirm:")
+                    format!(
+                        "Will delete {n} keys, this cannot be undone! Type the pattern to confirm:"
+                    )
                 } else {
                     format!("将删除 {n} 个 key,不可恢复!输入 pattern 确认:")
                 };
@@ -1891,24 +1961,42 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 );
                 let _ = resp;
                 if v == n.to_string() {
-                    if theme::button(ui, ui_kit::t!("Confirm Delete", "确认删除"), theme::BtnKind::Danger).clicked() {
+                    if theme::button(
+                        ui,
+                        ui_kit::t!("Confirm Delete", "确认删除"),
+                        theme::BtnKind::Danger,
+                    )
+                    .clicked()
+                    {
                         del = true;
                     }
                 } else {
                     ui.label(
-                        RichText::new(ui_kit::t!("Type the matching count to enable delete", "输入匹配数量后才能删除"))
-                            .size(10.5)
-                            .color(p.muted),
+                        RichText::new(ui_kit::t!(
+                            "Type the matching count to enable delete",
+                            "输入匹配数量后才能删除"
+                        ))
+                        .size(10.5)
+                        .color(p.muted),
                     );
                 }
             } else {
-                if theme::button(ui, ui_kit::t!("Count First", "先计数"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(
+                    ui,
+                    ui_kit::t!("Count First", "先计数"),
+                    theme::BtnKind::Secondary,
+                )
+                .clicked()
+                {
                     count = true;
                 }
                 ui.label(
-                    RichText::new(ui_kit::t!("See how many keys would be deleted before deciding", "先看会删掉多少再决定"))
-                        .size(10.5)
-                        .color(p.muted),
+                    RichText::new(ui_kit::t!(
+                        "See how many keys would be deleted before deciding",
+                        "先看会删掉多少再决定"
+                    ))
+                    .size(10.5)
+                    .color(p.muted),
                 );
             }
             if let Some(err) = &st.error {
@@ -1916,7 +2004,9 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
             }
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
                     close = true;
                 }
             });
@@ -1939,7 +2029,11 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     let p = theme::c();
     let mut close = false;
     let mut run = false;
-    let mut reveal = st.result.as_ref().and_then(|r| r.as_ref().ok()).map(|(_, _, path, _)| path.clone());
+    let mut reveal = st
+        .result
+        .as_ref()
+        .and_then(|r| r.as_ref().ok())
+        .map(|(_, _, path, _)| path.clone());
     let reveal = reveal.clone();
     let modal = egui::Modal::new(egui::Id::new("backup-modal"))
         .frame(theme::modal_frame())
@@ -1948,113 +2042,142 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.set_width(460.0);
             theme::modal_title(ui, ui_kit::t!("Backup Database", "备份数据库"));
             // 表单体可滚动:小屏视口下超高内容不再被裁(footer 固定可见)
+            theme::modal_scroll_style(ui);
             egui::ScrollArea::vertical()
                 .id_salt("backup-modal-scroll")
-                .auto_shrink([false, false])
-                .max_height(ui.ctx().screen_rect().height() - 150.0)
+                .auto_shrink([false, true])
+                .max_height((ui.ctx().screen_rect().height() - 210.0).max(320.0))
                 .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 8.0;
-            ui.label(
-                RichText::new(ui_kit::t!(
-                    "Writes a single SQL file (DDL + data INSERTs) to ~/Documents/数镜备份",
-                    "生成单文件 SQL 备份(DDL + 数据 INSERT),保存到 ~/Documents/数镜备份"
-                ))
-                    .size(10.5)
-                    .color(p.muted),
-            );
-            theme::form_field(ui, ui_kit::t!("Connection", "连接"), "backup-conn", &mut st.conn_name.clone(), 430.0, false);
-            let mut db = st.db.clone();
-            theme::form_field(ui, ui_kit::t!("Database", "库"), "backup-db", &mut db, 430.0, false);
-            if db != st.db && !st.running {
-                if let Some(b) = app.backup.as_mut() {
-                    b.db = db;
-                }
-            }
-
-            if st.running {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(14.0).color(p.accent));
+                    ui.spacing_mut().item_spacing.y = 8.0;
                     ui.label(
-                        RichText::new(format!(
-                            "{} {}/{} · {}",
-                            ui_kit::t!("Backing up", "备份中"),
-                            st.done,
-                            st.total,
-                            st.cur_table
+                        RichText::new(ui_kit::t!(
+                            "Writes a single SQL file (DDL + data INSERTs) to ~/Documents/数镜备份",
+                            "生成单文件 SQL 备份(DDL + 数据 INSERT),保存到 ~/Documents/数镜备份"
                         ))
-                            .size(11.5)
-                            .color(p.text2),
+                        .size(10.5)
+                        .color(p.muted),
                     );
-                });
-            } else if let Some(res) = &st.result {
-                ui.add_space(4.0);
-                match res {
-                    Ok((tables, rows, path, bytes)) => {
-                        ui.label(
-                            RichText::new(format!(
-                                "✓ {} {} · {} {} · {}",
-                                tables,
-                                ui_kit::t!("tables", "张表"),
-                                rows,
-                                ui_kit::t!("rows", "行"),
-                                crate::app::fmt_bytes(*bytes)
-                            ))
-                                .size(12.0)
-                                .color(p.green),
-                        );
-                        ui.label(
-                            RichText::new(icons::clip(path, 60)).size(10.5).color(p.text2),
-                        );
-                    }
-                    Err(e) => {
-                        ui.label(RichText::new(icons::clip(e, 110)).size(11.5).color(p.red));
-                    }
-                }
-            }
-
-            // 最近备份(打开弹窗时扫描,最多 20 条)
-            if !st.recent.is_empty() {
-                ui.add_space(6.0);
-                ui.label(RichText::new(ui_kit::t!("Recent Backups", "最近备份")).size(11.0).color(p.muted));
-                egui::ScrollArea::vertical()
-                    .id_salt("backup-recent")
-                    .max_height(120.0)
-                    .show(ui, |ui| {
-                        for f in &st.recent {
-                            let (rect, resp) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), 18.0),
-                                egui::Sense::click(),
-                            );
-                            ui.painter().rect_filled(
-                                rect,
-                                egui::CornerRadius::same(4),
-                                if resp.hovered() { p.hover } else { egui::Color32::TRANSPARENT },
-                            );
-                            ui.painter().text(
-                                egui::pos2(rect.left() + 8.0, rect.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                f.name.clone(),
-                                egui::FontId::monospace(10.5),
-                                p.text2,
-                            );
-                            ui.painter().text(
-                                egui::pos2(rect.right() - 8.0, rect.center().y),
-                                egui::Align2::RIGHT_CENTER,
-                                crate::app::fmt_bytes(f.bytes),
-                                egui::FontId::proportional(10.0),
-                                p.muted,
-                            );
-                            if resp.clicked() {
-                                #[cfg(target_os = "macos")]
-                                let _ = std::process::Command::new("open").arg("-R").arg(&f.path).spawn();
-                            }
-                            resp.on_hover_text(&f.path);
+                    theme::form_field(
+                        ui,
+                        ui_kit::t!("Connection", "连接"),
+                        "backup-conn",
+                        &mut st.conn_name.clone(),
+                        430.0,
+                        false,
+                    );
+                    let mut db = st.db.clone();
+                    theme::form_field(
+                        ui,
+                        ui_kit::t!("Database", "库"),
+                        "backup-db",
+                        &mut db,
+                        430.0,
+                        false,
+                    );
+                    if db != st.db && !st.running {
+                        if let Some(b) = app.backup.as_mut() {
+                            b.db = db;
                         }
-                    });
-            }
+                    }
 
-            });
+                    if st.running {
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new().size(14.0).color(p.accent));
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} {}/{} · {}",
+                                    ui_kit::t!("Backing up", "备份中"),
+                                    st.done,
+                                    st.total,
+                                    st.cur_table
+                                ))
+                                .size(11.5)
+                                .color(p.text2),
+                            );
+                        });
+                    } else if let Some(res) = &st.result {
+                        ui.add_space(4.0);
+                        match res {
+                            Ok((tables, rows, path, bytes)) => {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "✓ {} {} · {} {} · {}",
+                                        tables,
+                                        ui_kit::t!("tables", "张表"),
+                                        rows,
+                                        ui_kit::t!("rows", "行"),
+                                        crate::app::fmt_bytes(*bytes)
+                                    ))
+                                    .size(12.0)
+                                    .color(p.green),
+                                );
+                                ui.label(
+                                    RichText::new(icons::clip(path, 60))
+                                        .size(10.5)
+                                        .color(p.text2),
+                                );
+                            }
+                            Err(e) => {
+                                ui.label(
+                                    RichText::new(icons::clip(e, 110)).size(11.5).color(p.red),
+                                );
+                            }
+                        }
+                    }
+
+                    // 最近备份(打开弹窗时扫描,最多 20 条)
+                    if !st.recent.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(ui_kit::t!("Recent Backups", "最近备份"))
+                                .size(11.0)
+                                .color(p.muted),
+                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("backup-recent")
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                for f in &st.recent {
+                                    let (rect, resp) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), 18.0),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        egui::CornerRadius::same(4),
+                                        if resp.hovered() {
+                                            p.hover
+                                        } else {
+                                            egui::Color32::TRANSPARENT
+                                        },
+                                    );
+                                    ui.painter().text(
+                                        egui::pos2(rect.left() + 8.0, rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        f.name.clone(),
+                                        egui::FontId::monospace(10.5),
+                                        p.text2,
+                                    );
+                                    ui.painter().text(
+                                        egui::pos2(rect.right() - 8.0, rect.center().y),
+                                        egui::Align2::RIGHT_CENTER,
+                                        crate::app::fmt_bytes(f.bytes),
+                                        egui::FontId::proportional(10.0),
+                                        p.muted,
+                                    );
+                                    if resp.clicked() {
+                                        #[cfg(target_os = "macos")]
+                                        let _ = std::process::Command::new("open")
+                                            .arg("-R")
+                                            .arg(&f.path)
+                                            .spawn();
+                                    }
+                                    resp.on_hover_text(&f.path);
+                                }
+                            });
+                    }
+                });
 
             theme::modal_footer(ui, |ui| {
                 if theme::button(
@@ -2073,16 +2196,25 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     run = true;
                 }
                 if let Some(path) = &reveal {
-                    if theme::button(ui, ui_kit::t!("Reveal in Finder", "打开文件夹"), theme::BtnKind::Secondary)
-                        .clicked()
+                    if theme::button(
+                        ui,
+                        ui_kit::t!("Reveal in Finder", "打开文件夹"),
+                        theme::BtnKind::Secondary,
+                    )
+                    .clicked()
                     {
                         #[cfg(target_os = "macos")]
-                        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+                        let _ = std::process::Command::new("open")
+                            .arg("-R")
+                            .arg(path)
+                            .spawn();
                         #[cfg(not(target_os = "macos"))]
                         let _ = path;
                     }
                 }
-                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
                     close = true;
                 }
             });
@@ -2100,7 +2232,9 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
 
 /// 插件处理弹窗:行集 JSON → WASM 插件(fuel 沙箱)→ 输出预览/保存
 pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
-    let Some(pr) = app.plugin_run.clone() else { return };
+    let Some(pr) = app.plugin_run.clone() else {
+        return;
+    };
     let p = theme::c();
     let mut close = false;
     let mut run = false;
@@ -2226,7 +2360,9 @@ pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
 
 /// 查询历史弹窗:过滤 + 列表(新在前),点击回填来源标签编辑器
 pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
-    let Some(h) = app.query_history.clone() else { return };
+    let Some(h) = app.query_history.clone() else {
+        return;
+    };
     let p = theme::c();
     let mut close = false;
     let mut pick: Option<String> = None;
@@ -2238,10 +2374,11 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.set_width(720.0);
             theme::modal_title(ui, ui_kit::t!("Query History", "查询历史"));
             // 表单体可滚动:小屏视口下超高内容不再被裁(footer 固定可见)
+            theme::modal_scroll_style(ui);
             egui::ScrollArea::vertical()
                 .id_salt("history-modal-scroll")
-                .auto_shrink([false, false])
-                .max_height(ui.ctx().screen_rect().height() - 150.0)
+                .auto_shrink([false, true])
+                .max_height((ui.ctx().screen_rect().height() - 210.0).max(320.0))
                 .show(ui, |ui| {
             ui.label(
                 RichText::new(ui_kit::t!(
@@ -2363,7 +2500,11 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if clear {
         let hp = app.config_dir.join("query_history.jsonl");
         let _ = std::fs::remove_file(&hp);
-        let tid = app.query_history.as_ref().map(|h| h.tab_id.clone()).unwrap_or_default();
+        let tid = app
+            .query_history
+            .as_ref()
+            .map(|h| h.tab_id.clone())
+            .unwrap_or_default();
         app.open_query_history(&tid);
     }
     if close {
@@ -2906,7 +3047,9 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(640.0);
-            let Some(st) = app.ai_assist.as_mut() else { return };
+            let Some(st) = app.ai_assist.as_mut() else {
+                return;
+            };
             theme::modal_title(ui, ui_kit::t!("AI SQL Assistant", "AI SQL 助手"));
             // 模式分段(运行中锁定)
             ui.horizontal(|ui| {
@@ -2937,9 +3080,7 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .iter()
                                 .find(|t| t.id == st.tab_id)
                                 .and_then(|t| match &t.kind {
-                                    crate::app::TabKind::Query(q) => {
-                                        Some(q.sql.trim().to_string())
-                                    }
+                                    crate::app::TabKind::Query(q) => Some(q.sql.trim().to_string()),
                                     _ => None,
                                 })
                                 .unwrap_or_default();
@@ -2949,13 +3090,18 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if app.ai_config.api_key.is_empty() {
                         ui.label(
-                            RichText::new(ui_kit::t!("API Key not configured (Settings → AI)", "未配置 API Key(设置 → AI)"))
-                                .size(10.5)
-                                .color(DIFF_ORANGE),
+                            RichText::new(ui_kit::t!(
+                                "API Key not configured (Settings → AI)",
+                                "未配置 API Key(设置 → AI)"
+                            ))
+                            .size(10.5)
+                            .color(DIFF_ORANGE),
                         );
                     } else {
                         ui.label(
-                            RichText::new(&app.ai_config.model).size(10.5).color(p.muted),
+                            RichText::new(&app.ai_config.model)
+                                .size(10.5)
+                                .color(p.muted),
                         );
                     }
                 });
@@ -2966,8 +3112,14 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "Describe your need, e.g. users with more than 3 orders in the last 7 days",
                     "描述需求,如:查最近 7 天下单超过 3 次的用户"
                 ),
-                1 => ui_kit::t!("SQL to explain (loaded from the editor)", "要解释的 SQL(已带出编辑器内容)"),
-                2 => ui_kit::t!("SQL to optimize (loaded from the editor)", "要优化的 SQL(已带出编辑器内容)"),
+                1 => ui_kit::t!(
+                    "SQL to explain (loaded from the editor)",
+                    "要解释的 SQL(已带出编辑器内容)"
+                ),
+                2 => ui_kit::t!(
+                    "SQL to optimize (loaded from the editor)",
+                    "要优化的 SQL(已带出编辑器内容)"
+                ),
                 _ => ui_kit::t!(
                     "SQL + error message (loaded from the editor's last error)",
                     "SQL + 报错信息(已带出编辑器内容与最近报错)"
@@ -2991,9 +3143,7 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     run = true;
                 }
                 if let Some(err) = &st.error {
-                    ui.label(
-                        RichText::new(icons::clip(err, 80)).size(11.0).color(p.red),
-                    );
+                    ui.label(RichText::new(icons::clip(err, 80)).size(11.0).color(p.red));
                 }
             });
             // 历史结果(最新在前)
@@ -3040,19 +3190,27 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     });
                 if title == "生成 SQL" {
                     ui.horizontal(|ui| {
-                        if theme::button(ui, ui_kit::t!("Insert to Editor", "插入编辑器"), theme::BtnKind::Secondary).clicked() {
-                            insert_sql =
-                                Some(shujing_core::ai::extract_sql(content));
+                        if theme::button(
+                            ui,
+                            ui_kit::t!("Insert to Editor", "插入编辑器"),
+                            theme::BtnKind::Secondary,
+                        )
+                        .clicked()
+                        {
+                            insert_sql = Some(shujing_core::ai::extract_sql(content));
                         }
-                        if theme::button(ui, ui_kit::t!("Copy", "复制"), theme::BtnKind::Secondary).clicked() {
-                            ui.ctx()
-                                .copy_text(shujing_core::ai::extract_sql(content));
+                        if theme::button(ui, ui_kit::t!("Copy", "复制"), theme::BtnKind::Secondary)
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(shujing_core::ai::extract_sql(content));
                         }
                     });
                 }
             }
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
                     close = true;
                 }
             });
@@ -3286,7 +3444,14 @@ pub fn draw_parquet_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
             ui.set_width(780.0);
-            theme::modal_title(ui, &format!("{} · {}", ui_kit::t!("Parquet Preview", "Parquet 预览"), file_name));
+            theme::modal_title(
+                ui,
+                &format!(
+                    "{} · {}",
+                    ui_kit::t!("Parquet Preview", "Parquet 预览"),
+                    file_name
+                ),
+            );
             let stats_line = if ui_kit::i18n::is_english() {
                 format!(
                     "{} rows × {} columns · {} row groups · {} · previewing first {} rows",
@@ -3339,7 +3504,9 @@ pub fn draw_parquet_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 ui.label(RichText::new(total_line).size(11.0).color(p.muted));
             }
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
                     close = true;
                 }
             });
@@ -3361,10 +3528,11 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.set_width(360.0);
             theme::modal_title(ui, ui_kit::t!("Appearance", "外观设置"));
             // 表单体可滚动:小屏视口下超高内容不再被裁(footer 固定可见)
+            theme::modal_scroll_style(ui);
             egui::ScrollArea::vertical()
                 .id_salt("settings-modal-scroll")
-                .auto_shrink([false, false])
-                .max_height(ui.ctx().screen_rect().height() - 150.0)
+                .auto_shrink([false, true])
+                .max_height((ui.ctx().screen_rect().height() - 210.0).max(320.0))
                 .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 10.0;
             ui.label(RichText::new(ui_kit::t!("Accent Color", "强调色")).size(11.0).color(p.muted));
@@ -3644,9 +3812,18 @@ pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             // 搜索 + 全选/全不选
             ui.horizontal(|ui| {
                 let st = app.db_filter.as_mut().unwrap();
-                theme::search_box(ui, "db-filter-search", &mut st.search, ui_kit::t!("Search databases", "搜索库"), 200.0);
+                theme::search_box(
+                    ui,
+                    "db-filter-search",
+                    &mut st.search,
+                    ui_kit::t!("Search databases", "搜索库"),
+                    200.0,
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button(ui_kit::t!("Deselect All", "全不选")).clicked() {
+                    if ui
+                        .small_button(ui_kit::t!("Deselect All", "全不选"))
+                        .clicked()
+                    {
                         let kw = st.search.trim().to_lowercase();
                         if kw.is_empty() {
                             st.selected.clear();
@@ -3720,18 +3897,28 @@ pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             }
                             if !any {
                                 ui.centered_and_justified(|ui| {
-                                    ui.label(RichText::new(ui_kit::t!("No matching databases", "无匹配库")).size(12.0).color(p.muted));
+                                    ui.label(
+                                        RichText::new(ui_kit::t!(
+                                            "No matching databases",
+                                            "无匹配库"
+                                        ))
+                                        .size(12.0)
+                                        .color(p.muted),
+                                    );
                                 });
                             }
                         });
                 });
             theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Done", "完成"), theme::BtnKind::Primary).clicked() {
+                if theme::button(ui, ui_kit::t!("Done", "完成"), theme::BtnKind::Primary).clicked()
+                {
                     let st = app.db_filter.as_ref().unwrap();
                     apply = Some(st.selected.clone());
                 }
                 ui.add_space(6.0);
-                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
+                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
                     close = true;
                 }
             });
