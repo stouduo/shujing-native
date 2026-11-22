@@ -353,30 +353,15 @@ impl ShujingApp {
         // 同一行里不同字号的文字统一按基线排,而不是各自垂直居中
         let baseline = rect.center().y + 5.0;
         let name_font = theme::bold(theme::FS_CONN);
-        // 版本串先测宽(限 96pt 截断):PG/Redis 等的完整 version 可达 ~170pt,
-        // 此前固定预留 110pt 被长版本串穿透——名字与版本灰字直接重叠
-        let ver_galley_opt = if online && c.db_type != shujing_core::DbType::Sqlite {
-            let ver = self
-                .trees
-                .get(&c.id)
-                .map(|t| t.version.clone())
-                .unwrap_or_default();
-            (!ver.is_empty()).then(|| {
-                let g = icons::text_galley(&painter, ver, theme::mono(10.5), Color32::PLACEHOLDER, 96.0);
-                (g, 8.0)
-            })
-        } else {
-            None
-        };
-        let right_reserve = 24.0
-            + ver_galley_opt.as_ref().map(|(g, _)| g.size().x + 8.0).unwrap_or(0.0)
-            + if online { 26.0 } else { 0.0 }; // 漏斗位(已连且多库时;保守常备)
+        // 行内只留 状态点+名字+权限徽标(Navicat/TablePlus 式克制):
+        // 版本号不再行内展示(PG 完整串 170pt 曾与名字叠印),进 hover tooltip;
+        // 名字预留只给徽标链+悬停漏斗位
         let name_galley = icons::text_galley(
             &painter,
             c.name.clone(),
             name_font,
             Color32::PLACEHOLDER,
-            (rect.width() - right_reserve).max(60.0),
+            (rect.width() - 64.0).max(60.0),
         );
         painter.galley(
             egui::pos2(
@@ -429,16 +414,27 @@ impl ShujingApp {
             egui::vec2(name_galley.size().x + 12.0, rect.height()),
         );
         let name_resp = ui.allocate_rect(name_rect, Sense::click());
+        // 版本等元信息并入悬停提示(行内不再展示,保持列表克制)
+        let ver_line = self
+            .trees
+            .get(&c.id)
+            .map(|t| t.version.clone())
+            .filter(|v| !v.is_empty() && online);
         let tip = if online {
-            ui_kit::t!(
+            let base = ui_kit::t!(
                 "Connected · right-click: disconnect/edit/delete",
                 "已连接 · 右键:断开/编辑/删除"
-            )
+            );
+            match &ver_line {
+                Some(v) => format!("{v}\n{base}"),
+                None => base.to_string(),
+            }
         } else {
             ui_kit::t!(
                 "Offline · click to connect, right-click for more actions",
                 "离线 · 点击连接,右键更多操作"
             )
+            .to_string()
         };
         name_resp.clone().on_hover_text(tip);
         // 只有离线时点击才连接;在线时点击不做任何事(防止误触断开)
@@ -598,7 +594,8 @@ impl ShujingApp {
             }
             _ => {}
         }
-        // 库筛选快捷入口:漏斗常驻行右缘(在线时),点击直达
+        // 库筛选快捷入口:漏斗只在悬停或筛选激活时出现(常驻=行内又一处噪音;
+        // 筛选激活用 accent 色常驻提示,平时让位给干净的名字行)
         let filter_db_avail = online
             && self
                 .trees
@@ -617,14 +614,10 @@ impl ShujingApp {
                     .map(|v| v.len() < t.databases.len())
                     .unwrap_or(false)
             }) == Some(true);
-            let fcol = if has_filter {
-                p.accent
-            } else if fres.hovered() {
-                p.text
-            } else {
-                p.muted
-            };
-            icons::funnel_glyph(ui.painter(), frec.center(), fcol);
+            if has_filter || fres.hovered() {
+                let fcol = if has_filter { p.accent } else { p.text };
+                icons::funnel_glyph(ui.painter(), frec.center(), fcol);
+            }
             fres.clone().on_hover_text(if has_filter {
                 ui_kit::t!("Databases filtered · click to adjust", "已筛选库 · 点击调整")
             } else {
@@ -633,18 +626,6 @@ impl ShujingApp {
             if fres.clicked() {
                 self.open_db_filter(&c.id);
             }
-        }
-        // 版本号:用预计算的截断 galley(限宽 96pt),不再用 layout_no_wrap 全串
-        if let Some((vg, right_edge)) = ver_galley_opt {
-            let right_edge = if filter_db_avail { 28.0 } else { right_edge };
-            painter.galley(
-                egui::pos2(
-                    rect.right() - vg.size().x - right_edge,
-                    baseline - icons::baseline_top(&vg, 10.5),
-                ),
-                vg,
-                p.muted,
-            );
         }
         let cid = c.id.clone();
         self.draw_tree(ui, &cid, online);
