@@ -123,94 +123,150 @@ pub fn draw_query_view(
                         .get(q.active_set)
                         .map(|r| !r.columns.is_empty())
                         .unwrap_or(false);
-                    // 导出按钮常驻(不可用时灰置):随结果集类型异步出现/消失会把
-                    // 右侧的 格式化/片段/计划/优化/历史 整体平移,按压中的点击被吞
-                    let csv = theme::button(ui, ui_kit::t!("Export CSV", "导出 CSV"), theme::BtnKind::Secondary);
-                    let csv_clicked = csv.clicked();
-                    if !has_grid {
-                        csv.on_disabled_hover_text(ui_kit::t!(
-                            "Nothing to export in this result set (no grid)",
-                            "当前结果集不可导出(无表格)"
-                        ));
-                    }
-                    if has_grid && csv_clicked {
-                        actions.push(TabAction::ExportQueryCsv {
-                            tab_id: tab_id.to_string(),
-                        });
-                    }
-                    let xlsx = theme::button(ui, ui_kit::t!("Export Excel", "导出 Excel"), theme::BtnKind::Secondary);
-                    let xlsx_clicked = xlsx.clicked();
-                    if !has_grid {
-                        xlsx.on_disabled_hover_text(ui_kit::t!(
-                            "Nothing to export in this result set (no grid)",
-                            "当前结果集不可导出(无表格)"
-                        ));
-                    }
-                    if has_grid && xlsx_clicked {
-                        if let Some(r) = q.results.get(q.active_set) {
-                            if !r.columns.is_empty() {
-                                actions.push(TabAction::ExportXlsx {
-                                    suggest: ui_kit::t!("query-results.xlsx", "查询结果.xlsx").into(),
-                                    columns: r.columns.clone(),
-                                    rows: r.rows.clone(),
-                                });
-                                actions.push(TabAction::ExportParquet {
-                                    suggest: ui_kit::t!("query-results.parquet", "查询结果.parquet").into(),
-                                    columns: r.columns.clone(),
-                                    rows: r.rows.clone(),
-                                });
+                    // 导出收纳为单一菜单:CSV/Excel/Parquet/JSON 四格式
+                    // (按钮常驻,不可用时菜单内灰置——随结果集异步出现/消失会把
+                    // 右侧按钮整体平移,按压中的点击被吞)
+                    let exp = ui.menu_button(
+                        RichText::new(ui_kit::t!("Export ▾", "导出 ▾")).size(12.5).color(p.text2),
+                        |ui| {
+                            ui.set_min_width(180.0);
+                            macro_rules! item {
+                                ($label:expr, $enabled:expr) => {{
+                                    let b = ui.add_enabled(
+                                        $enabled,
+                                        egui::Button::new(RichText::new($label).size(12.0).color(
+                                            if $enabled { p.text } else { p.muted },
+                                        )),
+                                    );
+                                    b.clicked()
+                                }};
                             }
-                        }
-                    }
-                    let js = theme::button(ui, ui_kit::t!("Export JSON", "导出 JSON"), theme::BtnKind::Secondary);
-                    let js_clicked = js.clicked();
-                    if !has_grid {
-                        js.on_disabled_hover_text(ui_kit::t!(
-                            "Nothing to export in this result set (no grid)",
-                            "当前结果集不可导出(无表格)"
-                        ));
-                    }
-                    if has_grid && js_clicked {
-                        actions.push(TabAction::ExportQueryJson {
-                            tab_id: tab_id.to_string(),
-                        });
-                    }
-                    let sat = theme::button(
-                        ui,
-                        ui_kit::t!("Save as Table", "存为新表"),
-                        theme::BtnKind::Secondary,
+                            if item!(ui_kit::t!("Export CSV", "导出 CSV"), has_grid) {
+                                actions.push(TabAction::ExportQueryCsv {
+                                    tab_id: tab_id.to_string(),
+                                });
+                                ui.close_menu();
+                            }
+                            let mut push_xlsx = false;
+                            let mut push_parquet = false;
+                            if item!(ui_kit::t!("Export Excel", "导出 Excel"), has_grid) {
+                                push_xlsx = true;
+                            }
+                            if item!(ui_kit::t!("Export Parquet", "导出 Parquet"), has_grid) {
+                                push_parquet = true;
+                            }
+                            if push_xlsx || push_parquet {
+                                if let Some(r) = q.results.get(q.active_set) {
+                                    if !r.columns.is_empty() {
+                                        if push_xlsx {
+                                            actions.push(TabAction::ExportXlsx {
+                                                suggest: ui_kit::t!("query-results.xlsx", "查询结果.xlsx")
+                                                    .into(),
+                                                columns: r.columns.clone(),
+                                                rows: r.rows.clone(),
+                                            });
+                                        }
+                                        if push_parquet {
+                                            actions.push(TabAction::ExportParquet {
+                                                suggest: ui_kit::t!(
+                                                    "query-results.parquet",
+                                                    "查询结果.parquet"
+                                                )
+                                                .into(),
+                                                columns: r.columns.clone(),
+                                                rows: r.rows.clone(),
+                                            });
+                                        }
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                            if item!(ui_kit::t!("Export JSON", "导出 JSON"), has_grid) {
+                                actions.push(TabAction::ExportQueryJson {
+                                    tab_id: tab_id.to_string(),
+                                });
+                                ui.close_menu();
+                            }
+                        },
                     );
-                    let sat_clicked = sat.clicked();
                     if !has_grid {
-                        sat.on_disabled_hover_text(ui_kit::t!(
+                        exp.response.on_hover_text(ui_kit::t!(
                             "Nothing to export in this result set (no grid)",
                             "当前结果集不可导出(无表格)"
                         ));
                     }
-                    if has_grid && sat_clicked {
-                        actions.push(TabAction::SaveResultAsTableOpen {
-                            tab_id: tab_id.to_string(),
-                        });
-                    }
-                    let plg = theme::button(ui, ui_kit::t!("Plugin", "插件"), theme::BtnKind::Secondary);
-                    let plg_clicked = plg.clicked();
-                    if !has_grid {
-                        plg.on_disabled_hover_text(ui_kit::t!(
-                            "Nothing to process in this result set (no grid)",
-                            "当前结果集无可处理内容(无表格)"
-                        ));
-                    }
-                    if has_grid && plg_clicked {
-                        actions.push(TabAction::PluginRun {
-                            tab_id: tab_id.to_string(),
-                        });
-                    }
-                    let hist = theme::button(ui, ui_kit::t!("History", "历史"), theme::BtnKind::Secondary);
-                    if hist.clicked() {
-                        actions.push(TabAction::OpenQueryHistory {
-                            tab_id: tab_id.to_string(),
-                        });
-                    }
+                    // 低频操作收进「更多 ▾」:存为新表/插件/计划/优化
+                    // (工具栏可见控件收敛到 运行/AI/格式化/片段/历史/导出/更多)
+                    ui.menu_button(
+                        RichText::new(ui_kit::t!("More ▾", "更多 ▾")).size(12.5).color(p.text2),
+                        |ui| {
+                            ui.set_min_width(200.0);
+                            macro_rules! low_item {
+                                ($label:expr, $tip:expr, $enabled:expr) => {{
+                                    let b = ui.add_enabled(
+                                        $enabled,
+                                        egui::Button::new(RichText::new($label).size(12.0).color(
+                                            if $enabled { p.text } else { p.muted },
+                                        )),
+                                    );
+                                    b.clone().on_hover_text($tip);
+                                    b.clicked()
+                                }};
+                            }
+                            if low_item!(
+                                ui_kit::t!("Save as Table", "存为新表"),
+                                ui_kit::t!("Save the result set as a new table", "结果集保存为新表"),
+                                has_grid
+                            ) {
+                                actions.push(TabAction::SaveResultAsTableOpen {
+                                    tab_id: tab_id.to_string(),
+                                });
+                                ui.close_menu();
+                            }
+                            if low_item!(
+                                ui_kit::t!("Plugin", "插件"),
+                                ui_kit::t!("Transform the result set with a plugin", "用插件处理结果集"),
+                                has_grid
+                            ) {
+                                actions.push(TabAction::PluginRun {
+                                    tab_id: tab_id.to_string(),
+                                });
+                                ui.close_menu();
+                            }
+                            if !is_redis {
+                                if low_item!(
+                                    ui_kit::t!("Plan (EXPLAIN)", "计划 (EXPLAIN)"),
+                                    ui_kit::t!(
+                                        "EXPLAIN plan (result goes to the results area, not history)",
+                                        "EXPLAIN 执行计划(结果进结果区,不进历史)"
+                                    ),
+                                    true
+                                ) {
+                                    actions.push(TabAction::ExplainQuery {
+                                        tab_id: tab_id.to_string(),
+                                    });
+                                    ui.close_menu();
+                                }
+                                if low_item!(
+                                    ui_kit::t!("Optimize", "优化"),
+                                    ui_kit::t!(
+                                        "SQL optimization analysis (EXPLAIN + rule diagnostics)",
+                                        "SQL 优化分析(EXPLAIN + 规则诊断)"
+                                    ),
+                                    true
+                                ) {
+                                    q.optimize = Some(super::app::OptimizeState {
+                                        running: false,
+                                        ran: false,
+                                        plan: None,
+                                        error: None,
+                                        frozen: 0,
+                                    });
+                                    ui.close_menu();
+                                }
+                            }
+                        },
+                    );
                     if !is_redis {
                         let ai = theme::button(ui, "AI", theme::BtnKind::Secondary);
                         let ai_clicked = ai.clicked();
@@ -271,34 +327,6 @@ pub fn draw_query_view(
                                 });
                             }
                         });
-                    if !is_redis
-                        && theme::button(ui, ui_kit::t!("Plan", "计划"), theme::BtnKind::Secondary)
-                            .on_hover_text(ui_kit::t!(
-                                "EXPLAIN plan (result goes to the results area, not history)",
-                                "EXPLAIN 执行计划(结果进结果区,不进历史)"
-                            ))
-                            .clicked()
-                    {
-                        actions.push(TabAction::ExplainQuery {
-                            tab_id: tab_id.to_string(),
-                        });
-                    }
-                    if !is_redis
-                        && theme::button(ui, ui_kit::t!("Optimize", "优化"), theme::BtnKind::Secondary)
-                            .on_hover_text(ui_kit::t!(
-                                "SQL optimization analysis (EXPLAIN + rule diagnostics)",
-                                "SQL 优化分析(EXPLAIN + 规则诊断)"
-                            ))
-                            .clicked()
-                    {
-                        q.optimize = Some(super::app::OptimizeState {
-                            running: false,
-                            ran: false,
-                            plan: None,
-                            error: None,
-                            frozen: 0,
-                        });
-                    }
                     let history = q.history.clone();
                     let hist =
                         ui.menu_button(RichText::new(ui_kit::t!("History", "历史")).size(12.5).color(p.text2), |ui| {
@@ -320,6 +348,15 @@ pub fn draw_query_view(
                                     ui.close_menu();
                                 }
                             }
+                            ui.separator();
+                            if ui.button(
+                                RichText::new(ui_kit::t!("Open full history…", "打开完整历史…")).size(12.0),
+                            ).clicked() {
+                                actions.push(TabAction::OpenQueryHistory {
+                                    tab_id: tab_id.to_string(),
+                                });
+                                ui.close_menu();
+                            }
                         });
                     hist.response.on_hover_text(ui_kit::t!("Execution history", "执行历史"));
                 });
@@ -339,13 +376,12 @@ pub fn draw_query_view(
                 .find(|c| c.id == q.conn_id)
                 .map(|c| c.db_type == shujing_core::DbType::Redis)
                 .unwrap_or(false);
-            // 编辑器卡片
-            let has_results = !q.results.is_empty();
-            let editor_h = if has_results {
+            // 编辑器卡片:有无结果都保持上下分割结构,运行后无布局跳动
+            let editor_h = if !q.results.is_empty() {
                 (ui.available_height() * 0.32).clamp(110.0, 260.0)
             } else {
-                // 预留底部实时诊断条 20px(16 条高 + 4 间距),否则被挤出可视区
-                (ui.available_height() - 20.0).max(180.0)
+                // 空态也只占上部(预留底部诊断条 20px),下方留给结果占位区
+                ((ui.available_height() - 20.0) * 0.45).clamp(140.0, 320.0)
             };
             // 实时诊断条(恒定占位 16px,有无问题不跳布局):本地静态检查,
             // 文本哈希缓存,同一文本不重算;Redis 命令页不适用。
@@ -431,16 +467,26 @@ pub fn draw_query_view(
                 });
             }
 
-            // 编辑器属于内容层:用背景色而不是卡片色,避免整块内容区变成灰色
-            egui::Frame::new()
-                .fill(p.bg)
+            // 编辑器容器:比页面底亮半级(input_bg)+描边圆角,传达"代码区"语义;
+            // 左内边距留出行号 gutter(与高亮 layouter 同源行高,滚动同步)
+            let editor_frame = egui::Frame::new()
+                .fill(p.input_bg)
                 .stroke(egui::Stroke::new(1.0, p.border))
                 .corner_radius(egui::CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(12))
-                .show(ui, |ui| {
-                    ui.set_min_height(editor_h);
-                    ui.set_max_height(editor_h);
-                    egui::ScrollArea::vertical()
+                .inner_margin(egui::Margin {
+                    left: 44,
+                    right: 12,
+                    top: 12,
+                    bottom: 12,
+                });
+            editor_frame.show(ui, |ui| {
+                ui.set_min_height(editor_h);
+                ui.set_max_height(editor_h);
+                // 行高取高亮 layouter 的真实行高(TextEdit 布局即 layout job)
+                let one = crate::sql_highlight::highlight_cached(ui.ctx(), "1", 10.0);
+                let lh = one.rect.height().max(14.0);
+                let content_rect = ui.max_rect();
+                let sa = egui::ScrollArea::vertical()
                         .id_salt(format!("sql-editor-scroll-{tab_id}"))
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
@@ -505,7 +551,33 @@ pub fn draw_query_view(
                                 );
                             }
                         });
-                });
+                // 行号 gutter:绝对坐标绘制,随 ScrollArea 滚动偏移同步
+                let off_y = sa.state.offset.y;
+                let clip = content_rect;
+                let gp = ui.painter().with_clip_rect(clip);
+                let gx = content_rect.left() + 30.0;
+                let nlines = q.sql.lines().count().max(1);
+                gp.line_segment(
+                    [
+                        egui::pos2(gx + 7.0, clip.top()),
+                        egui::pos2(gx + 7.0, clip.bottom()),
+                    ],
+                    egui::Stroke::new(1.0, p.border),
+                );
+                for i in 0..nlines {
+                    let y = content_rect.top() + 12.0 + (i as f32 + 0.5) * lh - off_y;
+                    if y < clip.top() || y > clip.bottom() {
+                        continue;
+                    }
+                    gp.text(
+                        egui::pos2(gx, y),
+                        egui::Align2::RIGHT_CENTER,
+                        (i + 1).to_string(),
+                        theme::mono(11.0),
+                        p.muted,
+                    );
+                }
+            });
 
 // ⌘/:选中行注释切换(弹窗打开时不响应,防穿透后台执行)
             if !is_redis
@@ -563,6 +635,29 @@ pub fn draw_query_view(
             }
 
             if q.results.is_empty() {
+                // 结果占位区:维持分割布局,运行后编辑器不跳;提示快捷键
+                let h = ui.available_height().max(64.0);
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(ui.available_width(), h), Sense::hover());
+                let inner = rect.shrink2(egui::vec2(0.0, 10.0));
+                ui.painter().rect_stroke(
+                    inner,
+                    egui::CornerRadius::same(8),
+                    egui::Stroke::new(1.0, p.border),
+                    egui::StrokeKind::Inside,
+                );
+                let msg = if is_redis {
+                    ui_kit::t!("⌘↵ Execute — output shows here", "⌘↵ 执行命令,输出显示在这里")
+                } else {
+                    ui_kit::t!("⌘↵ Run — results show here", "⌘↵ 运行查询,结果显示在这里")
+                };
+                ui.painter().text(
+                    inner.center(),
+                    egui::Align2::CENTER_CENTER,
+                    msg,
+                    egui::FontId::proportional(12.0),
+                    p.muted,
+                );
                 return;
             }
             ui.add_space(10.0);
