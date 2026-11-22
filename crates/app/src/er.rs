@@ -234,23 +234,33 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                     world_to_screen(e, *to),
                     egui::vec2(NODE_W, node_h(&fk.ref_table)) * e.zoom,
                 );
-                let a = egui::pos2(from_r.right(), from_r.center().y);
-                let b = egui::pos2(to_r.left(), to_r.center().y);
-                let dx = ((b.x - a.x) * 0.45).max(24.0);
-                let bez = egui::epaint::CubicBezierShape {
-                    points: [
-                        a,
-                        egui::pos2(a.x + dx, a.y),
-                        egui::pos2(b.x - dx, b.y),
-                        b,
-                    ],
-                    closed: false,
-                    fill: Color32::TRANSPARENT,
-                    stroke: egui::epaint::PathStroke::new(1.4, theme::tint(p.accent, 140)),
+                // 直角折线(ER 工具惯例):出边水平 → 中缝垂直 → 入边水平;
+                // 目标在左侧时从左边出/右边入,箭头方向随最后一段
+                let right = to_r.center().x >= from_r.center().x;
+                let (a, b) = if right {
+                    (
+                        egui::pos2(from_r.right(), from_r.center().y),
+                        egui::pos2(to_r.left(), to_r.center().y),
+                    )
+                } else {
+                    (
+                        egui::pos2(from_r.left(), from_r.center().y),
+                        egui::pos2(to_r.right(), to_r.center().y),
+                    )
                 };
-                painter.add(bez);
-                // 箭头
-                let dir = (b - egui::pos2(b.x - 8.0, b.y)).normalized();
+                let mid_x = (a.x + b.x) / 2.0;
+                let pts = vec![
+                    a,
+                    egui::pos2(mid_x, a.y),
+                    egui::pos2(mid_x, b.y),
+                    b,
+                ];
+                painter.add(egui::epaint::Shape::line(
+                    pts,
+                    egui::epaint::PathStroke::new(1.4, theme::tint(p.accent, 140)),
+                ));
+                // 箭头(最后一段水平方向)
+                let dir = egui::vec2(if right { 1.0 } else { -1.0 }, 0.0);
                 let ah = 5.0;
                 let perp = egui::vec2(-dir.y, dir.x);
                 let tri = vec![
@@ -359,15 +369,24 @@ fn auto_layout(e: &ErTab) -> Vec<(String, Vec2)> {
         by_level.entry(level.get(t).copied().unwrap_or(0)).or_default().push(t.clone());
     }
     let mut out = Vec::new();
-    for (l, names) in by_level {
+    // 同层排序按关联:层内表按其引用的上层表的 y 均值排,相关的表纵向上靠近,
+    // 减少跨层连线的跨度(此前按名排序,关联表可能一个顶一个底=长对角线)
+    let row_h = HEAD_H + ROW_H * MAX_ROWS as f32 + GAP_Y;
+    let mut y_of: std::collections::HashMap<String, f32> = Default::default();
+    for (l, mut names) in by_level {
+        names.sort_by_key(|n| {
+            let ds = deps(n);
+            let ys: Vec<f32> = ds.iter().filter_map(|d| y_of.get(d)).copied().collect();
+            if ys.is_empty() {
+                i32::MAX // 无上层关联的垫底,稳定次序
+            } else {
+                (ys.iter().sum::<f32>() / ys.len() as f32) as i32
+            }
+        });
         for (i, n) in names.into_iter().enumerate() {
             let user = e.positions.get(&n);
-            let pos = user.copied().unwrap_or_else(|| {
-                Vec2::new(
-                    l as f32 * (NODE_W + GAP_X),
-                    i as f32 * (HEAD_H + ROW_H * MAX_ROWS as f32 + GAP_Y),
-                )
-            });
+            let pos = user.copied().unwrap_or_else(|| Vec2::new(l as f32 * (NODE_W + GAP_X), i as f32 * row_h));
+            y_of.insert(n.clone(), pos.y + row_h / 2.0);
             out.push((n, pos));
         }
     }
