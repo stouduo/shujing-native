@@ -99,6 +99,8 @@ pub fn result_rows(
                     }
                 }
             }
+            // body 闭包内外层 ui 被 builder 借用,先 clone painter 供空行延伸
+            let body_painter = ui.painter().clone();
             let mut tb = TableBuilder::new(ui)
                 .id_salt(id_salt)
                 .striped(false)
@@ -159,6 +161,8 @@ pub fn result_rows(
             })
             .body(|body| {
                 actual_widths.set(body.widths().to_vec());
+                // rows() 消费 body:先取数据区矩形供空行延伸
+                let brect = body.max_rect();
                 // 行悬停:每格用自身矩形判定(跨行累积并工会点亮悬停行下方全部行)
                 body.rows(theme::ROW_H, rows.len(), |mut row| {
                     let ri = row.index();
@@ -251,6 +255,27 @@ pub fn result_rows(
                     });
                     geom.vis_rows.push((ri, row_y.get()));
                 });
+
+                // 空白区网格延续:与数据表格页同款(评审两轮共指的断裂感)
+                {
+                    let mut y = brect.top() + rows.len() as f32 * theme::ROW_H;
+                    let mut empty_ri = rows.len();
+                    while y + theme::ROW_H <= brect.bottom() + 0.5 {
+                        let band = egui::Rect::from_min_max(
+                            egui::pos2(brect.left(), y),
+                            egui::pos2(brect.right(), y + theme::ROW_H),
+                        );
+                        if empty_ri % 2 == 1 {
+                            body_painter.rect_filled(band, 0, p.stripe);
+                        }
+                        body_painter.line_segment(
+                            [band.left_bottom(), band.right_bottom()],
+                            egui::Stroke::new(1.0, p.row_line),
+                        );
+                        y += theme::ROW_H;
+                        empty_ri += 1;
+                    }
+                }
             });
         });
     store_hscroll(ui.ctx(), id_salt, hout.state.offset.x);
@@ -367,6 +392,8 @@ pub fn result_rows_editable(
                     }
                 }
             }
+            // body 闭包内外层 ui 被 builder 借用,先 clone painter 供空行延伸
+            let body_painter = ui.painter().clone();
             let mut tb = TableBuilder::new(ui)
                 .id_salt(id_salt)
                 .striped(false)
@@ -426,6 +453,8 @@ pub fn result_rows_editable(
             })
             .body(|body| {
                 actual_widths.set(body.widths().to_vec());
+                // rows() 消费 body:先取数据区矩形供空行延伸
+                let brect = body.max_rect();
                 // 行悬停:每格用自身矩形判定(跨行累积并工会点亮悬停行下方全部行)
                 body.rows(theme::ROW_H, rows.len(), |mut row| {
                     let ri = row.index();
@@ -569,6 +598,27 @@ pub fn result_rows_editable(
                     });
                     geom.vis_rows.push((ri, row_y.get()));
                 });
+
+                // 空白区网格延续:与数据表格页同款(评审两轮共指的断裂感)
+                {
+                    let mut y = brect.top() + rows.len() as f32 * theme::ROW_H;
+                    let mut empty_ri = rows.len();
+                    while y + theme::ROW_H <= brect.bottom() + 0.5 {
+                        let band = egui::Rect::from_min_max(
+                            egui::pos2(brect.left(), y),
+                            egui::pos2(brect.right(), y + theme::ROW_H),
+                        );
+                        if empty_ri % 2 == 1 {
+                            body_painter.rect_filled(band, 0, p.stripe);
+                        }
+                        body_painter.line_segment(
+                            [band.left_bottom(), band.right_bottom()],
+                            egui::Stroke::new(1.0, p.row_line),
+                        );
+                        y += theme::ROW_H;
+                        empty_ri += 1;
+                    }
+                }
             });
         });
     store_hscroll(ui.ctx(), id_salt, hout.state.offset.x);

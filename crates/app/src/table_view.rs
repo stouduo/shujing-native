@@ -2767,6 +2767,8 @@ fn draw_data_table(
     let srt = &*sort;
     let table_left = ui.max_rect().left();
     let table_right = ui.max_rect().right();
+    // body 闭包内外层 ui 被 builder 借用,先 clone painter 供空行延伸绘制
+    let body_painter = ui.painter().clone();
     let builder = egui_extras::TableBuilder::new(ui)
         .id_salt(format!("data-table-{tab_id}"))
         .striped(false)
@@ -2933,6 +2935,8 @@ fn draw_data_table(
                 })
                 .unwrap_or(false)
         };
+        // rows() 消费 body:先取数据区矩形供空行延伸
+        let brect = body.max_rect();
         body.rows(theme::ROW_H, rows.len(), |mut row| {
             let ri = row.index();
             let row_y = std::cell::Cell::new(f32::NAN);
@@ -3097,6 +3101,28 @@ fn draw_data_table(
             });
             geom.vis_rows.push((ri, row_y.get()));
             let _ = is_editing_row;
+
+            // 空白区网格延续(Notion/Linear 式):数据行下方到网格底部画空行
+            // 斑马纹+行线——评审两轮共指"5 行数据下方 500px 纯背景的断裂感"
+            {
+                let mut y = brect.top() + rows.len() as f32 * theme::ROW_H;
+                let mut empty_ri = rows.len();
+                while y + theme::ROW_H <= brect.bottom() + 0.5 {
+                    let band = egui::Rect::from_min_max(
+                        egui::pos2(brect.left(), y),
+                        egui::pos2(brect.right(), y + theme::ROW_H),
+                    );
+                    if empty_ri % 2 == 1 {
+                        body_painter.rect_filled(band, 0, p.stripe);
+                    }
+                    body_painter.line_segment(
+                        [band.left_bottom(), band.right_bottom()],
+                        egui::Stroke::new(1.0, p.row_line),
+                    );
+                    y += theme::ROW_H;
+                    empty_ri += 1;
+                }
+            }
         });
         // —— 矩形拖选状态机(直接操作):按住数据格拖 = 选区;按住行号拖 = 行多选。
         // 命中用几何反推;钉住覆盖层滚动时做逆映射(按上一帧横向偏移)

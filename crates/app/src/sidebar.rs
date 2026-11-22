@@ -38,6 +38,27 @@ impl ShujingApp {
                     ],
                     egui::Stroke::new(1.0, theme::c().border),
                 );
+                // 底部渐隐:滚动内容在底缘淡出(评审:硬截断生硬,下方还有内容不可感知)
+                let p = theme::c();
+                let fade_h = 26.0;
+                let bands = 6;
+                for i in 0..bands {
+                    let a = (i as f32 / bands as f32) * 210.0;
+                    let band = egui::Rect::from_min_max(
+                        egui::pos2(r.left(), r.bottom() - fade_h * (i + 1) as f32 / bands as f32),
+                        egui::pos2(r.right(), r.bottom() - fade_h * i as f32 / bands as f32),
+                    );
+                    ui.painter().rect_filled(
+                        band,
+                        0,
+                        egui::Color32::from_rgba_premultiplied(
+                            (p.bg.r() as f32 * a / 255.0) as u8,
+                            (p.bg.g() as f32 * a / 255.0) as u8,
+                            (p.bg.b() as f32 * a / 255.0) as u8,
+                            a as u8,
+                        ),
+                    );
+                }
             });
     }
 
@@ -1024,6 +1045,8 @@ impl ShujingApp {
         let p = theme::c();
         let (rect, resp) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), Sense::click());
+        // 常态底色锚点(比背景亮半级):库头是层级锚,表行靠缩进+轨道线归属其下
+        ui.painter().rect_filled(rect, egui::CornerRadius::same(7), p.panel);
         if resp.hovered() {
             ui.painter()
                 .rect_filled(rect, egui::CornerRadius::same(7), p.row_hover);
@@ -1503,6 +1526,14 @@ impl ShujingApp {
             ui.painter()
                 .rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
         }
+        // 轨道线:表行左侧 1px 竖线,归属感由"缩进+轨道"双信号承担
+        ui.painter().line_segment(
+            [
+                egui::pos2(rect.left() + 22.0, rect.top() + 2.0),
+                egui::pos2(rect.left() + 22.0, rect.bottom() - 2.0),
+            ],
+            egui::Stroke::new(1.0, p.row_line),
+        );
         icons::paint_table(
             ui.painter(),
             egui::Rect::from_center_size(
