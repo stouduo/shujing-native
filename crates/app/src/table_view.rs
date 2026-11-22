@@ -4999,13 +4999,11 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                 }
             }
             if segmented_db_type(ui, &mut m.db_type, 440.0) {
-                // 切换类型:端口为空或等于其它类型默认值时带出新默认
+                // 切换类型:端口为空或仍是任一已知类型的默认值时带出新默认
+                // (此前只认 3306/5432/6379,从 Kafka 9092 切 SQL Server 1433 不跟随)
                 let dp = default_port(m.db_type);
                 if !dp.is_empty()
-                    && (m.port.is_empty()
-                        || m.port == "3306"
-                        || m.port == "5432"
-                        || m.port == "6379")
+                    && (m.port.is_empty() || ALL_DEFAULT_PORTS.contains(&m.port.as_str()))
                 {
                     m.port = dp.to_string();
                 }
@@ -5384,6 +5382,13 @@ fn default_port(t: shujing_core::DbType) -> &'static str {
         shujing_core::DbType::Sqlite => "",
     }
 }
+
+/// 全部带默认端口类型的默认值(与 default_port 保持一致);
+/// 连接弹窗切换类型时判断"当前端口仍是某类型默认值"用
+const ALL_DEFAULT_PORTS: &[&str] = &[
+    "3306", "5432", "6379", "27017", "1433", "8123", "9092", "15672", "8848", "8500", "2379",
+    "1883",
+];
 
 /// 连接标识色板(与 dbclient 一致的 6 色 + 无色)
 pub const CONN_COLORS: &[(&str, Color32)] = &[

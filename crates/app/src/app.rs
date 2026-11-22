@@ -4841,6 +4841,9 @@ impl ShujingApp {
                         t.drag_row = None;
                         t.multi_sel.clear(); // 在途时用户可能 ⌘ 点选了旧页行,保留会指向新页错行
                         t.orig_pks.clear();
+                        // 行号键的暂存编辑同理:排序/翻页/刷新后同一下标已是别的行,
+                        // orig_pks 快照已失效,保留会让保存兜底从新行读主键=错行写回
+                        t.changes.clear();
                         match result {
                             Ok(r) => {
                                 t.last_elapsed_ms = Some(r.elapsed_ms);
