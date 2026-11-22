@@ -585,10 +585,17 @@ impl ShujingApp {
         // 预设显式持久化优先;旧配置只有 dark 布尔 → 基调默认预设;
         // 跟随系统时明暗由系统外观决定(忽略持久化预设,取该基调默认)
         if !follow_system {
-            let preset = settings
-                .as_ref()
-                .and_then(|v| v.get("preset").and_then(|x| x.as_u64()))
-                .map(|x| x as usize);
+            // env 显式指定主题时跳过持久化预设恢复(否则 SHUJING_THEME=light
+            // 会被 settings.json 的暗色 preset 覆盖——调试/自动化入口优先)
+            let env_theme = std::env::var("SHUJING_THEME").is_ok();
+            let preset = if env_theme {
+                None
+            } else {
+                settings
+                    .as_ref()
+                    .and_then(|v| v.get("preset").and_then(|x| x.as_u64()))
+                    .map(|x| x as usize)
+            };
             match preset {
                 Some(i) => crate::theme::set_preset(i),
                 None => crate::theme::set_dark(dark),
