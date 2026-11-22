@@ -443,6 +443,8 @@ pub struct ShujingApp {
     /// 帧计数(跟随系统外观的低频轮询用)
     pub frame_count: u64,
     pub auto_connect_done: bool,
+    /// 启动更新检查只发一次
+    pub update_check_done: bool,
     pub quick_open: Option<QuickOpen>,
     pub stats: Option<(
         String,
@@ -669,6 +671,7 @@ impl ShujingApp {
             follow_system_theme: follow_system,
             frame_count: 0,
             auto_connect_done: false,
+            update_check_done: false,
             shot: std::env::var("SHUJING_SCREENSHOT")
                 .ok()
                 .map(|path| ShotState {

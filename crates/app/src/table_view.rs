@@ -5512,6 +5512,19 @@ impl eframe::App for ShujingApp {
                 self.toggle_connect(&c);
             }
         }
+        if !self.update_check_done {
+            self.update_check_done = true;
+            let tx = self.event_tx.clone();
+            net::spawn(async move {
+                // 让路启动连接;失败静默(更新检查不该打扰使用)
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if let Ok(Some((tag, url))) =
+                    shujing_core::updater::check_latest_release(env!("CARGO_PKG_VERSION")).await
+                {
+                    let _ = tx.send(BgEvent::UpdateAvailable { tag, url });
+                }
+            });
+        }
         if std::env::var("SHUJING_OPEN_QUERY").is_ok() && !self.autoopen_done {
             self.autoopen_done = true;
             self.open_query_tab(None);

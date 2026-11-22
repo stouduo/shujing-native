@@ -64,7 +64,11 @@ async fn chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String, String
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_str())
         .map(str::to_string)
-        .ok_or_else(|| format!("AI 响应缺 choices[0].message.content: {}", &text[..text.len().min(200)]))
+        .ok_or_else(|| {
+            // 按字符截断:字节切片会切在中文中间 panic(同 L56 的错误体裁剪语义)
+            let head: String = text.chars().take(200).collect();
+            format!("AI 响应缺 choices[0].message.content: {head}")
+        })
 }
 
 /// 从回复中剥出 SQL(```sql ... ``` 围栏或裸语句)

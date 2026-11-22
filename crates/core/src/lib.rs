@@ -37,6 +37,7 @@ pub mod sql_advisor;
 pub mod sql_format;
 pub mod sql_lint;
 pub mod store;
+pub mod updater;
 
 pub use search::SearchHit;
 pub use model::{
