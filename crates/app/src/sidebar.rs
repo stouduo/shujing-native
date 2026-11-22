@@ -93,11 +93,20 @@ impl ShujingApp {
                     + icons::baseline_top(&title_g, theme::FS_TABLE_TITLE);
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
+                    // 新建连接:26px 可点圆面(hover 提亮)+ 7px 加号,此前 24px 裸 +
+                    // 视觉过弱且无命中反馈
+                    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
+                    if resp.hovered() {
+                        ui.painter().circle_filled(
+                            rect.center(),
+                            13.0,
+                            p.hover,
+                        );
+                    }
                     icons::paint_plus(
                         ui.painter(),
                         rect.center(),
-                        6.0,
+                        7.0,
                         if resp.hovered() { p.text } else { p.accent },
                     );
                     resp.clone().on_hover_text(ui_kit::t!(
@@ -218,6 +227,7 @@ impl ShujingApp {
                     (None, None) => std::cmp::Ordering::Equal,
                 });
                 for (grp, list) in sections {
+                    let in_group = grp.is_some();
                     if let Some(g) = grp {
                         let key = egui::Id::new(("conn-grp", g.clone()));
                         let collapsed = ui
@@ -249,11 +259,19 @@ impl ShujingApp {
                         if collapsed {
                             continue;
                         }
+                        ui.add_space(4.0);
                     }
                     for c in list {
                         let cid = c.id.clone();
                         ui.push_id(("connblk", &cid), |ui| {
-                            self.draw_conn_block(ui, &cid, c);
+                            if in_group {
+                                // 分组成员缩进一级(与组头拉开层级;未分组连接保持顶格)
+                                ui.indent(egui::Id::new("conn-grp-indent"), |ui| {
+                                    self.draw_conn_block(ui, &cid, c);
+                                });
+                            } else {
+                                self.draw_conn_block(ui, &cid, c);
+                            }
                         });
                         ui.add_space(10.0);
                     }

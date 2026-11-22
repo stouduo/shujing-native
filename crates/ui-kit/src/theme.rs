@@ -878,7 +878,7 @@ pub fn search_box(
         text,
         hint,
         width,
-        30.0,
+        28.0,
         InputIcon::Search,
         true,
     )
