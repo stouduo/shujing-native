@@ -248,29 +248,39 @@ fn draw_grid_header(ui: &mut egui::Ui, _is_edit: bool) {
     let p = theme::c();
     let widths = col_widths(ui);
     let xs = col_x(&widths);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
+    // 表头底色浮起(与数据网格同语义),窄窗压缩列宽时逐列裁剪防标签溢出碰撞
+    ui.painter().rect_filled(rect, 0, p.elevated);
     for (i, h) in [
         ui_kit::t!("Name", "字段名"),
         ui_kit::t!("Type", "类型"),
         ui_kit::t!("Length", "长度"),
         "NOT NULL",
         "PK",
-        ui_kit::t!("Auto Increment", "自增"),
+        ui_kit::t!("Auto Inc", "自增"),
         ui_kit::t!("Default", "默认值"),
         ui_kit::t!("Comment", "注释"),
     ]
     .iter()
     .enumerate()
     {
-        ui.painter().text(
-            egui::pos2(rect.left() + xs[i], rect.center().y),
+        let col_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + xs[i], rect.top()),
+            egui::pos2(rect.right().min(rect.left() + xs[i + 1] - 4.0), rect.bottom()),
+        );
+        let cp = ui.painter().with_clip_rect(col_rect);
+        cp.text(
+            egui::pos2(col_rect.left(), rect.center().y),
             egui::Align2::LEFT_CENTER,
             h,
             egui::FontId::proportional(11.0),
             p.muted,
         );
     }
-    theme::hairline_bottom(ui);
+    ui.painter().line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        egui::Stroke::new(1.0, p.border),
+    );
     ui.add_space(3.0);
 }
 

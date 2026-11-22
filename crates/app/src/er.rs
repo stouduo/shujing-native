@@ -390,13 +390,12 @@ fn draw_node(
         egui::Stroke::new(1.0, p.border),
         egui::StrokeKind::Inside,
     );
-    // 头部
+    // 头部:accent 深一档 + 明确底线(评审:此前 tint(accent,40) 过淡,表头与字段行难分)
     let head = egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.right(), rect.top() + HEAD_H * e.zoom));
-    painter.rect_filled(head, radius, theme::tint(p.accent, 40));
-    // 修正头部下两角为直角:盖一条底边
+    painter.rect_filled(head, radius, theme::tint(p.accent, 70));
     painter.line_segment(
         [head.left_bottom(), head.right_bottom()],
-        egui::Stroke::new(1.0, theme::tint(p.accent, 40)),
+        egui::Stroke::new(1.5 * e.zoom.max(0.6), theme::tint(p.accent, 110)),
     );
     let name_g = painter.layout_no_wrap(
         name.to_string(),
@@ -441,6 +440,9 @@ fn draw_node(
         let is_fk = fk_cols.contains(c.name.as_str());
         if is_pk {
             painter.rect_filled(row, 0, theme::tint(p.accent, 22));
+        } else if i % 2 == 1 {
+            // 字段行斑马纹(与数据网格同款节奏)
+            painter.rect_filled(row, 0, p.stripe);
         }
         let font = theme::mono(11.5 * e.zoom.max(0.6));
         let g = painter.layout_no_wrap(c.name.clone(), font, Color32::PLACEHOLDER);

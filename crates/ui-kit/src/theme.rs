@@ -1103,6 +1103,35 @@ pub fn modal_frame() -> egui::Frame {
 pub fn modal_title(ui: &mut egui::Ui, title: &str) {
     ui.horizontal(|ui| {
         ui.label(strong(title, 15.0).color(c().text));
+        // 统一关闭钮:✕ 注入 Esc(egui::Modal 的 should_close 响应),
+        // 各弹窗不必各自接实例——所有 modal 免费获得右上关闭
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let p = c();
+            let r = ui.add(
+                egui::Button::new(
+                    egui::RichText::new("✕")
+                        .size(12.5)
+                        .color(if ui.rect_contains_pointer(ui.max_rect()) {
+                            p.text2
+                        } else {
+                            p.muted
+                        }),
+                )
+                .frame(false),
+            );
+            if r.clicked() {
+                ui.ctx().input_mut(|i| {
+                    i.events.push(egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: Some(egui::Key::Escape),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    })
+                });
+            }
+            r.on_hover_text("关闭 (Esc)");
+        });
     });
     ui.add_space(10.0);
     hairline_at_cursor(ui);
