@@ -923,7 +923,6 @@ mod readonly_bypass_tests {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod ssh_tests {
     use super::*;
 
@@ -954,6 +953,7 @@ mod ssh_tests {
     }
 }
 
+#[cfg(test)]
 mod use_db_tests {
     use super::extract_use_db;
 

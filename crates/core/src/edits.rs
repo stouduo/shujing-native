@@ -116,7 +116,11 @@ pub fn build_change_stmts(
             .into_iter()
             .map(|s| {
                 if let Some(rest) = s.strip_prefix("UPDATE ") {
-                    format!("ALTER TABLE {rest}")
+                    // rest = "<表> SET <sets> WHERE <w>";CH mutation 要求保留 UPDATE 关键字
+                    match rest.split_once(" SET ") {
+                        Some((tbl, sets_where)) => format!("ALTER TABLE {tbl} UPDATE {sets_where}"),
+                        None => s,
+                    }
                 } else if let Some(rest) = s.strip_prefix("DELETE FROM ") {
                     format!("ALTER TABLE {} DELETE WHERE {}", table, rest.split_once(" WHERE ").map(|(_, w)| w.to_string()).unwrap_or_default())
                 } else {
@@ -379,6 +383,24 @@ fn build_change_stmts_shapes() {
     );
     // 空集 = 错误(与执行端语义一致)
     assert!(build_change_stmts(&info, "users", None, &[], &[], &[]).is_err());
+
+    // ClickHouse mutation 改写:UPDATE 保留 UPDATE 关键字(ALTER TABLE t UPDATE …),
+    // DELETE 走 ALTER TABLE t DELETE WHERE
+    let mut ch = info.clone();
+    ch.db_type = DbType::ClickHouse;
+    let deletes = vec![vec![("id".into(), "1".into())]];
+    let ch_stmts =
+        build_change_stmts(&ch, "users", Some("db"), &updates, &deletes, &[]).unwrap();
+    assert_eq!(ch_stmts.len(), 2);
+    assert_eq!(
+        ch_stmts[0],
+        "ALTER TABLE `db`.`users` UPDATE `name` = '张三', `age` = NULL WHERE `id` = '1'",
+        "CH mutation 必须带 UPDATE 关键字"
+    );
+    assert_eq!(
+        ch_stmts[1],
+        "ALTER TABLE `db`.`users` DELETE WHERE `id` = '1'"
+    );
 }
 
 mod tx_tests {
