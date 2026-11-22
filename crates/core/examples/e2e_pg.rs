@@ -46,6 +46,38 @@ async fn main() {
 
     // 0) 数据重置(保证幂等:上一次回写会改数据)
     {
+        // 0a) 全新环境自举:e2e_a 不存在则建(连 postgres 库执行;
+        // 历史遗留环境该库已在,CREATE 报 already exists 被容忍)
+        let (c0, conn0) = tokio_postgres::connect(
+            &format!(
+                "host={} port={} user=postgres dbname=postgres",
+                info.host.as_deref().unwrap_or("127.0.0.1"),
+                info.port.unwrap_or(5433)
+            ),
+            tokio_postgres::NoTls,
+        )
+        .await
+        .unwrap();
+        tokio::spawn(async move { let _ = conn0.await; });
+        let exists: bool = c0
+            .query_one("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname='e2e_a')", &[])
+            .await
+            .unwrap()
+            .get(0);
+        if !exists {
+            c0.execute("CREATE DATABASE e2e_a", &[]).await.unwrap();
+            println!("BOOT  自举建库 e2e_a(全新环境)");
+        }
+        // e2e_b 同理:list_databases 断言要求 a+b 都在,此前依赖上一轮跑留下的库
+        let exists_b: bool = c0
+            .query_one("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname='e2e_b')", &[])
+            .await
+            .unwrap()
+            .get(0);
+        if !exists_b {
+            c0.execute("CREATE DATABASE e2e_b", &[]).await.unwrap();
+            println!("BOOT  自举建库 e2e_b(全新环境)");
+        }
         let (client, conn) = tokio_postgres::connect(
             &format!(
                 "host={} port={} user=postgres dbname=e2e_a",
@@ -58,7 +90,7 @@ async fn main() {
         .unwrap();
         tokio::spawn(async move { let _ = conn.await; });
         client
-            .batch_execute("TRUNCATE users RESTART IDENTITY; INSERT INTO users (name, age, score, active) VALUES ('张三',28,91.50,true),('李四',34,88.25,false),('王五',NULL,72.00,true),('赵六',19,95.75,true); CREATE TABLE IF NOT EXISTS big (id INT); INSERT INTO big SELECT generate_series(1,3) WHERE NOT EXISTS (SELECT 1 FROM big)")
+            .batch_execute("DROP TABLE IF EXISTS users; CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT, age INT, score NUMERIC(6,2), active BOOLEAN, remark TEXT); INSERT INTO users (name, age, score, active, remark) VALUES ('张三',28,91.50,true,'备注甲'),('李四',34,88.25,false,NULL),('王五',NULL,72.00,true,'备注丙'),('赵六',19,95.75,true,NULL); CREATE TABLE IF NOT EXISTS big (id INT); INSERT INTO big SELECT generate_series(1,3) WHERE NOT EXISTS (SELECT 1 FROM big)")
             .await
             .unwrap();
     }
