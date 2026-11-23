@@ -1347,7 +1347,8 @@ fn input_with_icon(
 
 // ---------------------------------------------------------------- 下拉
 
-/// iOS 式下拉选择:圆角输入框样式 + 弹层列表(选中蓝底/悬停浅蓝)
+/// 下拉选择:圆角输入框样式 + 弹层列表(选中项淡底/悬停提亮)。
+/// `selected` 是**值**(不是显示文字):显示 options 里对应的名称,找不到时原样显示。
 /// 返回 Some(新值) 当用户选中;options = [(值, 显示)]
 pub fn select(
     ui: &mut egui::Ui,
@@ -1377,12 +1378,23 @@ pub fn select(
         ),
         egui::StrokeKind::Inside,
     );
+    let shown = options
+        .iter()
+        .find(|(val, _)| val == selected)
+        .map(|(_, label)| label.as_str())
+        .unwrap_or(selected);
+    // 值为空(尚未选择):显示占位提示,不留一个空框让人猜
+    let placeholder = selected.is_empty();
     painter.text(
         egui::pos2(rect.left() + 12.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        selected,
-        egui::FontId::proportional(12.5),
-        p.text,
+        if placeholder {
+            crate::t!("Select…", "请选择…")
+        } else {
+            shown
+        },
+        egui::FontId::proportional(13.0),
+        if placeholder { p.muted } else { p.text },
     );
     let tri = egui::pos2(rect.right() - 14.0, rect.center().y - 1.0);
     let s3 = 3.2;

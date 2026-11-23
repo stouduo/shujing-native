@@ -2039,7 +2039,7 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .frame(theme::modal_frame())
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
-            ui.set_width(460.0);
+            ui.set_width(520.0);
             theme::modal_title(ui, ui_kit::t!("Backup Database", "备份数据库"));
             // 表单体可滚动:小屏视口下超高内容不再被裁(footer 固定可见)
             theme::modal_scroll_style(ui);
@@ -2057,14 +2057,22 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         .size(10.5)
                         .color(p.muted),
                     );
-                    theme::form_field(
-                        ui,
-                        ui_kit::t!("Connection", "连接"),
-                        "backup-conn",
-                        &mut st.conn_name.clone(),
-                        430.0,
-                        false,
-                    );
+                    // 连接是只读信息:此前画成可编辑输入框,改了名字也不会换连接(误导)
+                    theme::form_row(ui, ui_kit::t!("Connection", "连接"), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.label(RichText::new(st.conn_name.clone()).size(13.0).color(p.text));
+                            let host = app
+                                .conns
+                                .iter()
+                                .find(|c| c.name == st.conn_name)
+                                .and_then(|c| c.host.clone())
+                                .filter(|h| !h.is_empty());
+                            if let Some(h) = host {
+                                ui.label(RichText::new(h).size(12.0).color(p.muted));
+                            }
+                        });
+                    });
                     let mut db = st.db.clone();
                     theme::form_field(
                         ui,
@@ -2513,6 +2521,90 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     let _ = modal.should_close();
 }
 
+
+/// 连接在下拉里的显示名:名称 + 主机(同名连接靠主机区分;不暴露内部 id)
+fn conn_opt_label(c: &shujing_core::ConnInfo) -> String {
+    match c.host.as_deref().filter(|h| !h.is_empty()) {
+        Some(host) => match c.port {
+            Some(port) => format!("{} ({host}:{port})", c.name),
+            None => format!("{} ({host})", c.name),
+        },
+        None => c.name.clone(),
+    }
+}
+
+/// "源 → 目标"选择区(数据传输 / 数据对比 / 结构对比共用):同一套标签列——
+/// 源(只读摘要:连接 / 库 › 表)、目标连接下拉(没有可选连接时显示提示)、目标库、目标表名。
+/// 返回目标连接下拉的新选中值
+#[allow(clippy::too_many_arguments)]
+fn src_target_form(
+    ui: &mut egui::Ui,
+    src_name: &str,
+    src_db: Option<&str>,
+    src_table: &str,
+    caption: &str,
+    notice: Option<&str>,
+    conn_opts: &[(String, String)],
+    sel_id: &str,
+    dst_conn: &str,
+    dst_db: &mut String,
+    dst_table: &mut String,
+    field_ids: (&str, &str),
+    db_hint: &str,
+) -> Option<String> {
+    let p = theme::c();
+    ui.spacing_mut().item_spacing.y = 14.0;
+    // 源:面包屑式只读摘要(连接名 / 库 › 表)
+    let (name, db, table) = (
+        src_name.to_string(),
+        src_db
+            .map(str::to_string)
+            .unwrap_or_else(|| ui_kit::t!("(default db)", "(默认库)").to_string()),
+        src_table.to_string(),
+    );
+    theme::form_row(ui, ui_kit::t!("Source", "源"), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.label(RichText::new(name).size(13.0).color(p.text2));
+            ui.label(RichText::new("/").size(13.0).color(p.muted));
+            ui.label(RichText::new(db).size(13.0).color(p.text2));
+            ui.label(RichText::new("›").size(13.0).color(p.muted));
+            ui.label(RichText::new(table).size(13.0).strong().color(p.text));
+        });
+    });
+    let mut picked = None;
+    theme::form_row(ui, ui_kit::t!("Target Connection", "目标连接"), |ui| {
+        if conn_opts.is_empty() {
+            if let Some(msg) = notice {
+                ui.add_space(5.0);
+                ui.label(RichText::new(msg).size(12.0).color(DIFF_ORANGE));
+            }
+        } else if let Some(v) =
+            theme::select(ui, sel_id, dst_conn, conn_opts, ui.available_width())
+        {
+            picked = Some(v);
+        }
+        if !caption.is_empty() {
+            ui.add_space(6.0);
+            ui.label(RichText::new(caption).size(11.0).color(p.muted));
+        }
+    });
+    theme::form_row(ui, ui_kit::t!("Target Database", "目标库"), |ui| {
+        theme::field_hint(
+            ui,
+            field_ids.0,
+            dst_db,
+            ui.available_width(),
+            false,
+            db_hint,
+        )
+    });
+    theme::form_row(ui, ui_kit::t!("Target Table", "目标表名"), |ui| {
+        theme::field(ui, field_ids.1, dst_table, ui.available_width(), false)
+    });
+    picked
+}
+
 /// 插件管理器面板:transform(WASM)与 driver(子进程)统一列表 + 状态/版本/说明
 pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     if !app.plugin_manager_open {
@@ -2655,7 +2747,7 @@ pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .frame(theme::modal_frame())
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
-            ui.set_width(560.0);
+            ui.set_width(600.0);
             let Some(st) = app.transfer.as_mut() else { return };
             let src_type = app
                 .conns
@@ -2664,173 +2756,192 @@ pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 .map(|c| c.db_type)
                 .unwrap_or(shujing_core::DbType::MySql);
             theme::modal_title(ui, ui_kit::t!("Data Transfer", "数据传输"));
-            let src_line = if ui_kit::i18n::is_english() {
-                format!(
-                    "Source: {} · {} · {}",
-                    st.src_conn,
-                    st.src_db.as_deref().unwrap_or(ui_kit::t!("(default db)", "(默认库)")),
-                    st.src_table
-                )
-            } else {
-                format!(
-                    "源:{} · {} · {}",
-                    st.src_conn,
-                    st.src_db.as_deref().unwrap_or(ui_kit::t!("(default db)", "(默认库)")),
-                    st.src_table
-                )
-            };
-            ui.label(RichText::new(src_line).size(11.5).color(p.muted));
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(ui_kit::t!("Target connection (same type only)", "目标连接(仅同类型)"))
-                    .size(11.0)
-                    .color(p.muted),
-            );
+            let src_name = app
+                .conns
+                .iter()
+                .find(|c| c.id == st.src_conn)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| st.src_conn.clone());
             let conn_opts: Vec<(String, String)> = app
                 .conns
                 .iter()
                 .filter(|c| c.id != st.src_conn && c.db_type == src_type)
-                .map(|c| (c.id.clone(), format!("{} ({})", c.name, c.id)))
+                .map(|c| (c.id.clone(), conn_opt_label(c)))
                 .collect();
-            if conn_opts.is_empty() {
-                ui.label(
-                    RichText::new(ui_kit::t!(
-                        "No other connection of the same type — add a target connection in the sidebar first",
-                        "没有同类型的其他连接——先在侧栏添加目标连接"
-                    ))
-                        .size(12.0)
-                        .color(DIFF_ORANGE),
-                );
-            } else {
-                let cur = st.dst_conn.clone();
-                if let Some(v) = theme::select(ui, "tf-dst-conn", &cur, &conn_opts, 320.0) {
-                    st.dst_conn = v;
-                }
+            let picked = src_target_form(
+                ui,
+                &src_name,
+                st.src_db.as_deref(),
+                &st.src_table,
+                ui_kit::t!(
+                    "Only connections of the same database type can be the target",
+                    "只能选同类型的连接作目标"
+                ),
+                Some(ui_kit::t!(
+                    "No other connection of the same type — add a target connection in the sidebar first",
+                    "没有同类型的其他连接——先在侧栏添加目标连接"
+                )),
+                &conn_opts,
+                "tf-dst-conn",
+                &st.dst_conn,
+                &mut st.dst_db,
+                &mut st.dst_table,
+                ("tf-dst-db", "tf-dst-table"),
+                "",
+            );
+            if let Some(v) = picked {
+                st.dst_conn = v;
             }
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    theme::form_field(ui, ui_kit::t!("Target Database", "目标库"), "tf-dst-db", &mut st.dst_db, 200.0, false);
-                });
-                ui.add_space(4.0);
-                ui.vertical(|ui| {
-                    theme::form_field(ui, ui_kit::t!("Target Table", "目标表名"), "tf-dst-table", &mut st.dst_table, 200.0, false);
-                });
-            });
-            ui.add_space(2.0);
-            {
-                let mut wd = st.with_data;
-                if theme::checkbox(ui, &mut wd, ui_kit::t!("Copy data (unchecked = structure only)", "搬运数据(不勾=只建结构)")).changed() {
-                    st.with_data = wd;
-                }
-            }
-            // 字段映射(可选):加载源结构后逐列改目标列名;留空=同构直插自动建表
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let has_map = st.mapping.is_some();
-                if theme::button(
+            ui.add_space(10.0);
+
+            let mut wd = st.with_data;
+            theme::form_row(ui, ui_kit::t!("Options", "选项"), |ui| {
+                theme::checkbox(
                     ui,
-                    if has_map {
-                        ui_kit::t!("Clear Mapping", "清除映射")
-                    } else {
-                        ui_kit::t!("Field Mapping…", "字段映射…")
-                    },
-                    theme::BtnKind::Secondary,
+                    &mut wd,
+                    ui_kit::t!("Copy data (unchecked = structure only)", "搬运数据(不勾=只建结构)"),
                 )
-                .clicked()
-                {
+            });
+            st.with_data = wd;
+
+            // 字段映射(可选):加载源结构后逐列改目标列名;留空=同构直插自动建表
+            let mut toggle_mapping = false;
+            let has_map = st.mapping.is_some();
+            theme::form_row(ui, ui_kit::t!("Field Mapping", "字段映射"), |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if theme::button(
+                        ui,
+                        if has_map {
+                            ui_kit::t!("Clear Mapping", "清除映射")
+                        } else {
+                            ui_kit::t!("Field Mapping…", "字段映射…")
+                        },
+                        theme::BtnKind::Secondary,
+                    )
+                    .clicked()
+                    {
+                        toggle_mapping = true;
+                    }
                     if has_map {
-                        st.mapping = None;
-                    } else if let Some(cols) = &st.map_srcs {
-                        st.mapping = Some(cols.iter().cloned().map(|c| (c, String::new())).collect());
-                    } else {
-                        st.error = Some(
-                            ui_kit::t!(
-                                "Source structure still loading, try again",
-                                "源结构还在加载,稍后再点"
-                            )
-                            .to_string(),
+                        ui.label(
+                            RichText::new(ui_kit::t!(
+                                "Target table must already exist; empty target column = skip",
+                                "映射模式不自动建表(目标表须已存在);目标列留空=跳过该源列"
+                            ))
+                            .size(11.0)
+                            .color(p.muted),
                         );
                     }
-                }
-                if st.mapping.is_some() {
-                    ui.label(
-                        RichText::new(ui_kit::t!(
-                            "Target table must already exist; empty target column = skip",
-                            "映射模式不自动建表(目标表须已存在);目标列留空=跳过该源列"
-                        ))
-                        .size(10.5)
-                        .color(p.muted),
+                });
+            });
+            if toggle_mapping {
+                if has_map {
+                    st.mapping = None;
+                } else if let Some(cols) = &st.map_srcs {
+                    st.mapping = Some(cols.iter().cloned().map(|c| (c, String::new())).collect());
+                } else {
+                    st.error = Some(
+                        ui_kit::t!(
+                            "Source structure still loading, try again",
+                            "源结构还在加载,稍后再点"
+                        )
+                        .to_string(),
                     );
                 }
-            });
-            if let Some(map) = &mut st.mapping {
-                egui::ScrollArea::vertical()
-                    .id_salt("tf-map-scroll")
-                    .max_height(160.0)
-                    .show(ui, |ui| {
-                        egui::Grid::new("tf-map-grid")
-                            .num_columns(3)
-                            .spacing([10.0, 3.0])
-                            .show(ui, |ui| {
-                                ui.label(RichText::new(ui_kit::t!("Source", "源列")).size(10.5).color(p.muted));
-                                ui.label(RichText::new(ui_kit::t!("→ Target", "→ 目标列")).size(10.5).color(p.muted));
-                                ui.label(RichText::new("").size(10.5));
-                                ui.end_row();
-                                for (src, dst) in map.iter_mut() {
-                                    ui.label(RichText::new(src.clone()).font(theme::mono(11.5)).color(p.text));
-                                    theme::field(ui, &format!("tf-map-{}", src), dst, 160.0, false);
-                                    ui.end_row();
-                                }
-                            });
-                    });
             }
-            {
-                let mut df = st.drop_first;
+            if let Some(map) = &mut st.mapping {
+                // 映射表落在控件列里(标签列留空),与上方各行左缘对齐
+                theme::form_row(ui, "", |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("tf-map-scroll")
+                        .max_height(160.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("tf-map-grid")
+                                .num_columns(2)
+                                .spacing([10.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(ui_kit::t!("Source", "源列"))
+                                            .size(11.0)
+                                            .color(p.muted),
+                                    );
+                                    ui.label(
+                                        RichText::new(ui_kit::t!("→ Target", "→ 目标列"))
+                                            .size(11.0)
+                                            .color(p.muted),
+                                    );
+                                    ui.end_row();
+                                    for (src, dst) in map.iter_mut() {
+                                        ui.label(
+                                            RichText::new(src.clone())
+                                                .font(theme::mono(11.5))
+                                                .color(p.text),
+                                        );
+                                        theme::field(ui, &format!("tf-map-{}", src), dst, 220.0, false);
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                });
+            }
+
+            let mut df = st.drop_first;
+            theme::form_row(ui, ui_kit::t!("Existing Table", "目标已存在"), |ui| {
                 let r = theme::checkbox(
                     ui,
                     &mut df,
-                    ui_kit::t!("Drop target table first (DROP IF EXISTS, destructive)", "先删除目标表(DROP IF EXISTS,破坏性)"),
+                    ui_kit::t!(
+                        "Drop target table first (DROP IF EXISTS, destructive)",
+                        "先删除目标表(DROP IF EXISTS,破坏性)"
+                    ),
                 );
-                let changed = r.changed();
                 r.on_hover_text(ui_kit::t!(
                     "Required when the target already has a table with the same name, otherwise creating it fails",
                     "目标已存在同名表时必须勾选,否则建表失败"
                 ));
-                if changed {
-                    st.drop_first = df;
-                }
-            }
-            if let Some(err) = &st.error {
-                ui.add_space(4.0);
-                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
-            }
-            ui.label(
-                RichText::new(ui_kit::t!(
-                    "Transfer is idempotent and can be rerun: after a failure, check Drop target table first and retry",
-                    "传输幂等可重跑:失败后先勾选删除目标表再重试"
-                ))
-                    .size(10.5)
-                    .color(p.muted),
-            );
-            theme::modal_footer(ui, |ui| {
-                if theme::button(
-                    ui,
-                    if st.running {
-                        ui_kit::t!("Transferring…", "传输中…")
-                    } else {
-                        ui_kit::t!("Start Transfer", "开始传输")
-                    },
-                    theme::BtnKind::Primary,
-                )
-                .clicked()
-                    && !st.running
-                {
-                    run = true;
-                }
-                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
-                    close = true;
-                }
             });
+            st.drop_first = df;
+            if let Some(err) = &st.error {
+                theme::form_row(ui, "", |ui| {
+                    ui.label(RichText::new(icons::clip(err, 110)).size(12.0).color(p.red));
+                });
+            }
+            theme::modal_footer_lr(
+                ui,
+                |ui| {
+                    ui.label(
+                        RichText::new(ui_kit::t!(
+                            "Idempotent and rerunnable: after a failure, tick the drop option and retry",
+                            "传输幂等可重跑:失败后先勾选删除目标表再重试"
+                        ))
+                        .size(11.0)
+                        .color(p.muted),
+                    );
+                },
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if theme::button(
+                        ui,
+                        if st.running {
+                            ui_kit::t!("Transferring…", "传输中…")
+                        } else {
+                            ui_kit::t!("Start Transfer", "开始传输")
+                        },
+                        theme::BtnKind::Primary,
+                    )
+                    .clicked()
+                        && !st.running
+                    {
+                        run = true;
+                    }
+                    if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary)
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                },
+            );
         });
     if run {
         app.run_transfer();
@@ -2855,64 +2966,38 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.set_width(720.0);
             let Some(st) = app.data_diff.as_mut() else { return };
             theme::modal_title(ui, ui_kit::t!("Data Compare", "数据对比"));
-            let src_line = if ui_kit::i18n::is_english() {
-                format!(
-                    "Source: {} · {} · {}",
-                    st.src_conn,
-                    st.src_db.as_deref().unwrap_or(ui_kit::t!("(default db)", "(默认库)")),
-                    st.src_table
-                )
-            } else {
-                format!(
-                    "源:{} · {} · {}",
-                    st.src_conn,
-                    st.src_db.as_deref().unwrap_or(ui_kit::t!("(default db)", "(默认库)")),
-                    st.src_table
-                )
-            };
-            ui.label(RichText::new(src_line).size(11.5).color(p.muted));
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(ui_kit::t!("Target (same type connection)", "目标(同类型连接)"))
-                    .size(11.0)
-                    .color(p.muted),
-            );
+            let src_name = app
+                .conns
+                .iter()
+                .find(|c| c.id == st.src_conn)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| st.src_conn.clone());
             let conn_opts: Vec<(String, String)> = app
                 .conns
                 .iter()
                 .filter(|c| c.id != st.src_conn)
-                .map(|c| (c.id.clone(), format!("{} ({})", c.name, c.id)))
+                .map(|c| (c.id.clone(), conn_opt_label(c)))
                 .collect();
-            let cur = st.dst_conn.clone();
-            if let Some(v) = theme::select(ui, "dd-dst-conn", &cur, &conn_opts, 320.0) {
+            let picked = src_target_form(
+                ui,
+                &src_name,
+                st.src_db.as_deref(),
+                &st.src_table,
+                ui_kit::t!("Rows are aligned by primary key", "按主键逐行对齐"),
+                None,
+                &conn_opts,
+                "dd-dst-conn",
+                &st.dst_conn,
+                &mut st.dst_db,
+                &mut st.dst_table,
+                ("dd-dst-db", "dd-dst-table"),
+                "",
+            );
+            if let Some(v) = picked {
                 st.dst_conn = v;
             }
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    theme::form_field(ui, ui_kit::t!("Target Database", "目标库"), "dd-dst-db", &mut st.dst_db, 200.0, false);
-                });
-                ui.add_space(4.0);
-                ui.vertical(|ui| {
-                    theme::form_field(ui, ui_kit::t!("Target Table", "目标表名"), "dd-dst-table", &mut st.dst_table, 200.0, false);
-                });
-            });
-            ui.add_space(4.0);
-            if theme::button(
-                ui,
-                if st.running {
-                    ui_kit::t!("Comparing…", "对比中…")
-                } else {
-                    ui_kit::t!("Run Compare", "运行对比")
-                },
-                theme::BtnKind::Primary,
-            )
-                .clicked()
-                && !st.running
-            {
-                run = true;
-            }
             if let Some(err) = &st.error {
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(p.red));
             }
             if let Some(d) = &st.result {
@@ -3019,11 +3104,33 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     });
                 }
             }
-            theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
-                    close = true;
-                }
-            });
+            theme::modal_footer_lr(
+                ui,
+                |_ui| {},
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    // "运行对比"在底栏:此前悬在表单中间,和结果区抢位置
+                    if theme::button(
+                        ui,
+                        if st.running {
+                            ui_kit::t!("Comparing…", "对比中…")
+                        } else {
+                            ui_kit::t!("Run Compare", "运行对比")
+                        },
+                        theme::BtnKind::Primary,
+                    )
+                    .clicked()
+                        && !st.running
+                    {
+                        run = true;
+                    }
+                    if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                },
+            );
         });
     if run {
         app.run_data_diff();
@@ -3251,60 +3358,34 @@ pub fn draw_schema_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             // 弹窗期间借走状态,结束前写回
             let Some(st) = app.schema_diff.as_mut() else { return };
             theme::modal_title(ui, ui_kit::t!("Schema Compare", "结构对比"));
-            let src_line = if ui_kit::i18n::is_english() {
-                format!(
-                    "Source: {} · {} · {}",
-                    st.src_conn,
-                    st.src_db.as_deref().unwrap_or(ui_kit::t!("(default db)", "(默认库)")),
-                    st.src_table
-                )
-            } else {
-                format!(
-                    "源:{} · {} · {}",
-                    st.src_conn,
-                    st.src_db.as_deref().unwrap_or(ui_kit::t!("(default db)", "(默认库)")),
-                    st.src_table
-                )
-            };
-            ui.label(RichText::new(src_line).size(11.5).color(p.muted));
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(ui_kit::t!("Target (align the target table to the source)", "目标(把目标表对齐到源)"))
-                    .size(11.0)
-                    .color(p.muted),
-            );
+            let src_name = app
+                .conns
+                .iter()
+                .find(|c| c.id == st.src_conn)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| st.src_conn.clone());
             let conn_opts: Vec<(String, String)> = app
                 .conns
                 .iter()
-                .map(|c| (c.id.clone(), format!("{} ({})", c.name, c.id)))
+                .map(|c| (c.id.clone(), conn_opt_label(c)))
                 .collect();
-            let cur = st.dst_conn.clone();
-            if let Some(v) = theme::select(ui, "diff-dst-conn", &cur, &conn_opts, 300.0) {
-                st.dst_conn = v;
-            }
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    theme::form_field(ui, ui_kit::t!("Database (blank = default)", "库(空=默认)"), "diff-dst-db", &mut st.dst_db, 200.0, false);
-                });
-                ui.add_space(4.0);
-                ui.vertical(|ui| {
-                    theme::form_field(ui, ui_kit::t!("Table", "表名"), "diff-dst-table", &mut st.dst_table, 200.0, false);
-                });
-            });
-            ui.add_space(4.0);
-            if theme::button(
+            let picked = src_target_form(
                 ui,
-                if st.running {
-                    ui_kit::t!("Comparing…", "对比中…")
-                } else {
-                    ui_kit::t!("Run Compare", "运行对比")
-                },
-                theme::BtnKind::Primary,
-            )
-                .clicked()
-                && !st.running
-            {
-                run = true;
+                &src_name,
+                st.src_db.as_deref(),
+                &st.src_table,
+                ui_kit::t!("Align the target table to the source", "把目标表对齐到源"),
+                None,
+                &conn_opts,
+                "diff-dst-conn",
+                &st.dst_conn,
+                &mut st.dst_db,
+                &mut st.dst_table,
+                ("diff-dst-db", "diff-dst-table"),
+                ui_kit::t!("blank = default", "空 = 默认"),
+            );
+            if let Some(v) = picked {
+                st.dst_conn = v;
             }
             if let Some(err) = &st.error {
                 ui.add_space(6.0);
@@ -3417,11 +3498,32 @@ pub fn draw_schema_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     }
                 }
             }
-            theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary).clicked() {
-                    close = true;
-                }
-            });
+            theme::modal_footer_lr(
+                ui,
+                |_ui| {},
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if theme::button(
+                        ui,
+                        if st.running {
+                            ui_kit::t!("Comparing…", "对比中…")
+                        } else {
+                            ui_kit::t!("Run Compare", "运行对比")
+                        },
+                        theme::BtnKind::Primary,
+                    )
+                    .clicked()
+                        && !st.running
+                    {
+                        run = true;
+                    }
+                    if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                },
+            );
         });
     if run {
         app.run_schema_diff();

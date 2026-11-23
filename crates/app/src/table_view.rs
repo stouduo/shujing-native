@@ -5936,11 +5936,10 @@ fn conn_form_advanced(ui: &mut egui::Ui, m: &mut ConnModal) {
                 ui_kit::t!("Read-only (queries only)", "只读(仅查询)").to_string(),
             ),
         ];
-        // select 显示的是传入的文本:这里要传显示名,不能传内部键(否则显示成 "full")
         let cur = match m.perm {
-            shujing_core::Perm::Full => ui_kit::t!("Full (DDL + DML)", "完整(DDL + DML)"),
-            shujing_core::Perm::Dml => ui_kit::t!("Data ops only, no DDL", "仅数据操作(无 DDL)"),
-            shujing_core::Perm::ReadOnly => ui_kit::t!("Read-only (queries only)", "只读(仅查询)"),
+            shujing_core::Perm::Full => "full",
+            shujing_core::Perm::Dml => "dml",
+            shujing_core::Perm::ReadOnly => "ro",
         };
         if let Some(picked) = theme::select(ui, "conn-perm", cur, &opts, ui.available_width()) {
             m.perm = match picked.as_str() {
