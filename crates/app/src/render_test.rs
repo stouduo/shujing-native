@@ -905,22 +905,74 @@ fn render_query_view_narrow_with_db() {
 
 #[test]
 fn render_conn_modal() {
-    let mut m = crate::app::ConnModal::new();
-    m.name = "dramato-prod".into();
-    m.host = "10.0.0.8".into();
-    m.port = "3306".into();
-    m.user = "readonly".into();
-    m.password = "secret".into();
-    m.database = "dramato".into();
-    m.test_result = Some(Ok("连接成功: MySQL 8.0.36".into()));
-    let cell = std::cell::RefCell::new(Some(m));
-    let app = std::cell::RefCell::new(full_app("role"));
-    render("conn_modal", 1000.0, 720.0, true, move |ctx| {
-        let mut b = app.borrow_mut();
-        draw_app(&mut b, ctx);
-        let mut mb = cell.borrow_mut();
-        let _ = table_view::draw_conn_modal(ctx, mb.as_mut().unwrap());
-    });
+    // 三个分区 tab 各出一张:连接信息 / SSH 隧道(展开) / 高级
+    for (tab, name) in [(0u8, "conn_modal"), (1, "conn_modal_ssh"), (2, "conn_modal_adv")] {
+        let mut m = crate::app::ConnModal::new();
+        m.name = "dramato-prod".into();
+        m.host = "10.0.0.8".into();
+        m.port = "3306".into();
+        m.user = "readonly".into();
+        m.password = "secret".into();
+        m.database = "dramato".into();
+        m.test_result = Some(Ok("连接成功: MySQL 8.0.36".into()));
+        m.tab = tab;
+        m.ssh_enabled = tab == 1;
+        m.ssh_host = "jump.example.com".into();
+        m.ssh_port = "22".into();
+        m.ssh_user = "deploy".into();
+        let cell = std::cell::RefCell::new(Some(m));
+        let app = std::cell::RefCell::new(full_app("role"));
+        render(name, 1000.0, 720.0, true, move |ctx| {
+            let mut b = app.borrow_mut();
+            draw_app(&mut b, ctx);
+            let mut mb = cell.borrow_mut();
+            let _ = table_view::draw_conn_modal(ctx, mb.as_mut().unwrap());
+        });
+    }
+}
+
+#[test]
+fn render_app_forms() {
+    // 依赖应用状态的表单弹窗各出一张:数据传输 / 数据对比 / 结构对比 / 加密备份
+    for (name, kind) in [
+        ("modal_transfer", 0u8),
+        ("modal_data_diff", 1),
+        ("modal_schema_diff", 2),
+        ("modal_conn_crypto", 3),
+    ] {
+        let mut app = full_app("role");
+        let cid = app
+            .conns
+            .iter()
+            .find(|c| c.db_type == shujing_core::DbType::MySql)
+            .map(|c| c.id.clone())
+            .unwrap_or_default();
+        match kind {
+            0 => app.open_transfer(&cid, Some("dramato"), "backend_role_privilege"),
+            1 => app.open_data_diff(&cid, Some("dramato"), "backend_role_privilege"),
+            2 => app.open_schema_diff(&cid, Some("dramato"), "backend_role_privilege"),
+            // 不能走 export_connections_encrypted():它会立刻弹原生保存对话框,测试环境起不来
+            _ => {
+                app.conn_crypto = Some(crate::app::ConnCryptoState {
+                    export: true,
+                    passphrase: String::new(),
+                    confirm: String::new(),
+                    error: None,
+                })
+            }
+        }
+        let cell = std::cell::RefCell::new(app);
+        render(name, 1000.0, 720.0, true, move |ctx| {
+            let mut b = cell.borrow_mut();
+            draw_app(&mut b, ctx);
+            match kind {
+                0 => crate::modals::draw_transfer_modal(&mut b, ctx),
+                1 => crate::modals::draw_data_diff_modal(&mut b, ctx),
+                2 => crate::modals::draw_schema_diff_modal(&mut b, ctx),
+                _ => crate::modals::draw_conn_crypto_modal(&mut b, ctx),
+            }
+        });
+    }
 }
 
 #[test]

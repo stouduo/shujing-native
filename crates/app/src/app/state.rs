@@ -931,6 +931,8 @@ pub struct ConnTree {
 /// 连接编辑弹窗
 pub struct ConnModal {
     pub editing_id: Option<String>,
+    /// 当前分区 tab(0 连接信息 / 1 SSH 隧道 / 末位 高级;本地文件库没有隧道位)
+    pub tab: u8,
     pub name: String,
     pub db_type: shujing_core::DbType,
     pub host: String,
@@ -963,10 +965,12 @@ impl ConnModal {
     pub fn new() -> Self {
         Self {
             editing_id: None,
+            tab: 0,
             name: String::new(),
             db_type: shujing_core::DbType::MySql,
             host: String::new(),
-            port: String::new(),
+            // 预填默认类型的端口:新连接不用手敲,切换类型时再跟随默认值
+            port: "3306".to_string(),
             user: String::new(),
             password: String::new(),
             database: String::new(),
@@ -990,6 +994,7 @@ impl ConnModal {
     pub fn from_conn(c: &ConnInfo) -> Self {
         Self {
             editing_id: Some(c.id.clone()),
+            tab: 0,
             name: c.name.clone(),
             db_type: c.db_type,
             host: c.host.clone().unwrap_or_default(),

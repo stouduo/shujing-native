@@ -5611,353 +5611,88 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
         .frame(theme::modal_frame())
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(600.0);
             theme::modal_title(ui, ui_kit::t!("Connection Settings", "连接配置"));
-            // 表单体可滚动:SSH/插件等条件块多时高度会超小屏视口,此前顶部被裁
+            // 分区 tab(DBX 式):连接信息 / SSH 隧道 / 高级;本地文件库没有隧道
+            let sqlite = m.db_type == shujing_core::DbType::Sqlite;
+            let mut tabs: Vec<&str> = vec![ui_kit::t!("Connection", "连接信息")];
+            if !sqlite {
+                tabs.push(ui_kit::t!("SSH Tunnel", "SSH 隧道"));
+            }
+            tabs.push(ui_kit::t!("Advanced", "高级"));
+            let tab_adv = tabs.len() - 1;
+            let mut tab = (m.tab as usize).min(tab_adv);
+            m.tab = theme::form_tabs(ui, &tabs, &mut tab) as u8;
+            ui.add_space(14.0);
+            // 表单体可滚动:小屏视口下不被裁
             theme::modal_scroll_style(ui);
             egui::ScrollArea::vertical()
                 .id_salt("conn-modal-scroll")
                 .auto_shrink([false, true])
-                .max_height((ui.ctx().screen_rect().height() - 210.0).max(320.0))
+                .max_height((ui.ctx().screen_rect().height() - 250.0).max(300.0))
                 .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 12.0;
-
-            theme::form_field(ui, ui_kit::t!("Name", "名称"), "conn-name", &mut m.name, 440.0, false);
-
-            ui.label(RichText::new(ui_kit::t!("Type", "类型")).size(11.0).color(p.muted));
-            ui.add_space(4.0);
-            // 兼容库提示(协议兼容的国产/分布式库直接用同协议类型连)
-            {
-                let compat: &str = match m.db_type {
-                    shujing_core::DbType::MySql => ui_kit::t!(
-                        "Also connects MariaDB / TiDB / OceanBase / Doris / StarRocks",
-                        "兼容 MariaDB / TiDB / OceanBase / Doris / StarRocks"
-                    ),
-                    shujing_core::DbType::Postgres => ui_kit::t!(
-                        "Also connects KingbaseES / openGauss / GaussDB / CockroachDB",
-                        "兼容 KingbaseES / openGauss / GaussDB / CockroachDB"
-                    ),
-                    _ => "",
-                };
-                if !compat.is_empty() {
-                    ui.label(RichText::new(compat).size(10.5).color(p.muted));
-                }
-            }
-            if segmented_db_type(ui, &mut m.db_type, 440.0) {
-                // 切换类型:端口为空或仍是任一已知类型的默认值时带出新默认
-                // (此前只认 3306/5432/6379,从 Kafka 9092 切 SQL Server 1433 不跟随)
-                let dp = default_port(m.db_type);
-                if !dp.is_empty()
-                    && (m.port.is_empty() || ALL_DEFAULT_PORTS.contains(&m.port.as_str()))
-                {
-                    m.port = dp.to_string();
-                }
-                if m.db_type == shujing_core::DbType::Redis {
-                    m.user.clear();
-                    m.database = "0".to_string();
-                }
-            }
-            ui.add_space(2.0);
-
-            if m.db_type == shujing_core::DbType::Sqlite {
-                theme::form_field(
-                    ui,
-                    ui_kit::t!("File Path", "文件路径"),
-                    "conn-file",
-                    &mut m.file_path,
-                    440.0,
-                    false,
-                );
-            } else {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        theme::form_field(ui, ui_kit::t!("Host", "主机"), "conn-host", &mut m.host, 314.0, false);
-                    });
-                    ui.add_space(4.0);
-                    ui.vertical(|ui| {
-                        theme::form_field(ui, ui_kit::t!("Port", "端口"), "conn-port", &mut m.port, 122.0, false);
-                    });
+                    ui.spacing_mut().item_spacing.y = 14.0;
+                    if tab == tab_adv {
+                        conn_form_advanced(ui, m);
+                    } else if tab == 1 && !sqlite {
+                        conn_form_ssh(ui, m);
+                    } else {
+                        conn_form_basic(ui, m);
+                    }
                 });
-                if m.db_type == shujing_core::DbType::Redis {
-                    theme::form_field(
-                        ui,
-                        ui_kit::t!("Password (optional)", "密码(可选)"),
-                        "conn-pwd",
-                        &mut m.password,
-                        440.0,
-                        true,
-                    );
-                    theme::form_field(
-                        ui,
-                        ui_kit::t!("DB Number (0-15)", "DB 编号(0-15)"),
-                        "conn-db",
-                        &mut m.database,
-                        440.0,
-                        false,
-                    );
-                } else {
-                    theme::form_field(ui, ui_kit::t!("User", "用户"), "conn-user", &mut m.user, 440.0, false);
-                    theme::form_field(ui, ui_kit::t!("Password", "密码"), "conn-pwd", &mut m.password, 440.0, true);
-                    theme::form_field(
-                        ui,
-                        ui_kit::t!("Default Database (optional)", "默认库(可选)"),
-                        "conn-db",
-                        &mut m.database,
-                        440.0,
-                        false,
-                    );
-                }
-            }
 
-            // SSH 隧道(本地文件库无意义,不显示)
-            if m.db_type != shujing_core::DbType::Sqlite {
-                ui.add_space(6.0);
-                let (sec, _) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 26.0),
-                    Sense::click(),
-                );
-                let on = m.ssh_enabled;
-                if ui
-                    .interact(sec, egui::Id::new("conn-ssh-toggle"), Sense::click())
+            theme::modal_footer_lr(
+                ui,
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if theme::button(
+                        ui,
+                        ui_kit::t!("Test Connection", "测试连接"),
+                        theme::BtnKind::Secondary,
+                    )
                     .clicked()
-                {
-                    m.ssh_enabled = !m.ssh_enabled;
-                }
-                ui.painter().text(
-                    egui::pos2(sec.left() + 2.0, sec.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    if on {
-                        ui_kit::t!("▾ SSH Tunnel", "▾ SSH 隧道")
-                    } else {
-                        ui_kit::t!("▸ SSH Tunnel (optional)", "▸ SSH 隧道(可选)")
-                    },
-                    egui::FontId::proportional(11.5),
-                    if on { p.text } else { p.muted },
-                );
-                if on {
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            theme::form_field(
-                                ui,
-                                ui_kit::t!("Jump Host", "跳板机主机"),
-                                "conn-ssh-host",
-                                &mut m.ssh_host,
-                                314.0,
-                                false,
-                            );
-                        });
-                        ui.add_space(4.0);
-                        ui.vertical(|ui| {
-                            theme::form_field(
-                                ui,
-                                ui_kit::t!("Port", "端口"),
-                                "conn-ssh-port",
-                                &mut m.ssh_port,
-                                122.0,
-                                false,
-                            );
-                        });
-                    });
-                    theme::form_field(
-                        ui,
-                        ui_kit::t!("User", "用户"),
-                        "conn-ssh-user",
-                        &mut m.ssh_user,
-                        440.0,
-                        false,
-                    );
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            theme::form_field(
-                                ui,
-                                if m.ssh_key_path.is_empty() {
-                                    ui_kit::t!("Password", "密码")
-                                } else {
-                                    ui_kit::t!("Password (key passphrase)", "密码(私钥口令)")
-                                },
-                                "conn-ssh-pwd",
-                                &mut m.ssh_password,
-                                212.0,
-                                true,
-                            );
-                        });
-                        ui.add_space(4.0);
-                        ui.vertical(|ui| {
-                            theme::form_field(
-                                ui,
-                                ui_kit::t!("Private Key Path (optional, preferred)", "私钥路径(可选,优先)"),
-                                "conn-ssh-key",
-                                &mut m.ssh_key_path,
-                                224.0,
-                                false,
-                            );
-                        });
-                    });
-                    ui.label(
-                        RichText::new(ui_kit::t!(
-                            "When enabled, the host/port above is treated as the database address reachable from the jump host",
-                            "开启后,上方主机/端口视为从跳板机可达的数据库地址"
-                        ))
-                        .size(10.5)
-                        .color(p.muted),
-                    );
-                }
-            }
-
-            // 标识色
-            ui.label(RichText::new(ui_kit::t!("Label Color", "标识色")).size(11.0).color(p.muted));
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let cur = m.color_idx.unwrap_or(0);
-                for (i, (name, c)) in CONN_COLORS.iter().enumerate() {
-                    let sw = egui::Rect::from_center_size(
-                        egui::pos2(ui.cursor().left() + 11.0, ui.cursor().center().y),
-                        egui::vec2(22.0, 22.0),
-                    );
-                    let _ = ui.allocate_space(egui::vec2(22.0, 22.0));
-                    let resp = ui.interact(sw, egui::Id::new(("conn-color", i)), Sense::click());
-                    let selected = cur == i as u8;
-                    let fill = if *c == Color32::TRANSPARENT { p.elevated } else { *c };
-                    ui.painter()
-                        .rect_filled(sw, egui::CornerRadius::same(11), fill);
-                    if *c == Color32::TRANSPARENT {
-                        ui.painter().rect_stroke(
-                            sw,
-                            egui::CornerRadius::same(11),
-                            egui::Stroke::new(1.0, p.border),
-                            egui::StrokeKind::Inside,
+                    {
+                        test = true;
+                    }
+                    // 结果恒占固定槽位:弹窗居中锚定,内容高度随异步结果突变会让
+                    // 整个表单上下平移(重居中),按压中的点击落空
+                    let (slot, _) = ui.allocate_exact_size(egui::vec2(240.0, 16.0), Sense::hover());
+                    if m.testing {
+                        let rect = egui::Rect::from_center_size(
+                            slot.left_top() + egui::vec2(10.0, slot.height() / 2.0),
+                            egui::vec2(12.0, 12.0),
+                        );
+                        egui::Spinner::new()
+                            .size(12.0)
+                            .color(p.muted)
+                            .paint_at(ui, rect);
+                    } else if let Some((txt, color)) = m.test_result.as_ref().map(|r| match r {
+                        Ok(msg) => (icons::clip(msg, 40), p.green),
+                        Err(e) => (icons::clip(e, 40), p.red),
+                    }) {
+                        ui.painter().text(
+                            slot.left_top() + egui::vec2(4.0, slot.height() / 2.0),
+                            egui::Align2::LEFT_CENTER,
+                            txt,
+                            egui::FontId::proportional(11.5),
+                            color,
                         );
                     }
-                    if selected {
-                        ui.painter().rect_stroke(
-                            sw.expand(2.0),
-                            egui::CornerRadius::same(13),
-                            egui::Stroke::new(1.5, p.text2),
-                            egui::StrokeKind::Inside,
-                        );
+                },
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if theme::button(ui, ui_kit::t!("Save", "保存"), theme::BtnKind::Primary)
+                        .clicked()
+                    {
+                        save = true;
                     }
-                    resp.clone().on_hover_text(if *c == Color32::TRANSPARENT {
-                        ui_kit::t!("None", "无")
-                    } else {
-                        name
-                    });
-                    if resp.clicked() {
-                        m.color_idx = Some(i as u8);
+                    if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary)
+                        .clicked()
+                    {
+                        cancel = true;
                     }
-                }
-            });
-            // 权限独立一行(此前与色板挤同一行,基线不齐)
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                // 权限三档:完整(DDL+DML)/仅数据操作/只读;旧"只读"复选框升级而来
-                ui.label(
-                    RichText::new(ui_kit::t!("Permissions", "权限")).size(11.5).color(p.text2),
-                );
-                egui::ComboBox::from_id_salt("conn-perm")
-                    .width(190.0)
-                    .selected_text(match m.perm {
-                        shujing_core::Perm::ReadOnly => ui_kit::t!("Read-only", "只读"),
-                        shujing_core::Perm::Dml => ui_kit::t!("DML only", "仅 DML"),
-                        shujing_core::Perm::Full => ui_kit::t!("Full", "完整"),
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut m.perm,
-                            shujing_core::Perm::Full,
-                            ui_kit::t!("Full (DDL + DML)", "完整(DDL+DML)"),
-                        );
-                        ui.selectable_value(
-                            &mut m.perm,
-                            shujing_core::Perm::Dml,
-                            ui_kit::t!("Data ops only, no DDL", "仅数据操作(无 DDL)"),
-                        );
-                        ui.selectable_value(
-                            &mut m.perm,
-                            shujing_core::Perm::ReadOnly,
-                            ui_kit::t!("Read-only (queries only)", "只读(仅查询)"),
-                        );
-                    });
-            });
-
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(ui_kit::t!("Group", "分组")).size(11.5).color(p.text2),
-                );
-                theme::field(ui, "conn-group", &mut m.group, 200.0, false);
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(ui_kit::t!(
-                        "Optional; groups connections in the sidebar",
-                        "可选;侧栏按此分组显示"
-                    ))
-                        .size(10.5)
-                        .color(p.muted),
-                );
-            });
-
-            // 驱动插件名(连接类型 = 插件驱动 时显示;须与 plugins/<名>/plugin.toml 的 name 一致)
-            let is_plugin = m.db_type == shujing_core::DbType::Plugin;
-            if is_plugin {
-                ui.add_space(2.0);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(ui_kit::t!("Driver Plugin", "驱动插件")).size(11.5).color(p.text2),
-                    );
-                    theme::field(ui, "conn-driver-plugin", &mut m.plugin, 200.0, false);
-                    ui.label(
-                        RichText::new(ui_kit::t!(
-                            "Name of an installed driver plugin (plugins/ dir)",
-                            "已安装驱动插件的名称(plugins/ 目录)"
-                        ))
-                            .size(10.5)
-                            .color(p.muted),
-                    );
-                });
-            }
-
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                if theme::button(ui, ui_kit::t!("Test Connection", "测试连接"), theme::BtnKind::Secondary).clicked() {
-                    test = true;
-                }
-                // spinner/结果恒占一行固定高度:Modal 居中锚定,内容高度随异步结果
-                // 突变会让整个表单上下平移(重居中),按压中的点击落空
-                let (slot, _) = ui.allocate_exact_size(egui::vec2(260.0, 16.0), Sense::hover());
-                if m.testing {
-                    let rect = egui::Rect::from_center_size(
-                        slot.left_top() + egui::vec2(10.0, slot.height() / 2.0),
-                        egui::vec2(12.0, 12.0),
-                    );
-                    egui::Spinner::new()
-                        .size(12.0)
-                        .color(p.muted)
-                        .paint_at(ui, rect);
-                } else if let Some((txt, color)) = m.test_result.as_ref().map(|r| match r {
-                    Ok(msg) => (icons::clip(msg, 40), p.green),
-                    Err(e) => (icons::clip(e, 40), p.red),
-                }) {
-                    ui.painter().text(
-                        slot.left_top() + egui::vec2(4.0, slot.height() / 2.0),
-                        egui::Align2::LEFT_CENTER,
-                        txt,
-                        egui::FontId::proportional(11.5),
-                        color,
-                    );
-                }
-            });
-                });
-
-            theme::modal_footer(ui, |ui| {
-                if theme::button(ui, ui_kit::t!("Save", "保存"), theme::BtnKind::Primary).clicked() {
-                    save = true;
-                }
-                ui.add_space(6.0);
-                if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
-                    cancel = true;
-                }
-            });
+                },
+            );
         });
 
     if test {
@@ -5970,47 +5705,305 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
     action
 }
 
-/// iOS 分段控件:轨道 + 选中凸起
-fn segmented_db_type(ui: &mut egui::Ui, value: &mut shujing_core::DbType, width: f32) -> bool {
-    // 13 类型分段放不下(440px/13≈34px),改下拉(DBX 同款交互);函数签名不变
-    let opts: &[(shujing_core::DbType, &str)] = &[
-        (shujing_core::DbType::MySql, "MySQL"),
-        (shujing_core::DbType::Sqlite, "SQLite"),
-        (shujing_core::DbType::Postgres, "PostgreSQL"),
-        (shujing_core::DbType::Redis, "Redis"),
-        (shujing_core::DbType::Mongo, "MongoDB"),
-        (shujing_core::DbType::Mssql, "SQLServer"),
-        (shujing_core::DbType::ClickHouse, "ClickHouse"),
-        (shujing_core::DbType::Kafka, "Kafka"),
-        (shujing_core::DbType::Rabbit, "RabbitMQ"),
-        (shujing_core::DbType::Mqtt, "MQTT"),
-        (shujing_core::DbType::Plugin, "Plugin"),
-        (shujing_core::DbType::Nacos, "Nacos"),
-        (shujing_core::DbType::Consul, "Consul"),
-        (shujing_core::DbType::Etcd, "etcd"),
-    ];
-    let selected_label = opts
+/// 数据库类型选项(标签即下拉的值;顺序 = 选中 likelihood)
+const DB_TYPE_OPTS: &[(shujing_core::DbType, &str)] = &[
+    (shujing_core::DbType::MySql, "MySQL"),
+    (shujing_core::DbType::Sqlite, "SQLite"),
+    (shujing_core::DbType::Postgres, "PostgreSQL"),
+    (shujing_core::DbType::Redis, "Redis"),
+    (shujing_core::DbType::Mongo, "MongoDB"),
+    (shujing_core::DbType::Mssql, "SQL Server"),
+    (shujing_core::DbType::ClickHouse, "ClickHouse"),
+    (shujing_core::DbType::Kafka, "Kafka"),
+    (shujing_core::DbType::Rabbit, "RabbitMQ"),
+    (shujing_core::DbType::Mqtt, "MQTT"),
+    (shujing_core::DbType::Nacos, "Nacos"),
+    (shujing_core::DbType::Consul, "Consul"),
+    (shujing_core::DbType::Etcd, "etcd"),
+    (shujing_core::DbType::Plugin, "Plugin"),
+];
+
+fn db_type_label(t: shujing_core::DbType) -> &'static str {
+    DB_TYPE_OPTS
         .iter()
-        .find(|(t, _)| t == value)
+        .find(|(x, _)| *x == t)
         .map(|(_, l)| *l)
-        .unwrap_or("MySQL");
-    let mut changed = false;
-    egui::ComboBox::from_id_salt("conn-dbtype")
-        .width(width)
-        .selected_text(selected_label)
-        .show_ui(ui, |ui| {
-            for (t, label) in opts {
-                if ui
-                    .selectable_label(*t == *value, RichText::new(*label).size(12.0))
-                    .clicked()
-                    && *value != *t
-                {
-                    *value = *t;
-                    changed = true;
+        .unwrap_or("MySQL")
+}
+
+/// 切换数据库类型后的联动:端口为空或仍是任一已知类型的默认值时跟随新默认
+/// (只认 3306/5432/6379 的话,从 Kafka 9092 切 SQL Server 1433 不跟随);
+/// Redis 不需要用户名,库名默认 0
+fn on_db_type_change(m: &mut ConnModal) {
+    let dp = default_port(m.db_type);
+    if !dp.is_empty() && (m.port.is_empty() || ALL_DEFAULT_PORTS.contains(&m.port.as_str())) {
+        m.port = dp.to_string();
+    }
+    if m.db_type == shujing_core::DbType::Redis {
+        m.user.clear();
+        m.database = "0".to_string();
+    }
+}
+
+/// 连接信息:名称 / 类型 / 主机端口 / 认证(或 SQLite 文件路径)
+fn conn_form_basic(ui: &mut egui::Ui, m: &mut ConnModal) {
+    let p = theme::c();
+    theme::form_row(ui, ui_kit::t!("Name", "名称"), |ui| {
+        theme::field_hint(
+            ui,
+            "conn-name",
+            &mut m.name,
+            ui.available_width(),
+            false,
+            ui_kit::t!("Optional; generated from type and host", "可选;留空按 类型和主机 生成"),
+        )
+    });
+    theme::form_row(ui, ui_kit::t!("Type", "类型"), |ui| {
+        let opts: Vec<(String, String)> = DB_TYPE_OPTS
+            .iter()
+            .map(|(_, l)| (l.to_string(), l.to_string()))
+            .collect();
+        if let Some(picked) =
+            theme::select(ui, "conn-dbtype", db_type_label(m.db_type), &opts, ui.available_width())
+        {
+            if let Some((t, _)) = DB_TYPE_OPTS.iter().find(|(_, l)| *l == picked) {
+                if m.db_type != *t {
+                    m.db_type = *t;
+                    on_db_type_change(m);
                 }
             }
+        }
+        // 兼容库提示(协议兼容的国产/分布式库直接用同协议类型连)
+        let compat: &str = match m.db_type {
+            shujing_core::DbType::MySql => ui_kit::t!(
+                "Also connects MariaDB / TiDB / OceanBase / Doris / StarRocks",
+                "兼容 MariaDB / TiDB / OceanBase / Doris / StarRocks"
+            ),
+            shujing_core::DbType::Postgres => ui_kit::t!(
+                "Also connects KingbaseES / openGauss / GaussDB / CockroachDB",
+                "兼容 KingbaseES / openGauss / GaussDB / CockroachDB"
+            ),
+            _ => "",
+        };
+        if !compat.is_empty() {
+            ui.add_space(6.0);
+            ui.label(RichText::new(compat).size(11.0).color(p.muted));
+        }
+    });
+
+    if m.db_type == shujing_core::DbType::Sqlite {
+        theme::form_row(ui, ui_kit::t!("File Path", "文件路径"), |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if theme::button(ui, ui_kit::t!("Browse…", "浏览…"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
+                    let picked = rfd::FileDialog::new()
+                        .add_filter("SQLite", &["db", "sqlite", "sqlite3"])
+                        .pick_file();
+                    if let Some(path) = picked {
+                        m.file_path = path.display().to_string();
+                    }
+                }
+                theme::field_hint(
+                    ui,
+                    "conn-file",
+                    &mut m.file_path,
+                    ui.available_width(),
+                    false,
+                    "/path/to/database.db",
+                );
+            });
         });
-    changed
+        return;
+    }
+
+    theme::form_row(ui, ui_kit::t!("Host", "主机"), |ui| {
+        let w = ui.available_width();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            theme::field_hint(ui, "conn-host", &mut m.host, w - 110.0, false, "127.0.0.1");
+            theme::field_hint(ui, "conn-port", &mut m.port, 102.0, false, "端口");
+        });
+    });
+    if m.db_type == shujing_core::DbType::Redis {
+        theme::form_row(ui, ui_kit::t!("Password", "密码"), |ui| {
+            theme::field_hint(
+                ui,
+                "conn-pwd",
+                &mut m.password,
+                ui.available_width(),
+                true,
+                ui_kit::t!("Optional", "可选"),
+            )
+        });
+        theme::form_row(ui, ui_kit::t!("Database", "库"), |ui| {
+            theme::field_hint(ui, "conn-db", &mut m.database, ui.available_width(), false, "0")
+        });
+    } else {
+        theme::form_row(ui, ui_kit::t!("User", "用户"), |ui| {
+            theme::field(ui, "conn-user", &mut m.user, ui.available_width(), false)
+        });
+        theme::form_row(ui, ui_kit::t!("Password", "密码"), |ui| {
+            theme::field(ui, "conn-pwd", &mut m.password, ui.available_width(), true)
+        });
+        theme::form_row(ui, ui_kit::t!("Database", "数据库"), |ui| {
+            theme::field_hint(
+                ui,
+                "conn-db",
+                &mut m.database,
+                ui.available_width(),
+                false,
+                ui_kit::t!("Optional", "可选"),
+            )
+        });
+    }
+}
+
+/// SSH 隧道:开关 + 跳板机信息
+fn conn_form_ssh(ui: &mut egui::Ui, m: &mut ConnModal) {
+    let p = theme::c();
+    theme::form_row(ui, ui_kit::t!("SSH Tunnel", "SSH 隧道"), |ui| {
+        ui.horizontal(|ui| {
+            theme::checkbox(
+                ui,
+                &mut m.ssh_enabled,
+                ui_kit::t!("Connect through a jump host", "通过跳板机连接"),
+            );
+        })
+    });
+    if !m.ssh_enabled {
+        ui.label(
+            RichText::new(ui_kit::t!(
+                "Enable to tunnel the database connection through an SSH jump host",
+                "开启后,数据库连接先经跳板机转发"
+            ))
+            .size(11.5)
+            .color(p.muted),
+        );
+        return;
+    }
+    theme::form_row(ui, ui_kit::t!("Jump Host", "跳板机主机"), |ui| {
+        let w = ui.available_width();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            theme::field_hint(ui, "conn-ssh-host", &mut m.ssh_host, w - 110.0, false, "");
+            theme::field_hint(ui, "conn-ssh-port", &mut m.ssh_port, 102.0, false, "22");
+        });
+    });
+    theme::form_row(ui, ui_kit::t!("User", "用户"), |ui| {
+        theme::field(ui, "conn-ssh-user", &mut m.ssh_user, ui.available_width(), false)
+    });
+    theme::form_row(ui, ui_kit::t!("Password", "密码"), |ui| {
+        theme::field(ui, "conn-ssh-pwd", &mut m.ssh_password, ui.available_width(), true)
+    });
+    theme::form_row(ui, ui_kit::t!("Private Key", "私钥路径"), |ui| {
+        theme::field_hint(
+            ui,
+            "conn-ssh-key",
+            &mut m.ssh_key_path,
+            ui.available_width(),
+            false,
+            ui_kit::t!("Optional; takes precedence over password (~/.ssh/id_ed25519)", "可选;填写后优先于密码(~/.ssh/id_ed25519)"),
+        )
+    });
+    ui.label(
+        RichText::new(ui_kit::t!(
+            "Host and port on the Connection tab are read as the database address reachable from the jump host",
+            "「连接信息」里的主机/端口,视为从跳板机可达的数据库地址"
+        ))
+        .size(11.5)
+        .color(p.muted),
+    );
+}
+
+/// 高级:权限 / 分组 / 标识色 / 驱动插件
+fn conn_form_advanced(ui: &mut egui::Ui, m: &mut ConnModal) {
+    let p = theme::c();
+    // 权限三档:完整(DDL+DML)/ 仅数据操作 / 只读
+    theme::form_row(ui, ui_kit::t!("Permissions", "权限"), |ui| {
+        let opts: Vec<(String, String)> = vec![
+            (
+                "full".into(),
+                ui_kit::t!("Full (DDL + DML)", "完整(DDL + DML)").to_string(),
+            ),
+            (
+                "dml".into(),
+                ui_kit::t!("Data ops only, no DDL", "仅数据操作(无 DDL)").to_string(),
+            ),
+            (
+                "ro".into(),
+                ui_kit::t!("Read-only (queries only)", "只读(仅查询)").to_string(),
+            ),
+        ];
+        // select 显示的是传入的文本:这里要传显示名,不能传内部键(否则显示成 "full")
+        let cur = match m.perm {
+            shujing_core::Perm::Full => ui_kit::t!("Full (DDL + DML)", "完整(DDL + DML)"),
+            shujing_core::Perm::Dml => ui_kit::t!("Data ops only, no DDL", "仅数据操作(无 DDL)"),
+            shujing_core::Perm::ReadOnly => ui_kit::t!("Read-only (queries only)", "只读(仅查询)"),
+        };
+        if let Some(picked) = theme::select(ui, "conn-perm", cur, &opts, ui.available_width()) {
+            m.perm = match picked.as_str() {
+                "dml" => shujing_core::Perm::Dml,
+                "ro" => shujing_core::Perm::ReadOnly,
+                _ => shujing_core::Perm::Full,
+            };
+        }
+    });
+    theme::form_row(ui, ui_kit::t!("Group", "分组"), |ui| {
+        theme::field_hint(
+            ui,
+            "conn-group",
+            &mut m.group,
+            ui.available_width(),
+            false,
+            ui_kit::t!("Optional; groups connections in the sidebar", "可选;侧栏按此分组显示"),
+        )
+    });
+    theme::form_row(ui, ui_kit::t!("Color", "标识色"), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let cur = m.color_idx.unwrap_or(0);
+            for (i, (name, c)) in CONN_COLORS.iter().enumerate() {
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+                let selected = cur == i as u8;
+                let fill = if *c == Color32::TRANSPARENT { p.elevated } else { *c };
+                ui.painter().rect_filled(rect, 11, fill);
+                if *c == Color32::TRANSPARENT {
+                    ui.painter()
+                        .rect_stroke(rect, 11, egui::Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
+                }
+                if selected {
+                    ui.painter().rect_stroke(
+                        rect.expand(2.5),
+                        13,
+                        egui::Stroke::new(1.5, p.text2),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if resp.clicked() {
+                    m.color_idx = Some(i as u8);
+                }
+                resp.on_hover_text(*name);
+            }
+        });
+    });
+    if m.db_type == shujing_core::DbType::Plugin {
+        theme::form_row(ui, ui_kit::t!("Driver Plugin", "驱动插件"), |ui| {
+            theme::field_hint(
+                ui,
+                "conn-driver-plugin",
+                &mut m.plugin,
+                ui.available_width(),
+                false,
+                ui_kit::t!(
+                    "Name of an installed driver plugin (plugins/ dir)",
+                    "已安装驱动插件的名称(plugins/ 目录)"
+                ),
+            )
+        });
+    }
 }
 
 fn default_port(t: shujing_core::DbType) -> &'static str {
@@ -6061,7 +6054,28 @@ fn app_conn_from_modal(m: &ConnModal) -> shujing_core::ConnInfo {
                     .unwrap_or(0)
             )
         }),
-        name: m.name.clone(),
+        name: {
+            let n = m.name.trim();
+            if !n.is_empty() {
+                n.to_string()
+            } else {
+                // 留空自动生成:SQLite 取文件名,其余取"类型·主机"
+                let label = db_type_label(m.db_type);
+                let tail = if m.db_type == shujing_core::DbType::Sqlite {
+                    std::path::Path::new(m.file_path.trim())
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                } else {
+                    m.host.trim().to_string()
+                };
+                if tail.is_empty() {
+                    label.to_string()
+                } else {
+                    format!("{label}·{tail}")
+                }
+            }
+        },
         db_type: m.db_type,
         host: (!m.host.is_empty()).then(|| m.host.clone()),
         port: m.port.parse().ok(),

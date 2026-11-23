@@ -177,7 +177,7 @@ pub const LIGHT: Palette = Palette {
 };
 
 /// 主题预设:每个 = 明暗基调 + 表面配色(文字/语义色随基底派生)。
-/// 0/1 是历史默认(石墨蓝/雾白);☀/☾ 手动切换在两个基调的默认预设间往返
+/// 0/1 是历史默认(石墨灰/雾白);☀/☾ 手动切换在两个基调的默认预设间往返
 pub struct ThemePreset {
     pub name_en: &'static str,
     pub name_zh: &'static str,
@@ -294,9 +294,9 @@ const MINT: Palette = Palette {
     ..LIGHT
 };
 
-/// 主题预设表(index 即持久化 id;0=石墨蓝深 1=雾白浅 为历史默认)
+/// 主题预设表(index 即持久化 id;0=石墨灰深 1=雾白浅 为历史默认)
 pub const PRESETS: [ThemePreset; 9] = [
-    ThemePreset { name_en: "Graphite", name_zh: "石墨蓝", dark: true, palette: DARK },
+    ThemePreset { name_en: "Graphite", name_zh: "石墨灰", dark: true, palette: DARK },
     ThemePreset { name_en: "Fog White", name_zh: "雾白", dark: false, palette: LIGHT },
     ThemePreset { name_en: "AMOLED Black", name_zh: "纯黑", dark: true, palette: AMOLED },
     ThemePreset { name_en: "Jade", name_zh: "墨玉", dark: true, palette: JADE },
@@ -339,7 +339,7 @@ pub fn preset_idx() -> usize {
 }
 
 /// ☀/☾ 语义的明暗切换:目标基调与其当前预设不符时,切到该基调的默认预设
-/// (0=石墨蓝深 / 1=雾白浅)。预设不换基调时是 no-op
+/// (0=石墨灰深 / 1=雾白浅)。预设不换基调时是 no-op
 pub fn set_dark(dark: bool) {
     let cur = PRESETS[preset_idx()].dark;
     if cur != dark {
@@ -916,7 +916,129 @@ pub fn mini_text_button(ui: &mut egui::Ui, label: &str, color: Color32) -> (bool
 
 // ---------------------------------------------------------------- 输入框
 
-/// 表单输入框:圆角卡片底 + 描边,聚焦时系统蓝描边
+// ---------------------------------------------------------------- 表单
+
+/// 表单标签列宽(标签在控件左侧,DBX 式横排)
+pub const FORM_LABEL_W: f32 = 104.0;
+/// 标签列与控件之间的间距
+pub const FORM_GAP: f32 = 10.0;
+/// 表单控件高
+pub const FIELD_H: f32 = 30.0;
+/// 可用宽度不到这个数的窄列(并排布局)退回"标签在上"
+pub const FORM_ROW_MIN_W: f32 = 284.0;
+
+/// 宽度语义:调用方给的 width ≥ 可用宽 = "占满";否则按给定宽
+pub fn fit_width(width: f32, avail: f32) -> f32 {
+    if width >= avail - 1.0 {
+        avail
+    } else {
+        width.min(avail).max(60.0)
+    }
+}
+
+/// 横排表单行:左侧标签列(定宽,长标签折行)+ 右侧控件区。标签对齐到第一行控件
+/// (控件比一行高时,如带说明文字/多行输入,标签仍与首行居中)。返回控件的返回值
+pub fn form_row<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let p = c();
+    let avail = ui.available_rect_before_wrap();
+    ui.allocate_new_ui(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(
+                avail.min,
+                egui::vec2(avail.width(), FIELD_H),
+            ))
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+        |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            let row = ui.max_rect();
+            let ctrl_left = row.left() + FORM_LABEL_W + FORM_GAP;
+            let mut ctrl = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_max(
+                        egui::pos2(ctrl_left, row.top()),
+                        row.max,
+                    ))
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            let out = add(&mut ctrl);
+            let h = ctrl.min_rect().height().max(FIELD_H);
+            let _ = ui.allocate_exact_size(egui::vec2(row.width(), h), egui::Sense::hover());
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                label.to_owned(),
+                egui::FontId::proportional(13.0),
+                p.text,
+            );
+            job.wrap.max_width = FORM_LABEL_W;
+            job.wrap.max_rows = 2;
+            job.wrap.break_anywhere = true;
+            job.wrap.overflow_character = Some('…');
+            let g = ui.painter().layout_job(job);
+            ui.painter().galley(
+                egui::pos2(
+                    row.left(),
+                    row.top() + h.min(FIELD_H) / 2.0 - g.size().y / 2.0,
+                ),
+                g,
+                p.text,
+            );
+            out
+        },
+    )
+    .inner
+}
+
+/// 表单分区 tab(DBX 式分段:选中项淡底)。返回当前选中的下标
+pub fn form_tabs(ui: &mut egui::Ui, tabs: &[&str], selected: &mut usize) -> usize {
+    let p = c();
+    // 必须给定矩形:不给的话子区域会吃掉父区域的全部可用高度,把弹窗撑成整屏高
+    let avail = ui.available_rect_before_wrap();
+    ui.allocate_new_ui(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(
+                avail.min,
+                egui::vec2(avail.width(), 26.0),
+            ))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (i, t) in tabs.iter().enumerate() {
+                let on = i == *selected;
+                let color = if on { p.text } else { p.text2 };
+                let g = ui
+                    .painter()
+                    .layout_no_wrap((*t).to_owned(), egui::FontId::proportional(12.5), color);
+                // 先铺底再画字:底色若画在 Button 之后会把文字盖住
+                let (rect, r) = ui.allocate_exact_size(
+                    egui::vec2(g.size().x + 16.0, 26.0),
+                    egui::Sense::click(),
+                );
+                if on || r.hovered() {
+                    ui.painter().rect_filled(
+                        rect,
+                        egui::CornerRadius::same(6),
+                        if on { p.hover } else { tint(p.text, 10) },
+                    );
+                }
+                ui.painter().galley(
+                    egui::pos2(rect.left() + 8.0, rect.center().y - g.size().y / 2.0),
+                    g,
+                    color,
+                );
+                if r.clicked() && !on {
+                    *selected = i;
+                }
+            }
+        },
+    );
+    *selected
+}
+
+/// 表单输入框:30pt 高、6pt 圆角描边;聚焦时强调色描边 + 外圈光圈。
+/// 密码框右侧带"显示/隐藏"眼睛
 pub fn field(
     ui: &mut egui::Ui,
     id_salt: &str,
@@ -924,21 +1046,37 @@ pub fn field(
     width: f32,
     pwd: bool,
 ) -> egui::Response {
-    let h = 28.0;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
+    field_hint(ui, id_salt, text, width, pwd, "")
+}
+
+/// 带占位提示的表单输入框
+#[allow(clippy::too_many_arguments)]
+pub fn field_hint(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    text: &mut String,
+    width: f32,
+    pwd: bool,
+    hint: &str,
+) -> egui::Response {
     let p = c();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, FIELD_H), egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(6), p.input_bg);
-    // 描边与按钮同语义:输入框在工具栏/表单里有可辨边界
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(6),
-        egui::Stroke::new(1.0, p.border),
-        egui::StrokeKind::Inside,
+    let show_id = egui::Id::new((id_salt, "field-show"));
+    let mut show = pwd
+        && ui.memory(|m| m.data.get_temp::<bool>(show_id))
+            .unwrap_or(false);
+    let eye_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 15.0, rect.center().y),
+        egui::vec2(22.0, 22.0),
     );
     let inner = egui::Rect::from_min_max(
-        egui::pos2(rect.left() + 10.0, rect.top() + 2.0),
-        egui::pos2(rect.right() - 10.0, rect.bottom() - 2.0),
+        egui::pos2(rect.left() + 10.0, rect.top() + 3.0),
+        egui::pos2(
+            rect.right() - if pwd { 32.0 } else { 10.0 },
+            rect.bottom() - 3.0,
+        ),
     );
     let resp = ui
         .allocate_new_ui(
@@ -950,48 +1088,72 @@ pub fn field(
                     .id(egui::Id::new(id_salt))
                     .frame(false)
                     .margin(egui::Margin::ZERO)
-                    .font(egui::FontId::proportional(12.5))
+                    .font(egui::FontId::proportional(13.0))
                     .desired_width(inner.width());
-                if pwd {
+                if pwd && !show {
                     te = te.password(true);
+                }
+                if !hint.is_empty() {
+                    te = te.hint_text(RichText::new(hint).size(12.5).color(p.muted));
                 }
                 ui.add(te)
             },
         )
         .inner;
-    let border = if resp.has_focus() { p.accent } else { p.border };
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(8),
-        Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
-    );
+    if pwd {
+        let er = ui.interact(eye_rect, show_id.with("eye"), egui::Sense::click());
+        let ec = if er.hovered() { p.text } else { p.muted };
+        if show {
+            crate::icons::eye_glyph(ui.painter(), eye_rect.center(), ec);
+        } else {
+            crate::icons::eye_off_glyph(ui.painter(), eye_rect.center(), ec);
+        }
+        if er.clicked() {
+            show = !show;
+            ui.memory_mut(|m| m.data.insert_temp(show_id, show));
+        }
+        er.on_hover_text(if show { "隐藏密码" } else { "显示密码" });
+    }
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(2.5),
+            egui::CornerRadius::same(8),
+            Stroke::new(3.0, tint(p.accent, 40)),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::same(6),
+            Stroke::new(1.5, p.accent),
+            egui::StrokeKind::Inside,
+        );
+    } else {
+        ui.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::same(6),
+            Stroke::new(1.0, p.border),
+            egui::StrokeKind::Inside,
+        );
+    }
     resp
 }
 
-/// 多行表单输入框(Redis 新建 key 批量录入等):与 field() 同视觉,
-/// 真多行——此前批量录入走 singleline,每行一条的数据全挤在一行里
-pub fn form_field_multiline(
+/// 多行表单输入框的控件部分(标签由 form_field_multiline 负责)
+fn multiline_box(
     ui: &mut egui::Ui,
-    label: &str,
     id_salt: &str,
     text: &mut String,
     width: f32,
     rows: usize,
-) {
+) -> egui::Response {
     let p = c();
-    if !label.is_empty() {
-        ui.label(RichText::new(label).size(11.0).color(p.muted));
-        ui.add_space(4.0);
-    }
-    let line_h = 17.0;
-    let h = (rows.max(2) as f32 * line_h + 12.0).min(260.0);
+    let h = (rows.max(2) as f32 * 17.0 + 12.0).min(260.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
     ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(8), p.input_bg);
+        .rect_filled(rect, egui::CornerRadius::same(6), p.input_bg);
     let inner = egui::Rect::from_min_max(
-        egui::pos2(rect.left() + 10.0, rect.top() + 5.0),
-        egui::pos2(rect.right() - 10.0, rect.bottom() - 5.0),
+        egui::pos2(rect.left() + 10.0, rect.top() + 6.0),
+        egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
     );
     // add_sized 钉死尺寸:TextEdit 按字体行高自撑会越过预留框压到下一个控件
     // (宿主字体恰好装得下时不显,默认字体 metrics 下必现),钉死后框内滚动
@@ -1007,21 +1169,49 @@ pub fn form_field_multiline(
                         .id(egui::Id::new(id_salt))
                         .frame(false)
                         .margin(egui::Margin::ZERO)
-                        .font(egui::FontId::monospace(12.0)),
+                        .font(egui::FontId::proportional(13.0)),
                 )
             },
         )
         .inner;
-    let border = if resp.has_focus() { p.accent } else { p.border };
+    let st = if resp.has_focus() {
+        Stroke::new(1.5, p.accent)
+    } else {
+        Stroke::new(1.0, p.border)
+    };
     ui.painter().rect_stroke(
         rect,
-        egui::CornerRadius::same(8),
-        Stroke::new(1.0, border),
+        egui::CornerRadius::same(6),
+        st,
         egui::StrokeKind::Inside,
     );
+    resp
 }
 
-/// 表单输入框(带上置标签)
+/// 多行表单输入框(带标签):整行宽度时标签在左;并排窄列里退回标签在上
+pub fn form_field_multiline(
+    ui: &mut egui::Ui,
+    label: &str,
+    id_salt: &str,
+    text: &mut String,
+    width: f32,
+    rows: usize,
+) -> egui::Response {
+    if ui.available_width() >= FORM_ROW_MIN_W {
+        form_row(ui, label, |ui| {
+            multiline_box(ui, id_salt, text, fit_width(width, ui.available_width()), rows)
+        })
+    } else {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 5.0;
+            ui.label(RichText::new(label).size(11.5).color(c().muted));
+            multiline_box(ui, id_salt, text, fit_width(width, ui.available_width()), rows)
+        })
+        .inner
+    }
+}
+
+/// 表单输入框(带标签)。整行宽度时标签在左(DBX 式横排);并排窄列里退回标签在上
 pub fn form_field(
     ui: &mut egui::Ui,
     label: &str,
@@ -1029,10 +1219,19 @@ pub fn form_field(
     text: &mut String,
     width: f32,
     pwd: bool,
-) {
-    ui.label(RichText::new(label).size(11.0).color(c().muted));
-    ui.add_space(4.0);
-    field(ui, id_salt, text, width, pwd);
+) -> egui::Response {
+    if ui.available_width() >= FORM_ROW_MIN_W {
+        form_row(ui, label, |ui| {
+            field(ui, id_salt, text, fit_width(width, ui.available_width()), pwd)
+        })
+    } else {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 5.0;
+            ui.label(RichText::new(label).size(11.5).color(c().muted));
+            field(ui, id_salt, text, fit_width(width, ui.available_width()), pwd)
+        })
+        .inner
+    }
 }
 
 /// 侧栏/表格搜索框:卡片底 + 放大镜 + 无框输入
@@ -1095,7 +1294,7 @@ fn input_with_icon(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let fill = if card { p.input_bg } else { p.bg };
     ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(8), fill);
+        .rect_filled(rect, egui::CornerRadius::same(6), fill);
     match icon {
         InputIcon::Search => crate::icons::magnifier(
             ui.painter(),
@@ -1139,7 +1338,7 @@ fn input_with_icon(
     };
     ui.painter().rect_stroke(
         rect,
-        egui::CornerRadius::same(8),
+        egui::CornerRadius::same(6),
         Stroke::new(1.0, border),
         egui::StrokeKind::Inside,
     );
@@ -1164,10 +1363,10 @@ pub fn select(
 
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::click());
     let painter = ui.painter();
-    painter.rect_filled(rect, egui::CornerRadius::same(8), p.bg);
+    painter.rect_filled(rect, egui::CornerRadius::same(6), p.bg);
     painter.rect_stroke(
         rect,
-        egui::CornerRadius::same(8),
+        egui::CornerRadius::same(6),
         Stroke::new(
             1.0,
             if resp.hovered() || opened {
@@ -1278,17 +1477,18 @@ pub fn modal_title(ui: &mut egui::Ui, title: &str) {
         // 各弹窗不必各自接实例——所有 modal 免费获得右上关闭
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let p = c();
-            let r = ui.add(
-                egui::Button::new(
-                    egui::RichText::new("✕")
-                        .size(12.5)
-                        .color(if ui.rect_contains_pointer(ui.max_rect()) {
-                            p.text2
-                        } else {
-                            p.muted
-                        }),
-                )
-                .frame(false),
+            // ✕ 用线条画:应用字体族(SF/冬青/Apple Symbols/Emoji)都不含 U+2715,
+            // 文字字形在真机上显示成豆腐方框
+            let (rect, r) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+            if r.hovered() {
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(6), tint(p.text, 18));
+            }
+            crate::icons::paint_close(
+                ui.painter(),
+                rect.center(),
+                4.5,
+                if r.hovered() { p.text } else { p.text2 },
             );
             if r.clicked() {
                 ui.ctx().input_mut(|i| {
@@ -1307,6 +1507,28 @@ pub fn modal_title(ui: &mut egui::Ui, title: &str) {
     ui.add_space(10.0);
     hairline_at_cursor(ui);
     ui.add_space(16.0);
+}
+
+/// 弹窗底栏(DBX 式):顶部发丝线;左侧放次要动作(如"测试连接"及其结果),
+/// 右侧放 取消 / 主操作。两组各自一行 30pt,高度恒定
+pub fn modal_footer_lr(
+    ui: &mut egui::Ui,
+    left: impl FnOnce(&mut egui::Ui),
+    right: impl FnOnce(&mut egui::Ui),
+) {
+    ui.add_space(16.0);
+    hairline_at_cursor(ui);
+    ui.add_space(12.0);
+    let w = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(w, 30.0),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            right(ui);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), left);
+        },
+    );
+    ui.add_space(2.0);
 }
 
 /// 弹窗底栏容器:先画顶部发丝线再进入右对齐布局

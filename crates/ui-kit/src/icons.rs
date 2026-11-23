@@ -168,6 +168,41 @@ pub fn tab_glyph(ui: &mut Ui, kind: u8, color: egui::Color32, left: f32, center_
     }
 }
 
+/// 眼睛图标(密码 显示/隐藏),宽 13;open = 睁眼(密码明文),否则划一道斜线
+pub fn eye_glyph(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    let st = Stroke::new(1.2, color);
+    let (x, y) = (center.x, center.y);
+    let lid = |s: f32| {
+        egui::Shape::Path(egui::epaint::PathShape {
+            points: vec![
+                egui::pos2(x - 6.5, y),
+                egui::pos2(x - 3.5, y + s * 3.0),
+                egui::pos2(x, y + s * 4.2),
+                egui::pos2(x + 3.5, y + s * 3.0),
+                egui::pos2(x + 6.5, y),
+            ],
+            closed: false,
+            fill: Color32::TRANSPARENT,
+            stroke: st.into(),
+        })
+    };
+    p.add(lid(-1.0));
+    p.add(lid(1.0));
+    p.circle_filled(egui::pos2(x, y), 1.9, color);
+}
+
+/// "密码隐藏"的眼睛:睁眼 + 一道斜线
+pub fn eye_off_glyph(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    eye_glyph(p, center, color);
+    p.line_segment(
+        [
+            egui::pos2(center.x - 6.0, center.y + 5.0),
+            egui::pos2(center.x + 6.0, center.y - 5.0),
+        ],
+        Stroke::new(1.2, color),
+    );
+}
+
 /// 漏斗 glyph(筛选语义),宽 12,高 12
 pub fn funnel_glyph(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
     let st = Stroke::new(1.2, color);
