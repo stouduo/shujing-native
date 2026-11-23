@@ -59,8 +59,10 @@ pub struct TableTab {
     pub sort: Option<(String, bool)>,
     pub pk_cols: Vec<String>,
     pub pk_loaded: bool,
-    /// 列名→类型标注(DBX 式表头绿色小字,如 int / varchar(32))
+    /// 列名→类型标注(DBX 式列头第二行,按类别着色,如 int / varchar(32))
     pub col_types: std::collections::HashMap<String, String>,
+    /// 列名→注释(DBX 式列头第三行灰字,有注释才显示)
+    pub col_comments: std::collections::HashMap<String, String>,
     /// 当前数据对应的 SQL(状态栏预览用,DBX 式)
     pub load_sql: String,
     pub changes: Vec<(usize, String, Option<String>)>,
@@ -135,6 +137,7 @@ impl TableTab {
             pk_cols: vec![],
             pk_loaded: false,
             col_types: Default::default(),
+            col_comments: Default::default(),
             load_sql: String::new(),
             changes: vec![],
             editing: None,

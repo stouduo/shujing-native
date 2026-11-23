@@ -1,17 +1,23 @@
-//! 数镜设计令牌(严格对齐高保真原型):
+//! 数镜设计令牌(对齐 DBX 默认主题的中性灰体系):
 //!
 //! | 令牌 | 深色 | 浅色 |
 //! | --- | --- | --- |
-//! | 背景 systemBackground | `#000000` | `#F6F5F8` |
-//! | 卡片 secondaryBackground | `#1C1C1E` | `#FFFFFF` |
-//! | 凸起 tertiaryBackground | `#2C2C2E` | `#ECEBEF` |
-//! | 分隔 separator | `#38383A` | `#D7D7D9` |
-//! | 强调 systemBlue | `#0A84FF` | `#007AFF` |
-//! | 成功 systemGreen | `#30D158` | `#248A3D` |
-//! | 危险 systemRed | `#FF453A` | `#D70015` |
+//! | 内容区 bg | `#131416` | `#FFFFFF` |
+//! | 侧栏 panel | `#19191C` | `#FAFAFA` |
+//! | 外框 chrome(标签栏/顶栏) | `#1B1B1E` | `#F5F5F5` |
+//! | 网格列头 header | `#202022` | `#EFEFEF` |
+//! | 悬停 hover | `#2E2F33` | `#F5F5F5` |
+//! | 斑马纹 stripe | `#28282B` | `#F0F0F0` |
+//! | 分隔 border | `#2C2D30` | `#E5E5E5` |
+//! | 主文字 text | `#D7D7DB` | `#0A0A0A` |
+//! | 次文字 text2 | `#97989D` | `#737373` |
+//! | 强调(选中/焦点) | `#60A5FA` | `#2563EB` |
+//! | 成功 | `#4ADE80` | `#16A34A` |
+//! | 危险 | `#F3625F` | `#E7000B` |
+//! | 主按钮(反色实心) | `#D0D0D6`/`#131416` | `#171717`/`#FAFAFA` |
 //!
-//! 排版:表名 15 / 连接 14 / 列头 12.5 / 数据格 12 等宽 / 辅助 11。
-//! 节奏:行高 32、工具条 44、标签栏 38、列头 36、状态栏 34。圆角 6/8/9/12。
+//! 排版:表名 15 / 连接 14 / 树 14 / 标签 12 / 列头 13 粗 + 类型 10 / 数据格 13 / 辅助 11。
+//! 节奏:行高 30、工具条 44、标签栏 38、通用列头 36、数据列头 52、状态栏 34。圆角 6/8。
 
 use egui::{style::Selection, Color32, FontFamily, FontId, RichText, Stroke, TextStyle};
 
@@ -24,15 +30,27 @@ pub const MONO_BOLD: &str = "mono-bold";
 
 pub const FS_TABLE_TITLE: f32 = 15.0;
 pub const FS_CONN: f32 = 14.0;
-pub const FS_TREE: f32 = 13.0;
-pub const FS_TAB: f32 = 13.0;
-pub const FS_HEADER: f32 = 12.5;
-pub const FS_DATA: f32 = 12.0;
+/// 侧栏树(DBX 14px)
+pub const FS_TREE: f32 = 14.0;
+/// 标签文字(DBX 12px/500)
+pub const FS_TAB: f32 = 12.0;
+/// 列头名称(DBX 13px/600)
+pub const FS_HEADER: f32 = 13.0;
+/// 列头类型小字(DBX 10px)
+pub const FS_TYPE: f32 = 10.0;
+/// 数据格(DBX 13px 比例字体)
+pub const FS_DATA: f32 = 13.0;
 pub const FS_AUX: f32 = 11.0;
 
 pub const TABBAR_H: f32 = 38.0;
 pub const TOOLBAR_H: f32 = 44.0;
+/// 通用结果网格的单行列头
 pub const HEADER_H: f32 = 36.0;
+/// 表数据网格列头:DBX 两行三段式(名称 16 + 类型 12 + 注释 12,上下内边距各 6)
+pub const DATA_HEADER_H: f32 = 52.0;
+/// 表页内容头(面包屑 + 动作)与查询栏(WHERE/ORDER BY + 动作),对齐 DBX 的 34/36
+pub const CONTENT_HEAD_H: f32 = 34.0;
+pub const QUERYBAR_H: f32 = 36.0;
 /// 数据行高:对齐 DBX 的 29-30(此前 36 偏松,同屏行数少约 17%)
 pub const ROW_H: f32 = 30.0;
 pub const TREE_ROW_H: f32 = 34.0;
@@ -46,6 +64,10 @@ pub struct Palette {
     // 表面
     pub bg: Color32,
     pub panel: Color32,
+    /// 外框色:标签栏/顶部工具栏(比侧栏略浮起一档)
+    pub chrome: Color32,
+    /// 网格列头底色
+    pub header: Color32,
     pub elevated: Color32,
     pub hover: Color32,
     pub border: Color32,
@@ -60,6 +82,9 @@ pub struct Palette {
     pub accent: Color32,
     pub green: Color32,
     pub red: Color32,
+    // 主按钮:DBX 的反色实心(深色主题浅灰底,浅色主题近黑底)
+    pub primary_bg: Color32,
+    pub primary_fg: Color32,
     // 行状态(已按原型透明度预乘到背景)
     pub row_hover: Color32,
     pub active_row: Color32,
@@ -79,30 +104,34 @@ pub struct Palette {
 }
 
 pub const DARK: Palette = Palette {
-    // 石墨蓝:四级表面拉开层次(窗口底 → 面板 → 浮层/表头 → hover),
-    // 行状态色带主色倾向,斑马纹/悬停/选中肉眼可辨
-    bg: Color32::from_rgb(0x0b, 0x0d, 0x11),
-    panel: Color32::from_rgb(0x13, 0x16, 0x1c),
-    elevated: Color32::from_rgb(0x1d, 0x22, 0x2b),
-    hover: Color32::from_rgb(0x26, 0x2c, 0x36),
-    border: Color32::from_rgb(0x2c, 0x32, 0x3d),
-    row_line: Color32::from_rgb(0x22, 0x28, 0x32),
-    text: Color32::from_rgb(0xed, 0xef, 0xf3),
-    text2: Color32::from_rgb(0x9a, 0xa0, 0xaa),
-    muted: Color32::from_rgb(0x6a, 0x70, 0x7a),
-    cell_text: Color32::from_rgb(0xe8, 0xea, 0xee),
-    null_text: Color32::from_rgb(0x4c, 0x53, 0x5e),
-    accent: Color32::from_rgb(0x5b, 0x8c, 0xff),
-    green: Color32::from_rgb(0x3d, 0xd6, 0x8c),
-    red: Color32::from_rgb(0xef, 0x44, 0x44),
-    row_hover: Color32::from_rgba_premultiplied(48, 66, 106, 31),
-    active_row: Color32::from_rgb(0x1e, 0x2d, 0x49),
-    selected_row: Color32::from_rgb(0x19, 0x25, 0x3d),
-    change_bg: Color32::from_rgb(0x10, 0x2a, 0x1d),
-    change_fg: Color32::from_rgb(0x3d, 0xd6, 0x8c),
-    dot_off: Color32::from_rgb(0x4b, 0x52, 0x5c),
-    stripe: Color32::from_rgb(0x14, 0x18, 0x1f),
-    input_bg: Color32::from_rgb(0x17, 0x1b, 0x22),
+    // DBX 默认暗色:纯中性灰四级表面(内容区 → 侧栏 → 外框 → 列头 → hover),
+    // 无色相偏移;选中/hover 才带蓝
+    bg: Color32::from_rgb(0x13, 0x14, 0x16),
+    panel: Color32::from_rgb(0x19, 0x19, 0x1c),
+    chrome: Color32::from_rgb(0x1b, 0x1b, 0x1e),
+    header: Color32::from_rgb(0x20, 0x20, 0x22),
+    elevated: Color32::from_rgb(0x1e, 0x1e, 0x20),
+    hover: Color32::from_rgb(0x2e, 0x2f, 0x33),
+    border: Color32::from_rgb(0x2c, 0x2d, 0x30),
+    row_line: Color32::from_rgb(0x24, 0x25, 0x28),
+    text: Color32::from_rgb(0xd7, 0xd7, 0xdb),
+    text2: Color32::from_rgb(0x97, 0x98, 0x9d),
+    muted: Color32::from_rgb(0x67, 0x68, 0x6d),
+    cell_text: Color32::from_rgb(0xd7, 0xd7, 0xdb),
+    null_text: Color32::from_rgb(0x74, 0x75, 0x7b),
+    accent: Color32::from_rgb(0x60, 0xa5, 0xfa),
+    green: Color32::from_rgb(0x4a, 0xde, 0x80),
+    red: Color32::from_rgb(0xf3, 0x62, 0x5f),
+    primary_bg: Color32::from_rgb(0xd0, 0xd0, 0xd6),
+    primary_fg: Color32::from_rgb(0x13, 0x14, 0x16),
+    row_hover: Color32::from_rgba_premultiplied(13, 13, 14, 15),
+    active_row: Color32::from_rgb(0x1e, 0x40, 0x60),
+    selected_row: Color32::from_rgb(0x1a, 0x33, 0x50),
+    change_bg: Color32::from_rgb(0x13, 0x25, 0x21),
+    change_fg: Color32::from_rgb(0x4a, 0xde, 0x80),
+    dot_off: Color32::from_rgb(0x4a, 0x4b, 0x50),
+    stripe: Color32::from_rgb(0x28, 0x28, 0x2b),
+    input_bg: Color32::from_rgb(0x13, 0x14, 0x16),
     overlay: Color32::from_black_alpha(150),
     shadow: Color32::from_black_alpha(180),
     sql_keyword: Color32::from_rgb(0x7b, 0xa7, 0xff),
@@ -112,28 +141,32 @@ pub const DARK: Palette = Palette {
 };
 
 pub const LIGHT: Palette = Palette {
-    // 雾白:冷调浅灰底 + 纯白面板,选中/hover 带蓝,斑马纹可辨
-    bg: Color32::from_rgb(0xf2, 0xf4, 0xf8),
-    panel: Color32::from_rgb(0xfb, 0xfc, 0xfe),
+    // DBX 默认浅色:纯白内容区 + 近灰侧栏/外框,边框 #e5e5e5 一档到底
+    bg: Color32::from_rgb(0xff, 0xff, 0xff),
+    panel: Color32::from_rgb(0xfa, 0xfa, 0xfa),
+    chrome: Color32::from_rgb(0xf5, 0xf5, 0xf5),
+    header: Color32::from_rgb(0xef, 0xef, 0xef),
     elevated: Color32::from_rgb(0xff, 0xff, 0xff),
-    hover: Color32::from_rgb(0xe4, 0xe8, 0xef),
-    border: Color32::from_rgb(0xd5, 0xdb, 0xe4),
-    row_line: Color32::from_rgb(0xdf, 0xe4, 0xec),
-    text: Color32::from_rgb(0x1b, 0x1f, 0x26),
-    text2: Color32::from_rgb(0x5f, 0x66, 0x73),
-    muted: Color32::from_rgb(0x8a, 0x92, 0x9e),
-    cell_text: Color32::from_rgb(0x1b, 0x1f, 0x26),
-    null_text: Color32::from_rgb(0x98, 0xa0, 0xac),
-    accent: Color32::from_rgb(0x3b, 0x82, 0xf6),
+    hover: Color32::from_rgb(0xf5, 0xf5, 0xf5),
+    border: Color32::from_rgb(0xe5, 0xe5, 0xe5),
+    row_line: Color32::from_rgb(0xec, 0xec, 0xec),
+    text: Color32::from_rgb(0x0a, 0x0a, 0x0a),
+    text2: Color32::from_rgb(0x73, 0x73, 0x73),
+    muted: Color32::from_rgb(0xa3, 0xa3, 0xa3),
+    cell_text: Color32::from_rgb(0x0a, 0x0a, 0x0a),
+    null_text: Color32::from_rgb(0x7a, 0x7a, 0x7a),
+    accent: Color32::from_rgb(0x25, 0x63, 0xeb),
     green: Color32::from_rgb(0x16, 0xa3, 0x4a),
-    red: Color32::from_rgb(0xdc, 0x26, 0x26),
-    row_hover: Color32::from_rgba_premultiplied(96, 137, 214, 22),
-    active_row: Color32::from_rgb(0xdc, 0xe9, 0xff),
-    selected_row: Color32::from_rgb(0xd8, 0xe5, 0xff),
-    change_bg: Color32::from_rgb(0xe7, 0xf8, 0xee),
+    red: Color32::from_rgb(0xe7, 0x00, 0x0b),
+    primary_bg: Color32::from_rgb(0x17, 0x17, 0x17),
+    primary_fg: Color32::from_rgb(0xfa, 0xfa, 0xfa),
+    row_hover: Color32::from_rgba_premultiplied(1, 1, 1, 14),
+    active_row: Color32::from_rgb(0xbf, 0xdb, 0xfe),
+    selected_row: Color32::from_rgb(0xd3, 0xe3, 0xf5),
+    change_bg: Color32::from_rgb(0xe7, 0xf8, 0xf2),
     change_fg: Color32::from_rgb(0x15, 0x80, 0x3d),
-    dot_off: Color32::from_rgb(0xc3, 0xc9, 0xd2),
-    stripe: Color32::from_rgb(0xe9, 0xee, 0xf6),
+    dot_off: Color32::from_rgb(0xc9, 0xc9, 0xc9),
+    stripe: Color32::from_rgb(0xf0, 0xf0, 0xf0),
     input_bg: Color32::from_rgb(0xff, 0xff, 0xff),
     overlay: Color32::from_black_alpha(64),
     shadow: Color32::from_black_alpha(45),
@@ -155,6 +188,8 @@ pub struct ThemePreset {
 const AMOLED: Palette = Palette {
     bg: Color32::from_rgb(0x00, 0x00, 0x00),
     panel: Color32::from_rgb(0x0b, 0x0d, 0x10),
+    chrome: Color32::from_rgb(0x11, 0x11, 0x13),
+    header: Color32::from_rgb(0x1a, 0x1a, 0x1c),
     elevated: Color32::from_rgb(0x15, 0x17, 0x1b),
     hover: Color32::from_rgb(0x1b, 0x1e, 0x23),
     border: Color32::from_rgb(0x20, 0x24, 0x29),
@@ -170,6 +205,8 @@ const AMOLED: Palette = Palette {
 const JADE: Palette = Palette {
     bg: Color32::from_rgb(0x0a, 0x0f, 0x0c),
     panel: Color32::from_rgb(0x12, 0x1a, 0x15),
+    chrome: Color32::from_rgb(0x15, 0x20, 0x1a),
+    header: Color32::from_rgb(0x1c, 0x28, 0x21),
     elevated: Color32::from_rgb(0x1a, 0x24, 0x1d),
     hover: Color32::from_rgb(0x20, 0x2c, 0x25),
     border: Color32::from_rgb(0x25, 0x30, 0x28),
@@ -184,6 +221,8 @@ const JADE: Palette = Palette {
 const OCEAN: Palette = Palette {
     bg: Color32::from_rgb(0x0a, 0x0e, 0x14),
     panel: Color32::from_rgb(0x10, 0x17, 0x20),
+    chrome: Color32::from_rgb(0x13, 0x1b, 0x26),
+    header: Color32::from_rgb(0x1a, 0x24, 0x30),
     elevated: Color32::from_rgb(0x18, 0x22, 0x2e),
     hover: Color32::from_rgb(0x1e, 0x2a, 0x37),
     border: Color32::from_rgb(0x23, 0x2f, 0x3c),
@@ -197,6 +236,8 @@ const OCEAN: Palette = Palette {
 const WINE: Palette = Palette {
     bg: Color32::from_rgb(0x0f, 0x0b, 0x10),
     panel: Color32::from_rgb(0x17, 0x12, 0x1b),
+    chrome: Color32::from_rgb(0x1a, 0x15, 0x20),
+    header: Color32::from_rgb(0x22, 0x1b, 0x2b),
     elevated: Color32::from_rgb(0x1f, 0x19, 0x26),
     hover: Color32::from_rgb(0x26, 0x1f, 0x2e),
     border: Color32::from_rgb(0x2b, 0x23, 0x34),
@@ -210,6 +251,8 @@ const WINE: Palette = Palette {
 const WARM_SAND: Palette = Palette {
     bg: Color32::from_rgb(0xf6, 0xf3, 0xee),
     panel: Color32::from_rgb(0xff, 0xff, 0xff),
+    chrome: Color32::from_rgb(0xf2, 0xee, 0xe8),
+    header: Color32::from_rgb(0xef, 0xe9, 0xe0),
     elevated: Color32::from_rgb(0xef, 0xe9, 0xe0),
     hover: Color32::from_rgb(0xe7, 0xe0, 0xd5),
     border: Color32::from_rgb(0xde, 0xd6, 0xc9),
@@ -224,6 +267,8 @@ const WARM_SAND: Palette = Palette {
 const ROSE_GRAY: Palette = Palette {
     bg: Color32::from_rgb(0xf3, 0xf2, 0xf5),
     panel: Color32::from_rgb(0xff, 0xff, 0xff),
+    chrome: Color32::from_rgb(0xef, 0xee, 0xf1),
+    header: Color32::from_rgb(0xea, 0xe9, 0xed),
     elevated: Color32::from_rgb(0xe9, 0xe8, 0xee),
     hover: Color32::from_rgb(0xe0, 0xdf, 0xe6),
     border: Color32::from_rgb(0xd8, 0xd6, 0xe0),
@@ -237,6 +282,8 @@ const ROSE_GRAY: Palette = Palette {
 const MINT: Palette = Palette {
     bg: Color32::from_rgb(0xf0, 0xf5, 0xf3),
     panel: Color32::from_rgb(0xff, 0xff, 0xff),
+    chrome: Color32::from_rgb(0xec, 0xf2, 0xef),
+    header: Color32::from_rgb(0xe5, 0xee, 0xea),
     elevated: Color32::from_rgb(0xe2, 0xec, 0xe8),
     hover: Color32::from_rgb(0xd8, 0xe5, 0xe0),
     border: Color32::from_rgb(0xcd, 0xdb, 0xd6),
@@ -345,6 +392,119 @@ pub fn tint(color: Color32, alpha: u8) -> Color32 {
     Color32::from_rgba_premultiplied(scale(color.r()), scale(color.g()), scale(color.b()), alpha)
 }
 
+// ---------------------------------------------------------------- 列类型分类着色
+
+/// 列类型类别:列头的类型小字按类别着色(DBX 同款九类)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TypeKind {
+    Integer,
+    Numeric,
+    String,
+    Bool,
+    Temporal,
+    /// 半结构化:JSON/XML/数组/几何…
+    Structured,
+    /// 标识符:UUID
+    Identifier,
+    Binary,
+    Other,
+}
+
+/// 把驱动上报的列类型(可带参数或修饰,如 `varchar(128)`、`int unsigned`、
+/// `timestamp with time zone`)归入类别:取首个字母数字词(自然去掉长度/精度括号),
+/// 再按关键字匹配
+pub fn classify_type(ty: &str) -> TypeKind {
+    let t = ty.trim().to_ascii_lowercase();
+    let head: String = t
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    match head.as_str() {
+        "int" | "integer" | "tinyint" | "smallint" | "mediumint" | "bigint" | "int2" | "int4"
+        | "int8" | "int16" | "int32" | "int64" | "serial" | "bigserial" | "smallserial"
+        | "identity" => TypeKind::Integer,
+        "bool" | "boolean" | "logical" => TypeKind::Bool,
+        "decimal" | "numeric" | "dec" | "number" | "float" | "float4" | "float8" | "float32"
+        | "float64" | "double" | "real" | "money" | "smallmoney" => TypeKind::Numeric,
+        "date" | "datetime" | "datetime2" | "timestamp" | "timestamptz" | "datetimetz" | "time"
+        | "timetz" | "year" | "interval" | "smalldatetime" | "datetimeoffset" => TypeKind::Temporal,
+        "char" | "varchar" | "nchar" | "nvarchar" | "text" | "tinytext" | "mediumtext"
+        | "longtext" | "clob" | "ntext" | "string" | "character" | "varchar2" | "nvarchar2"
+        | "memo" => TypeKind::String,
+        "json" | "jsonb" | "xml" | "array" | "hstore" | "struct" | "map" | "set" | "enum"
+        | "geometry" | "geography" | "point" => TypeKind::Structured,
+        "uuid" => TypeKind::Identifier,
+        "binary" | "varbinary" | "blob" | "bytea" | "image" | "bit" | "raw" | "longblob"
+        | "mediumblob" | "tinyblob" | "bytes" | "byte" | "varbyte" => TypeKind::Binary,
+        _ => TypeKind::Other,
+    }
+}
+
+/// 类别对应的类型小字颜色(DBX 明暗两套色板:浅色深而饱和,深色主题换亮阶)
+pub fn type_color(kind: TypeKind) -> Color32 {
+    let pairs: [(TypeKind, (u8, u8, u8), (u8, u8, u8)); 8] = [
+        (TypeKind::Integer, (0x1d, 0x4e, 0xd8), (0x93, 0xc5, 0xfd)),
+        (TypeKind::Numeric, (0x0e, 0x74, 0x90), (0x67, 0xe8, 0xf9)),
+        (TypeKind::String, (0x16, 0x65, 0x34), (0x86, 0xef, 0xac)),
+        (TypeKind::Bool, (0xc2, 0x41, 0x0c), (0xfd, 0xba, 0x74)),
+        (TypeKind::Temporal, (0x7e, 0x22, 0xce), (0xd8, 0xb4, 0xfe)),
+        (TypeKind::Structured, (0xbe, 0x18, 0x5d), (0xf9, 0xa8, 0xd4)),
+        (TypeKind::Identifier, (0x92, 0x40, 0x0e), (0xfc, 0xd3, 0x4d)),
+        (TypeKind::Binary, (0xb9, 0x1c, 0x1c), (0xfc, 0xa5, 0xa5)),
+    ];
+    for (k, light, dark) in pairs {
+        if k == kind {
+            let (r, g, b) = if is_dark() { dark } else { light };
+            return Color32::from_rgb(r, g, b);
+        }
+    }
+    c().text2
+}
+
+/// 查询栏 WHERE 芯片文字(DBX 蓝)
+pub fn where_color() -> Color32 {
+    if is_dark() {
+        Color32::from_rgb(0x60, 0xa5, 0xfa)
+    } else {
+        Color32::from_rgb(0x25, 0x63, 0xeb)
+    }
+}
+
+/// 查询栏 ORDER BY 芯片文字(DBX 橙)
+pub fn order_color() -> Color32 {
+    if is_dark() {
+        Color32::from_rgb(0xfb, 0x92, 0x3c)
+    } else {
+        Color32::from_rgb(0xea, 0x58, 0x0c)
+    }
+}
+
+/// 激活标签的薄荷绿淡底(DBX:青绿 16~24% 叠在外框色上,这里直接取叠加后的实色)
+pub fn tab_active_bg() -> Color32 {
+    if is_dark() {
+        Color32::from_rgb(0x20, 0x48, 0x42)
+    } else {
+        Color32::from_rgb(0xd5, 0xed, 0xe8)
+    }
+}
+
+/// 主键钥匙图标(DBX 橙)
+pub fn pk_key_color() -> Color32 {
+    if is_dark() {
+        Color32::from_rgb(0xfb, 0x92, 0x3c)
+    } else {
+        Color32::from_rgb(0xf0, 0x84, 0x25)
+    }
+}
+
+/// sRGB 线性混合:t=0 取 a,t=1 取 b(标签描边 = 文字色按比例掺进边框色)
+pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(f(a.r(), b.r()), f(a.g(), b.g()), f(a.b(), b.b()))
+}
+
 // ---------------------------------------------------------------- 字体
 
 pub fn bold(size: f32) -> FontId {
@@ -398,7 +558,7 @@ pub fn apply(ctx: &egui::Context) {
     v.panel_fill = p.bg;
     v.faint_bg_color = p.stripe;
     v.extreme_bg_color = p.input_bg;
-    v.window_fill = p.panel;
+    v.window_fill = p.elevated;
     v.override_text_color = Some(p.text);
     v.window_stroke = Stroke::new(1.0, p.border);
     v.hyperlink_color = p.accent;
@@ -408,8 +568,8 @@ pub fn apply(ctx: &egui::Context) {
         bg_fill: tint(p.accent, 70),
         stroke: Stroke::NONE,
     };
-    v.window_corner_radius = egui::CornerRadius::same(12);
-    v.menu_corner_radius = egui::CornerRadius::same(10);
+    v.window_corner_radius = egui::CornerRadius::same(8);
+    v.menu_corner_radius = egui::CornerRadius::same(6);
     v.window_shadow = egui::epaint::Shadow {
         offset: [0, 12],
         blur: 32,
@@ -428,27 +588,27 @@ pub fn apply(ctx: &egui::Context) {
     w.noninteractive.weak_bg_fill = p.panel;
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text2);
     w.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
-    w.noninteractive.corner_radius = egui::CornerRadius::same(8);
+    w.noninteractive.corner_radius = egui::CornerRadius::same(6);
     w.inactive.bg_fill = Color32::TRANSPARENT;
     w.inactive.weak_bg_fill = Color32::TRANSPARENT;
     w.inactive.fg_stroke = Stroke::new(1.0, p.text2);
     w.inactive.bg_stroke = Stroke::NONE;
-    w.inactive.corner_radius = egui::CornerRadius::same(8);
+    w.inactive.corner_radius = egui::CornerRadius::same(6);
     w.hovered.bg_fill = p.hover;
     w.hovered.weak_bg_fill = p.hover;
     w.hovered.fg_stroke = Stroke::new(1.0, p.text);
     w.hovered.bg_stroke = Stroke::NONE;
-    w.hovered.corner_radius = egui::CornerRadius::same(8);
+    w.hovered.corner_radius = egui::CornerRadius::same(6);
     w.active.bg_fill = tint(p.accent, 56);
     w.active.weak_bg_fill = tint(p.accent, 56);
     w.active.fg_stroke = Stroke::new(1.0, p.text);
     w.active.bg_stroke = Stroke::NONE;
-    w.active.corner_radius = egui::CornerRadius::same(8);
+    w.active.corner_radius = egui::CornerRadius::same(6);
     w.open.bg_fill = p.elevated;
     w.open.weak_bg_fill = p.elevated;
     w.open.fg_stroke = Stroke::new(1.0, p.text);
     w.open.bg_stroke = Stroke::new(1.0, p.border);
-    w.open.corner_radius = egui::CornerRadius::same(8);
+    w.open.corner_radius = egui::CornerRadius::same(6);
 
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 5.0);
@@ -529,7 +689,7 @@ pub fn hairline_top(ui: &egui::Ui) {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum BtnKind {
-    /// 系统蓝填充(主操作)
+    /// 反色实心(DBX 主操作:深色主题浅灰底,浅色主题近黑底)
     Primary,
     /// 系统绿填充(保存)
     Success,
@@ -543,7 +703,7 @@ impl BtnKind {
     fn colors(self) -> (Color32, Color32, Option<(Color32, Color32)>) {
         let p = c();
         match self {
-            BtnKind::Primary => (p.accent, Color32::WHITE, None),
+            BtnKind::Primary => (p.primary_bg, p.primary_fg, None),
             BtnKind::Success => {
                 if is_dark() {
                     (p.green, Color32::from_rgb(0x04, 0x1f, 0x14), None)
@@ -590,7 +750,14 @@ pub fn button_ex(
         Some((border, sub)) => (sub, border),
         None => {
             let sub = match kind {
-                BtnKind::Primary | BtnKind::Danger => tint(Color32::WHITE, 170),
+                BtnKind::Primary => {
+                    if is_dark() {
+                        tint(p.primary_fg, 150)
+                    } else {
+                        tint(p.primary_fg, 160)
+                    }
+                }
+                BtnKind::Danger => tint(Color32::WHITE, 170),
                 BtnKind::Success => {
                     if is_dark() {
                         tint(Color32::BLACK, 130)
@@ -625,6 +792,9 @@ pub fn button_ex(
     let fill_now = if hovered {
         if fill == Color32::TRANSPARENT {
             p.hover
+        } else if kind == BtnKind::Primary && !is_dark() {
+            // 浅色主题的近黑主按钮:悬停应提亮(DBX 同款),乘法变暗会糊成一团
+            fill.linear_multiply(1.6)
         } else {
             fill.linear_multiply(0.92)
         }
@@ -1151,4 +1321,47 @@ pub fn modal_footer(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut egui::Ui)) 
         add_buttons,
     );
     ui.add_space(2.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_type_strips_args_and_modifiers() {
+        let cases = [
+            ("INTEGER", TypeKind::Integer),
+            ("varchar(128)", TypeKind::String),
+            ("bigint unsigned", TypeKind::Integer),
+            ("NUMERIC(10, 2)", TypeKind::Numeric),
+            ("timestamp with time zone", TypeKind::Temporal),
+            ("character varying", TypeKind::String),
+            ("integer[]", TypeKind::Integer),
+            ("DOUBLE PRECISION", TypeKind::Numeric),
+            ("boolean", TypeKind::Bool),
+            ("jsonb", TypeKind::Structured),
+            ("uuid", TypeKind::Identifier),
+            ("bytea", TypeKind::Binary),
+            ("inet", TypeKind::Other),
+            ("", TypeKind::Other),
+        ];
+        for (ty, want) in cases {
+            assert_eq!(classify_type(ty), want, "type {ty:?}");
+        }
+    }
+
+    #[test]
+    fn type_color_falls_back_to_secondary_text() {
+        assert_eq!(type_color(TypeKind::Other), c().text2);
+        assert_ne!(type_color(TypeKind::Integer), type_color(TypeKind::String));
+    }
+
+    #[test]
+    fn mix_blends_endpoints() {
+        let a = Color32::from_rgb(0, 0, 0);
+        let b = Color32::from_rgb(100, 200, 255);
+        assert_eq!(mix(a, b, 0.0), a);
+        assert_eq!(mix(a, b, 1.0), b);
+        assert_eq!(mix(a, b, 0.5), Color32::from_rgb(50, 100, 128));
+    }
 }

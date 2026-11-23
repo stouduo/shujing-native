@@ -517,6 +517,6 @@ pub fn cell_text_color(v: &Option<String>, changed: bool) -> Color32 {
 pub fn cell_text(v: &Option<String>, max_chars: usize) -> String {
     match v {
         Some(s) => clip(s, max_chars),
-        None => "null".into(),
+        None => "NULL".into(),
     }
 }

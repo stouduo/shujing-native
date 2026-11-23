@@ -1,5 +1,5 @@
 //! 共用结果网格:egui_extras TableBuilder(粘性表头/列宽可调/行虚拟化/横向滚动)。
-//! 查询结果页直接复用;视觉与表数据页一致(32pt 行高、36pt 表头、等宽数据)。
+//! 查询结果页直接复用;视觉与表数据页一致(30pt 行高、36pt 单行列头、13px 比例字体数据)。
 
 use crate::table_view::{badge_value, paint_badge};
 use crate::{icons, theme};
@@ -121,7 +121,7 @@ pub fn result_rows(
                     if geom.header_top.is_none() {
                         geom.header_top = Some(rect.top());
                     }
-                    ui.painter().rect_filled(rect, 0, p.elevated);
+                    ui.painter().rect_filled(rect, 0, p.header);
                     ui.painter().text(
                         egui::pos2(rect.right() - 14.0, rect.center().y),
                         egui::Align2::RIGHT_CENTER,
@@ -134,7 +134,7 @@ pub fn result_rows(
                 for (vw, c) in columns.iter().enumerate() {
                     header.col(|ui| {
                         let rect = ui.max_rect();
-                        ui.painter().rect_filled(rect, 0, p.elevated);
+                        ui.painter().rect_filled(rect, 0, p.header);
                         let font = egui::FontId::proportional(theme::FS_HEADER);
                         let g = icons::text_galley(
                             ui.painter(),
@@ -155,7 +155,7 @@ pub fn result_rows(
                 }
                 header.col(|ui| {
                     let rect = ui.max_rect();
-                    ui.painter().rect_filled(rect, 0, p.elevated);
+                    ui.painter().rect_filled(rect, 0, p.header);
                     header_line(ui, p.border);
                 });
             })
@@ -227,7 +227,7 @@ pub fn result_rows(
                                 let g = icons::text_galley(
                                     &painter,
                                     icons::cell_text(v, 4000),
-                                    theme::mono(theme::FS_DATA),
+                                    egui::FontId::proportional(theme::FS_DATA),
                                     color,
                                     rect.width() - 24.0,
                                 );
@@ -414,7 +414,7 @@ pub fn result_rows_editable(
                     if geom.header_top.is_none() {
                         geom.header_top = Some(rect.top());
                     }
-                    ui.painter().rect_filled(rect, 0, p.elevated);
+                    ui.painter().rect_filled(rect, 0, p.header);
                     ui.painter().text(
                         egui::pos2(rect.right() - 14.0, rect.center().y),
                         egui::Align2::RIGHT_CENTER,
@@ -427,7 +427,7 @@ pub fn result_rows_editable(
                 for (vw, c) in columns.iter().enumerate() {
                     header.col(|ui| {
                         let rect = ui.max_rect();
-                        ui.painter().rect_filled(rect, 0, p.elevated);
+                        ui.painter().rect_filled(rect, 0, p.header);
                         let g = icons::text_galley(
                             ui.painter(),
                             c.clone(),
@@ -447,7 +447,7 @@ pub fn result_rows_editable(
                 }
                 header.col(|ui| {
                     let rect = ui.max_rect();
-                    ui.painter().rect_filled(rect, 0, p.elevated);
+                    ui.painter().rect_filled(rect, 0, p.header);
                     header_line(ui, p.border);
                 });
             })
@@ -526,7 +526,7 @@ pub fn result_rows_editable(
                                 );
                                 let resp = eui.add(
                                     egui::TextEdit::singleline(draft)
-                                        .font(theme::mono(theme::FS_DATA))
+                                        .font(egui::FontId::proportional(theme::FS_DATA))
                                         .frame(false)
                                         .desired_width(inner.width()),
                                 );
@@ -569,7 +569,7 @@ pub fn result_rows_editable(
                                     let g = icons::text_galley(
                                         &painter,
                                         icons::cell_text(&shown, 4000),
-                                        theme::mono(theme::FS_DATA),
+                                        egui::FontId::proportional(theme::FS_DATA),
                                         color,
                                         rect.width() - 24.0,
                                     );
@@ -714,7 +714,7 @@ fn draw_frozen_grid_overlay(
     // 钉住的表头
     let header_rect =
         egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(region_w, theme::HEADER_H));
-    painter.rect_filled(header_rect, 0, p.elevated);
+    painter.rect_filled(header_rect, 0, p.header);
     painter.text(
         egui::pos2(left + 48.0 - 14.0, header_rect.center().y),
         egui::Align2::RIGHT_CENTER,
@@ -815,7 +815,7 @@ fn draw_frozen_grid_overlay(
                 );
                 let resp = eui.add(
                     egui::TextEdit::singleline(e.draft)
-                        .font(theme::mono(theme::FS_DATA))
+                        .font(egui::FontId::proportional(theme::FS_DATA))
                         .frame(false)
                         .desired_width(inner.width()),
                 );
@@ -861,7 +861,7 @@ fn draw_frozen_grid_overlay(
                     let g = icons::text_galley(
                         &cp,
                         icons::cell_text(&shown, 4000),
-                        theme::mono(theme::FS_DATA),
+                        egui::FontId::proportional(theme::FS_DATA),
                         color,
                         rect.width() - 24.0,
                     );

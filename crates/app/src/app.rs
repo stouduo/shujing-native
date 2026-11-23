@@ -224,7 +224,7 @@ pub enum BgEvent {
     },
     PkLoaded {
         tab_id: String,
-        result: Result<(Vec<String>, Vec<(String, String)>), String>,
+        result: Result<(Vec<String>, Vec<(String, String)>, Vec<(String, String)>), String>,
     },
     ChangesSaved {
         tab_id: String,
@@ -2615,7 +2615,12 @@ impl ShujingApp {
                             .iter()
                             .map(|c| (c.name.clone(), c.data_type.clone()))
                             .collect();
-                        (pk, types)
+                        let comments = s
+                            .columns
+                            .iter()
+                            .map(|c| (c.name.clone(), c.comment.clone()))
+                            .collect();
+                        (pk, types, comments)
                     });
                 let _ = tx2.send(BgEvent::PkLoaded { tab_id: id2, result });
             });
@@ -4289,6 +4294,11 @@ impl ShujingApp {
     }
 
     pub fn save_session(&mut self) {
+        // 压测(AUTOOPEN)/自截图入口不落盘:否则调试进程退出时会把用户真实会话覆盖成临时标签。
+        // 判据与 restore_session 一致直接看环境变量:测试夹具会把 autoopen_done 置 true
+        if self.shot.is_some() || std::env::var("SHUJING_AUTOOPEN").is_ok() {
+            return;
+        }
         let mut tabs = Vec::new();
         for t in &self.tabs {
             match &t.kind {
@@ -4904,9 +4914,10 @@ impl ShujingApp {
                 BgEvent::PkLoaded { tab_id, result } => {
                     if let Some(t) = self.table_tab_mut(&tab_id) {
                         match result {
-                            Ok((cols, types)) => {
+                            Ok((cols, types, comments)) => {
                                 t.pk_cols = cols;
                                 t.col_types = types.into_iter().collect();
+                                t.col_comments = comments.into_iter().collect();
                             }
                             Err(_) => {
                                 // 拉取失败不等于"没有主键":复位标记,下次刷新重试(否则标签永久只读)
