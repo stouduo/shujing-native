@@ -12,6 +12,11 @@ use std::sync::{Arc, Mutex};
 /// 主题是全局状态;测试并行执行会互相覆盖,渲染全部串行化
 static RENDER_LOCK: Mutex<()> = Mutex::new(());
 
+/// 走真实 eframe::App::update 路径的测试:顶部应用工具栏把其下所有内容下推的高度。
+/// 这些测试里的点击坐标一律写成"原逻辑坐标 + CHROME_TOP"(弹窗居中、不随面板移动的除外);
+/// draw_app 夹具不含工具栏,走它的测试不加
+const CHROME_TOP: f32 = crate::appbar::BAR_H;
+
 fn render(name: &str, w: f32, h: f32, dark: bool, mut draw: impl FnMut(&egui::Context) + 'static) {
     let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let out_dir = std::path::PathBuf::from("/tmp/shujing_ui");
@@ -2170,6 +2175,70 @@ fn where_chip_toggles_filter_bar() {
 }
 
 #[test]
+fn appbar_buttons_open_modals() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    app.conn_modal = None;
+    app.settings_open = false;
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                b.draw_app_toolbar(ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let img = harness.render().expect("render 失败");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/appbar.png")
+        .expect("保存 PNG 失败");
+    let tap = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>, pos: egui::Pos2| {
+        h.input_mut().events.push(egui::Event::PointerMoved(pos));
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+        h.step();
+    };
+    // 工具栏高 40:按钮中心 y = 20。「新建连接」是应用名(62) + 间距后的第一个按钮;
+    // 齿轮在最右(右边距 12 + 按钮半宽 14)
+    tap(&mut harness, egui::pos2(146.0, 20.0));
+    assert!(
+        harness.state().borrow().conn_modal.is_some(),
+        "点击「新建连接」应打开连接弹窗"
+    );
+    harness.state().borrow_mut().conn_modal = None;
+    tap(&mut harness, egui::pos2(1174.0, 20.0));
+    assert!(
+        harness.state().borrow().settings_open,
+        "点击齿轮应打开设置(此前设置只能从表页 ··· 菜单进)"
+    );
+}
+
+#[test]
 fn render_query_autocomplete() {
     let mut q = QueryTab {
         conn_id: "c1".into(),
@@ -3029,7 +3098,7 @@ fn grid_wheel_scroll_settles_fast() {
     harness
         .input_mut()
         .events
-        .push(egui::Event::PointerMoved(egui::pos2(600.0, 380.0)));
+        .push(egui::Event::PointerMoved(egui::pos2(600.0, 380.0 + CHROME_TOP)));
     harness.step();
     let before = off();
     harness.input_mut().events.push(egui::Event::MouseWheel {
@@ -3088,7 +3157,7 @@ fn tabbar_wheel_scroll_settles_fast() {
     harness
         .input_mut()
         .events
-        .push(egui::Event::PointerMoved(egui::pos2(500.0, 14.0)));
+        .push(egui::Event::PointerMoved(egui::pos2(500.0, 14.0 + CHROME_TOP)));
     harness.step();
     let before = off();
     // 一格大步进滚轮(负向=滚进溢出区;Point |120| ≥ 8 → egui 归入
@@ -3152,17 +3221,17 @@ fn tabbar_autoscroll_is_instant() {
     harness
         .input_mut()
         .events
-        .push(egui::Event::PointerMoved(egui::pos2(800.0, 14.0)));
+        .push(egui::Event::PointerMoved(egui::pos2(800.0, 14.0 + CHROME_TOP)));
     harness.step();
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(800.0, 14.0),
+        pos: egui::pos2(800.0, 14.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: true,
         modifiers: Default::default(),
     });
     harness.step();
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(800.0, 14.0),
+        pos: egui::pos2(800.0, 14.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: false,
         modifiers: Default::default(),
@@ -3210,17 +3279,17 @@ fn tab_close_button_works() {
         harness
             .input_mut()
             .events
-            .push(egui::Event::PointerMoved(egui::pos2(x, 14.0)));
+            .push(egui::Event::PointerMoved(egui::pos2(x, 14.0 + CHROME_TOP)));
         harness.step();
         harness.input_mut().events.push(egui::Event::PointerButton {
-            pos: egui::pos2(x, 14.0),
+            pos: egui::pos2(x, 14.0 + CHROME_TOP),
             button: egui::PointerButton::Primary,
             pressed: true,
             modifiers: Default::default(),
         });
         harness.step();
         harness.input_mut().events.push(egui::Event::PointerButton {
-            pos: egui::pos2(x, 14.0),
+            pos: egui::pos2(x, 14.0 + CHROME_TOP),
             button: egui::PointerButton::Primary,
             pressed: false,
             modifiers: Default::default(),
@@ -3461,7 +3530,7 @@ fn activating_visible_tab_does_not_scroll_strip() {
     harness
         .input_mut()
         .events
-        .push(egui::Event::PointerMoved(egui::pos2(500.0, 19.0)));
+        .push(egui::Event::PointerMoved(egui::pos2(500.0, 19.0 + CHROME_TOP)));
     harness.step();
     harness.input_mut().events.push(egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
@@ -3476,17 +3545,17 @@ fn activating_visible_tab_does_not_scroll_strip() {
     harness
         .input_mut()
         .events
-        .push(egui::Event::PointerMoved(egui::pos2(450.0, 19.0)));
+        .push(egui::Event::PointerMoved(egui::pos2(450.0, 19.0 + CHROME_TOP)));
     harness.step();
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(450.0, 19.0),
+        pos: egui::pos2(450.0, 19.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: true,
         modifiers: Default::default(),
     });
     harness.step();
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(450.0, 19.0),
+        pos: egui::pos2(450.0, 19.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: false,
         modifiers: Default::default(),
@@ -3555,17 +3624,17 @@ fn tab_click_realistic_timing_patterns() {
     let active = |h: &egui_kittest::Harness<ShujingApp>| h.state().active_tab;
     let reset = |h: &mut egui_kittest::Harness<ShujingApp>| {
         // 切回 tab1(点 tab1 标题中部,稳妥坐标)
-        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(450.0, 19.0)));
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(450.0, 19.0 + CHROME_TOP)));
         h.step();
         h.input_mut().events.push(egui::Event::PointerButton {
-            pos: egui::pos2(450.0, 19.0),
+            pos: egui::pos2(450.0, 19.0 + CHROME_TOP),
             button: egui::PointerButton::Primary,
             pressed: true,
             modifiers: Default::default(),
         });
         h.step();
         h.input_mut().events.push(egui::Event::PointerButton {
-            pos: egui::pos2(450.0, 19.0),
+            pos: egui::pos2(450.0, 19.0 + CHROME_TOP),
             button: egui::PointerButton::Primary,
             pressed: false,
             modifiers: Default::default(),
@@ -3574,7 +3643,7 @@ fn tab_click_realistic_timing_patterns() {
         h.step();
     };
     // tab0 标题坐标(此前多个测试校准过 (300,19) 有效命中 tab0)
-    let (x, y) = (300.0, 19.0);
+    let (x, y) = (300.0, 19.0 + CHROME_TOP);
 
     // 形态1:按下与松开合并进同一帧(快点)
     reset(&mut harness);
@@ -3645,17 +3714,17 @@ fn tab_click_realistic_timing_patterns() {
     assert_eq!(active(&harness), 0, "移动与松开同帧(8px 手抖)应激活");
 
     // 形态4:松开后紧接下一帧立即再点(快速连点第二次)
-    harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(450.0, 19.0)));
+    harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(450.0, 19.0 + CHROME_TOP)));
     harness.step();
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(450.0, 19.0),
+        pos: egui::pos2(450.0, 19.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: true,
         modifiers: Default::default(),
     });
     harness.step();
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(450.0, 19.0),
+        pos: egui::pos2(450.0, 19.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: false,
         modifiers: Default::default(),
@@ -3806,7 +3875,7 @@ fn tab_click_survives_wobble_and_no_phantom_swap() {
 
     // 场景 1:40px 手抖点击 tab0(松开位移 28px,超出 egui 20px 与手势 24px 双阈值)
     // → 应激活,标签顺序不变
-    wobble_click(&mut harness, 300.0, 19.0, 40.0);
+    wobble_click(&mut harness, 300.0, 19.0 + CHROME_TOP, 40.0);
     assert_eq!(
         harness.state().active_tab, 0,
         "30px 手抖的点击应照常激活标签(egui 20px 阈值过严,手势层须放宽)"
@@ -3814,7 +3883,7 @@ fn tab_click_survives_wobble_and_no_phantom_swap() {
     assert_eq!(titles(&harness), before, "手抖点击不得触发换位");
 
     // 场景 2:紧接着 25px 手抖再点 tab0 → 不得因残留累计触发换位/失灵
-    wobble_click(&mut harness, 300.0, 19.0, 25.0);
+    wobble_click(&mut harness, 300.0, 19.0 + CHROME_TOP, 25.0);
     assert_eq!(
         harness.state().active_tab, 0,
         "第二次手抖点击应照常激活"
@@ -3826,7 +3895,8 @@ fn tab_click_survives_wobble_and_no_phantom_swap() {
 
     // 场景 3:无溢出时低带点击(tab 底缘上 3px = y35,在 × 区 y≤32.5 之外)带 12px
     // 手抖 → 应激活 tab1;不得误触右侧 × 关闭区(× 为 22×22 居中矩形),不得换位
-    let low_y = 5.0 + (ui_kit::theme::TABBAR_H - 5.0) - 3.0; // 条顶 5 + 条高 33 - 3 = 底缘上 3px
+    // 标签条紧贴顶栏下缘(条顶 0)、标签高 TABBAR_H-1:底缘上 3px = 34,在 × 区(居中 22 高,7.5~29.5)之外
+    let low_y = CHROME_TOP + (ui_kit::theme::TABBAR_H - 1.0) - 3.0;
     let order_low = titles(&harness);
     wobble_click(&mut harness, 430.0, low_y, 12.0);
     assert_eq!(
@@ -3843,10 +3913,10 @@ fn tab_click_survives_wobble_and_no_phantom_swap() {
     harness
         .input_mut()
         .events
-        .push(egui::Event::PointerMoved(egui::pos2(300.0, 19.0)));
+        .push(egui::Event::PointerMoved(egui::pos2(300.0, 19.0 + CHROME_TOP)));
     harness.step();
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(300.0, 19.0),
+        pos: egui::pos2(300.0, 19.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: true,
         modifiers: Default::default(),
@@ -3856,11 +3926,11 @@ fn tab_click_survives_wobble_and_no_phantom_swap() {
         harness
             .input_mut()
             .events
-            .push(egui::Event::PointerMoved(egui::pos2(x, 19.0)));
+            .push(egui::Event::PointerMoved(egui::pos2(x, 19.0 + CHROME_TOP)));
         harness.step();
     }
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(370.0, 19.0),
+        pos: egui::pos2(370.0, 19.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: false,
         modifiers: Default::default(),
@@ -3896,17 +3966,17 @@ fn tab_double_click_switches_not_renames() {
         harness
             .input_mut()
             .events
-            .push(egui::Event::PointerMoved(egui::pos2(260.0, 14.0)));
+            .push(egui::Event::PointerMoved(egui::pos2(260.0, 14.0 + CHROME_TOP)));
         harness.step();
         harness.input_mut().events.push(egui::Event::PointerButton {
-            pos: egui::pos2(260.0, 14.0),
+            pos: egui::pos2(260.0, 14.0 + CHROME_TOP),
             button: egui::PointerButton::Primary,
             pressed: true,
             modifiers: Default::default(),
         });
         harness.step();
         harness.input_mut().events.push(egui::Event::PointerButton {
-            pos: egui::pos2(260.0, 14.0),
+            pos: egui::pos2(260.0, 14.0 + CHROME_TOP),
             button: egui::PointerButton::Primary,
             pressed: false,
             modifiers: Default::default(),
@@ -3973,7 +4043,7 @@ fn menu_overlay_click_does_not_hit_underlying_tab() {
     // 右键第 0 个标签 → 菜单浮层展开(菜单项几何上覆盖标签条底部)
     click(
         &mut harness,
-        egui::pos2(260.0, 14.0),
+        egui::pos2(260.0, 14.0 + CHROME_TOP),
         egui::PointerButton::Secondary,
     );
     // 点菜单第 4 项「重命名标签…」(菜单项 y≈30 附近,同时也在标签矩形内)
@@ -3981,7 +4051,7 @@ fn menu_overlay_click_does_not_hit_underlying_tab() {
     for y in [120.0f32, 96.0, 144.0, 30.0, 108.0, 132.0] {
         click(
             &mut harness,
-            egui::pos2(272.0, y),
+            egui::pos2(272.0, y + CHROME_TOP),
             egui::PointerButton::Primary,
         );
         let renaming = harness.ctx.memory(|m| {
@@ -4062,8 +4132,8 @@ fn tab_rename_via_context_menu() {
     // 菜单项 y 位置不确定:扫候选,未命中菜单已关(CloseOnClick)则重开再试
     let mut entered = false;
     for y in [120.0f32, 96.0, 144.0, 108.0, 132.0, 84.0] {
-        right_click(&mut harness, egui::pos2(260.0, 14.0));
-        click(&mut harness, egui::pos2(272.0, y));
+        right_click(&mut harness, egui::pos2(260.0, 14.0 + CHROME_TOP));
+        click(&mut harness, egui::pos2(272.0, y + CHROME_TOP));
         let renaming = harness.ctx.memory(|m| {
             m.data
                 .get_temp::<(usize, String)>(egui::Id::new("tab-rename"))
@@ -4140,7 +4210,7 @@ fn tab_close_button_real_path() {
     // 干净的非激活标签:× 中心 ≈ 标签右缘-16(插桩实测标签0 右缘 394.7)
     let mut ok = false;
     for right in [394.0f32, 392.0, 396.0, 384.0] {
-        click(&mut harness, egui::pos2(right - 16.0, 14.0));
+        click(&mut harness, egui::pos2(right - 16.0, 14.0 + CHROME_TOP));
         let n = harness.state().tabs.len();
         eprintln!("[x-real] right={right} tabs={n}");
         if n == 2 {
@@ -4209,7 +4279,7 @@ fn tab_rename_exit_by_drag_and_enter_commit() {
         harness.step();
     }
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(440.0, 350.0),
+        pos: egui::pos2(440.0, 350.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: false,
         modifiers: Default::default(),
@@ -4368,10 +4438,10 @@ fn tab_click_with_hand_slopp_activates() {
     harness
         .input_mut()
         .events
-        .push(egui::Event::PointerMoved(egui::pos2(250.0, 14.0)));
+        .push(egui::Event::PointerMoved(egui::pos2(250.0, 14.0 + CHROME_TOP)));
     harness.step();
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(250.0, 14.0),
+        pos: egui::pos2(250.0, 14.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: true,
         modifiers: Default::default(),
@@ -4381,11 +4451,11 @@ fn tab_click_with_hand_slopp_activates() {
         harness
             .input_mut()
             .events
-            .push(egui::Event::PointerMoved(egui::pos2(x, 14.0)));
+            .push(egui::Event::PointerMoved(egui::pos2(x, 14.0 + CHROME_TOP)));
         harness.step();
     }
     harness.input_mut().events.push(egui::Event::PointerButton {
-        pos: egui::pos2(258.0, 14.0),
+        pos: egui::pos2(258.0, 14.0 + CHROME_TOP),
         button: egui::PointerButton::Primary,
         pressed: false,
         modifiers: Default::default(),

@@ -97,21 +97,37 @@ impl ShujingApp {
         let p = theme::c();
         let w = ui.available_width();
 
-        // 头部:与标签栏同一水平带(高度 = 标签高度),保证 ＋ 与标题同线
+        // 头部:与标签栏同一水平带(高度 = 标签高度)。左:导入/导出(连接的三条导入导出
+        // 通道,原 ＋ 右键菜单里的项);右:新建连接 ＋。应用名与主功能入口在顶部应用工具栏
         let head_h = theme::TABBAR_H - 1.0;
         ui.allocate_ui_with_layout(
             egui::vec2(w, head_h),
             Layout::left_to_right(Align::Center),
             |ui| {
-                let title_resp =
-                    ui.label(theme::strong("数镜", theme::FS_TABLE_TITLE).color(p.text));
-                let title_g = ui.painter().layout_no_wrap(
-                    "数镜".to_owned(),
-                    theme::bold(theme::FS_TABLE_TITLE),
-                    egui::Color32::PLACEHOLDER,
-                );
-                let title_baseline = title_resp.rect.center().y - title_g.size().y / 2.0
-                    + icons::baseline_top(&title_g, theme::FS_TABLE_TITLE);
+                let imp_exp = format!("{} ▾", ui_kit::t!("Import / Export", "导入/导出"));
+                ui.menu_button(RichText::new(imp_exp).size(12.0).color(p.text2), |ui| {
+                    ui.set_min_width(240.0);
+                    for (label, key) in [
+                        (
+                            ui_kit::t!("Import Connections (DBeaver/Navicat)…", "导入连接(DBeaver/Navicat)…"),
+                            "sidebar-import-conns",
+                        ),
+                        (
+                            ui_kit::t!("Export Connections (Encrypted Backup)…", "导出连接(加密备份)…"),
+                            "sidebar-export-enc",
+                        ),
+                        (
+                            ui_kit::t!("Import Connections (Encrypted Backup)…", "导入连接(加密备份)…"),
+                            "sidebar-import-enc",
+                        ),
+                    ] {
+                        if ui.button(label).clicked() {
+                            ui.ctx()
+                                .memory_mut(|m| m.data.insert_temp(egui::Id::new(key), true));
+                            ui.close_menu();
+                        }
+                    }
+                });
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // 新建连接:26px 可点圆面(hover 提亮)+ 7px 加号,此前 24px 裸 +

@@ -1062,16 +1062,25 @@ fn draw_one_tab(
 /// 幽灵文字按钮(DBX 工具栏款:无边框无底色,悬停淡底;12px)
 fn ghost_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
     let p = theme::c();
-    let r = ui.add(
-        egui::Button::new(RichText::new(label.into()).size(12.0).color(p.text))
-            .frame(false)
-            .min_size(egui::vec2(0.0, 22.0)),
+    let g = ui
+        .painter()
+        .layout_no_wrap(label.into(), egui::FontId::proportional(12.0), p.text);
+    // 左右各 6pt 内边距(DBX 的工具栏按钮):相邻按钮之间才留得出缝
+    // (egui Button 关掉 frame 后内边距也没了,英文态两个按钮会贴成一团)
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(g.size().x + 12.0, 22.0),
+        egui::Sense::click(),
     );
-    if r.hovered() {
+    if resp.hovered() {
         ui.painter()
-            .rect_filled(r.rect, egui::CornerRadius::same(6), theme::tint(p.text, 16));
+            .rect_filled(rect, egui::CornerRadius::same(6), theme::tint(p.text, 16));
     }
-    r
+    ui.painter().galley(
+        egui::pos2(rect.left() + 6.0, rect.center().y - g.size().y / 2.0),
+        g,
+        p.text,
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// 查询栏 WHERE 芯片(漏斗 + 等宽 WHERE,DBX 蓝);有生效条件时点亮,筛选栏打开时带淡底
@@ -6342,7 +6351,8 @@ impl eframe::App for ShujingApp {
             }
         }
 
-        // 侧栏 + 标签栏
+        // 顶部应用工具栏 + 侧栏 + 标签栏
+        self.draw_app_toolbar(ctx);
         self.draw_sidebar_panel(ctx);
         draw_tabs(self, ctx);
 

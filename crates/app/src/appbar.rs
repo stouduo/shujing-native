@@ -1,0 +1,300 @@
+//! 顶部应用工具栏(40pt,对齐 DBX):应用名 + 主功能直达(新建连接 / 新建查询 / 数据传输 /
+//! 数据对比 / 结构对比 / 插件管理 / 更多),右侧 外观切换 / 设置。
+//!
+//! 此前这些入口散落在侧栏右键菜单、表页 ··· 菜单里——没开标签时连"设置"都点不到。
+
+use crate::app::{ShujingApp, TabKind};
+use crate::theme;
+use egui::{Align, Color32, Layout, Sense};
+
+/// 应用工具栏高度(DBX 40)
+pub(crate) const BAR_H: f32 = 40.0;
+
+type IconFn = fn(&egui::Painter, egui::Pos2, Color32);
+
+impl ShujingApp {
+    pub fn draw_app_toolbar(&mut self, ctx: &egui::Context) {
+        let p = theme::c();
+        // 动作延后到面板闭包结束后执行(闭包里不改 self)
+        let mut act: Option<u8> = None;
+        let ctx_conn = self.toolbar_ctx();
+        let mut menu_act: Option<u8> = None;
+        egui::TopBottomPanel::top("appbar")
+            .show_separator_line(false)
+            .exact_height(BAR_H)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.chrome)
+                    .inner_margin(egui::Margin::symmetric(12, 0)),
+            )
+            .show(ctx, |ui| {
+                theme::hairline_bottom(ui);
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    // 应用名
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(62.0, 28.0), Sense::hover());
+                    crate::icons::tab_glyph(ui, 0, p.accent, rect.left() + 2.0, rect.center().y);
+                    let g = ui
+                        .painter()
+                        .layout_no_wrap("数镜".to_owned(), theme::bold(13.5), p.text);
+                    ui.painter().galley(
+                        egui::pos2(rect.left() + 20.0, rect.center().y - g.size().y / 2.0),
+                        g,
+                        p.text,
+                    );
+                    ui.add_space(10.0);
+
+                    // 窄窗口只留图标(悬停看全名)
+                    let narrow = ui.available_width() < 860.0;
+                    let lbl = |full: &str| if narrow { String::new() } else { full.to_string() };
+                    let tip = [
+                        ui_kit::t!("New Connection", "新建连接"),
+                        ui_kit::t!("New Query (⌘T)", "新建查询 (⌘T)"),
+                        ui_kit::t!("Data Transfer…", "数据传输…"),
+                        ui_kit::t!("Compare Data…", "数据对比…"),
+                        ui_kit::t!("Compare Structure…", "结构对比…"),
+                        ui_kit::t!("Plugins", "插件管理"),
+                    ];
+                    for (i, icon) in [
+                        icon_plus_sq,
+                        icon_doc_plus,
+                        icon_swap,
+                        icon_diff,
+                        icon_diff,
+                        icon_box,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        if bar_button(ui, icon, &lbl(tip[i]), tip[i]) {
+                            act = Some(i as u8);
+                        }
+                    }
+                    // 更多:低频的全局入口
+                    ui.menu_button(
+                        egui::RichText::new(format!(
+                            "{} ▾",
+                            ui_kit::t!("More", "更多")
+                        ))
+                        .size(12.0)
+                        .color(p.text),
+                        |ui| {
+                            ui.set_min_width(250.0);
+                            for (label, a) in [
+                                (
+                                    ui_kit::t!("Appearance Settings…", "外观设置…"),
+                                    7u8,
+                                ),
+                                (
+                                    ui_kit::t!(
+                                        "Import Connections (DBeaver/Navicat)…",
+                                        "导入连接(DBeaver/Navicat)…"
+                                    ),
+                                    8,
+                                ),
+                                (
+                                    ui_kit::t!(
+                                        "Export Connections (Encrypted Backup)…",
+                                        "导出连接(加密备份)…"
+                                    ),
+                                    9,
+                                ),
+                                (
+                                    ui_kit::t!(
+                                        "Import Connections (Encrypted Backup)…",
+                                        "导入连接(加密备份)…"
+                                    ),
+                                    10,
+                                ),
+                            ] {
+                                if ui.button(label).clicked() {
+                                    menu_act = Some(a);
+                                    ui.close_menu();
+                                }
+                            }
+                        },
+                    )
+                    .response
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                    // 右侧:外观切换 / 设置
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        if icon_button(ui, "⚙", ui_kit::t!("Settings", "设置")) {
+                            act = Some(7);
+                        }
+                        let glyph = if theme::is_dark() { "☀" } else { "☾" };
+                        if icon_button(
+                            ui,
+                            glyph,
+                            ui_kit::t!("Toggle light/dark appearance", "切换深浅外观"),
+                        ) {
+                            act = Some(6);
+                        }
+                    });
+                });
+            });
+
+        if let Some(a) = menu_act {
+            act = Some(a);
+        }
+        match act {
+            Some(0) => self.conn_modal = Some(crate::app::ConnModal::new()),
+            Some(1) => self.open_query_tab(None),
+            // 传输/对比需要一张源连接:沿用当前标签(或第一个在线连接)的上下文,表留给弹窗里选
+            Some(2..=4) => {
+                if let Some((cid, db)) = ctx_conn {
+                    let db = db.unwrap_or_default();
+                    match act {
+                        Some(2) => self.open_transfer(&cid, Some(&db), ""),
+                        Some(3) => self.open_data_diff(&cid, Some(&db), ""),
+                        _ => self.open_schema_diff(&cid, Some(&db), ""),
+                    }
+                }
+            }
+            Some(5) => self.plugin_manager_open = true,
+            Some(6) => self.theme_toggle_requested = true,
+            Some(7) => self.settings_open = true,
+            Some(8) => self.import_connections_file(),
+            Some(9) => self.export_connections_encrypted(),
+            Some(10) => self.import_connections_encrypted(),
+            _ => {}
+        }
+    }
+
+    /// 全局动作的上下文连接:当前标签的连接优先,否则第一个在线连接(带它展开的库)
+    fn toolbar_ctx(&self) -> Option<(String, Option<String>)> {
+        let tab_ctx = self.tabs.get(self.active_tab).and_then(|t| match &t.kind {
+            TabKind::Table(x) => Some((x.conn_id.clone(), x.database.clone())),
+            TabKind::Query(q) => Some((q.conn_id.clone(), q.database.clone())),
+            TabKind::Structure(s) => Some((s.conn_id.clone(), s.database.clone())),
+            _ => None,
+        });
+        tab_ctx.or_else(|| {
+            self.conns
+                .iter()
+                .find(|c| self.trees.get(&c.id).map(|t| t.online).unwrap_or(false))
+                .map(|c| {
+                    (
+                        c.id.clone(),
+                        self.trees.get(&c.id).and_then(|t| t.expanded_db.clone()),
+                    )
+                })
+        })
+    }
+}
+
+/// 工具栏按钮:图标 + 文字(文字可空 = 只留图标),悬停淡底
+fn bar_button(ui: &mut egui::Ui, icon: IconFn, label: &str, tip: &str) -> bool {
+    let p = theme::c();
+    let g = if label.is_empty() {
+        None
+    } else {
+        Some(
+            ui.painter()
+                .layout_no_wrap(label.to_owned(), egui::FontId::proportional(12.0), p.text),
+        )
+    };
+    let w = 8.0 + 14.0 + g.as_ref().map_or(0.0, |g| 6.0 + g.size().x) + 8.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::click());
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(6), theme::tint(p.text, 16));
+    }
+    let cy = rect.center().y;
+    icon(ui.painter(), egui::pos2(rect.left() + 15.0, cy), p.text);
+    if let Some(g) = g {
+        ui.painter().galley(
+            egui::pos2(rect.left() + 28.0, cy - g.size().y / 2.0),
+            g,
+            p.text,
+        );
+    }
+    if !tip.is_empty() {
+        resp.clone().on_hover_text(tip.to_string());
+    }
+    let clicked = resp.clicked();
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    clicked
+}
+
+/// 纯图标按钮(28×28,文字字形当图标)
+fn icon_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
+    let p = theme::c();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(6), theme::tint(p.text, 16));
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        egui::FontId::proportional(14.0),
+        if resp.hovered() { p.text } else { p.text2 },
+    );
+    let clicked = resp.clicked();
+    resp.clone().on_hover_text(tip);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    clicked
+}
+
+// ---------------------------------------------------------------- 矢量图标(14×14 内)
+
+fn icon_plus_sq(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let r = egui::Rect::from_center_size(c, egui::vec2(12.0, 12.0));
+    p.rect_stroke(r, egui::CornerRadius::same(3), st, egui::StrokeKind::Inside);
+    let s = 2.6;
+    p.line_segment([egui::pos2(c.x - s, c.y), egui::pos2(c.x + s, c.y)], st);
+    p.line_segment([egui::pos2(c.x, c.y - s), egui::pos2(c.x, c.y + s)], st);
+}
+
+fn icon_doc_plus(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let r = egui::Rect::from_center_size(egui::pos2(c.x - 1.5, c.y), egui::vec2(10.0, 12.0));
+    p.rect_stroke(r, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
+    p.line_segment(
+        [egui::pos2(r.left() + 2.5, r.top() + 4.0), egui::pos2(r.right() - 2.5, r.top() + 4.0)],
+        st,
+    );
+    p.line_segment(
+        [egui::pos2(r.left() + 2.5, r.top() + 7.0), egui::pos2(r.right() - 2.5, r.top() + 7.0)],
+        st,
+    );
+    // 右下角的加号:先用工具栏底色垫一圈,免得和文档边框糊在一起
+    let q = egui::pos2(r.right() + 0.5, r.bottom());
+    p.circle_filled(q, 3.6, theme::c().chrome);
+    let s = 2.4;
+    p.line_segment([egui::pos2(q.x - s, q.y), egui::pos2(q.x + s, q.y)], st);
+    p.line_segment([egui::pos2(q.x, q.y - s), egui::pos2(q.x, q.y + s)], st);
+}
+
+fn icon_swap(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let (x, y) = (c.x, c.y);
+    p.line_segment([egui::pos2(x - 6.0, y - 2.5), egui::pos2(x + 6.0, y - 2.5)], st);
+    p.line_segment([egui::pos2(x + 3.0, y - 5.5), egui::pos2(x + 6.0, y - 2.5)], st);
+    p.line_segment([egui::pos2(x + 3.0, y + 0.5), egui::pos2(x + 6.0, y - 2.5)], st);
+    p.line_segment([egui::pos2(x + 6.0, y + 3.0), egui::pos2(x - 6.0, y + 3.0)], st);
+    p.line_segment([egui::pos2(x - 3.0, y), egui::pos2(x - 6.0, y + 3.0)], st);
+    p.line_segment([egui::pos2(x - 3.0, y + 6.0), egui::pos2(x - 6.0, y + 3.0)], st);
+}
+
+fn icon_diff(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let a = egui::Rect::from_min_max(egui::pos2(c.x - 6.5, c.y - 6.5), egui::pos2(c.x + 2.5, c.y + 2.5));
+    let b = egui::Rect::from_min_max(egui::pos2(c.x - 2.5, c.y - 2.5), egui::pos2(c.x + 6.5, c.y + 6.5));
+    p.rect_filled(b, egui::CornerRadius::same(2), theme::c().chrome);
+    p.rect_stroke(a, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
+    p.rect_stroke(b, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
+}
+
+fn icon_box(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let r = egui::Rect::from_center_size(c, egui::vec2(12.0, 12.0));
+    p.rect_stroke(r, egui::CornerRadius::same(3), st, egui::StrokeKind::Inside);
+    p.line_segment([r.left_center(), r.right_center()], st);
+    p.line_segment([egui::pos2(c.x, r.top()), egui::pos2(c.x, r.bottom())], st);
+}
