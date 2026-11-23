@@ -153,6 +153,12 @@ pub enum TabAction {
         table: String,
         database: Option<String>,
     },
+    /// 从表页内容头打开结构页(表页拿不到 app,经动作中转)
+    OpenStructure {
+        conn_id: String,
+        table: String,
+        database: Option<String>,
+    },
     RedisScan {
         tab_id: String,
         reset: bool,
@@ -454,10 +460,10 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
 
     egui::TopBottomPanel::top("tabbar")
         .show_separator_line(false)
-        .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin {
+        .frame(egui::Frame::new().fill(p.chrome).inner_margin(egui::Margin {
             left: 8,
             right: 10,
-            top: 5,
+            top: 0,
             bottom: 0,
         }))
         .show(ctx, |ui| {
@@ -469,7 +475,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.style_mut().always_scroll_the_only_direction = true;
             // 标签条单独占左侧可滚动视口;“全部标签/＋”固定在右侧,不随标签滚动,
             // 标签再多也能直接点到,不需要先滚到末尾。
-            let bar_h = theme::TABBAR_H - 5.0;
+            let bar_h = theme::TABBAR_H - 1.0;
             let full_w = ui.available_width();
             let controls_w = 92.0 + 30.0 + 8.0;
             let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(full_w, bar_h), Sense::hover());
@@ -888,7 +894,7 @@ pub struct TabEvents {
     pub rename_cancel: bool,
 }
 
-/// 自绘单个标签:激活态与工具条同色、上圆角并向下与内容连通
+/// 自绘单个标签:DBX 式方框(细描边;激活态薄荷绿淡底)
 fn draw_one_tab(
     ui: &mut egui::Ui,
     active: bool,
@@ -897,12 +903,12 @@ fn draw_one_tab(
     mut rename_draft: Option<&mut String>,
 ) -> (TabEvents, egui::Rect) {
     let p = theme::c();
-    let h = theme::TABBAR_H - 5.0;
+    let h = theme::TABBAR_H - 1.0;
     let font = egui::FontId::proportional(theme::FS_TAB);
     let title_g =
         ui.painter()
             .layout_no_wrap(title.to_string(), font.clone(), Color32::PLACEHOLDER);
-    let w = (title_g.size().x + 76.0).clamp(126.0, 248.0);
+    let w = (title_g.size().x + 76.0).clamp(108.0, 240.0);
     let title_g = icons::text_galley(
         ui.painter(),
         title.to_string(),
@@ -956,45 +962,28 @@ fn draw_one_tab(
     });
 
     let painter = ui.painter();
-    if active {
-        painter.rect_filled(
-            rect,
-            egui::CornerRadius {
-                nw: 8,
-                ne: 8,
-                sw: 0,
-                se: 0,
-            },
-            p.panel,
-        );
-        // 激活标识:顶部 2px accent 条(成熟工具的 tab 语义)
-        painter.rect_filled(
-            egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.right(), rect.top() + 2.0)),
-            0,
-            p.accent,
-        );
+    // DBX 式方框标签:细描边(文字色按比例掺进边框色),激活态换薄荷绿淡底 + 更深的描边;
+    // 未激活悬停淡灰底。标签占满标签条高度,底部由标签条自己的发丝线收口
+    let (fill, stroke_col) = if active {
+        (theme::tab_active_bg(), theme::mix(p.border, p.text, 0.42))
     } else if resp.hovered() {
-        painter.rect_filled(
-            rect.shrink2(egui::vec2(0.0, 3.0)),
-            egui::CornerRadius {
-                nw: 8,
-                ne: 8,
-                sw: 0,
-                se: 0,
-            },
-            p.hover,
-        );
+        (theme::tint(p.text, 14), theme::mix(p.border, p.text, 0.28))
+    } else {
+        (Color32::TRANSPARENT, theme::mix(p.border, p.text, 0.14))
+    };
+    if fill != Color32::TRANSPARENT {
+        painter.rect_filled(rect.shrink(0.5), 0, fill);
     }
+    painter.rect_stroke(
+        rect.shrink(0.5),
+        0,
+        egui::Stroke::new(1.0, stroke_col),
+        egui::StrokeKind::Inside,
+    );
     icons::tab_glyph(
         ui,
         glyph,
-        if active {
-            p.text
-        } else if resp.hovered() {
-            p.text2
-        } else {
-            p.muted
-        },
+        if active { p.text } else { p.text2 },
         rect.left() + 14.0,
         rect.center().y,
     );
@@ -1046,11 +1035,8 @@ fn draw_one_tab(
     }
 
     if close_hovered {
-        ui.painter().rect_filled(
-            close_rect.shrink(2.0),
-            egui::CornerRadius::same(5),
-            p.elevated,
-        );
+        ui.painter()
+            .rect_filled(close_rect.shrink(2.0), egui::CornerRadius::same(5), theme::tint(p.text, 26));
     }
     let xcol = if close_hovered {
         p.text
@@ -1073,6 +1059,133 @@ fn draw_one_tab(
     )
 }
 
+/// 幽灵文字按钮(DBX 工具栏款:无边框无底色,悬停淡底;12px)
+fn ghost_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
+    let p = theme::c();
+    let r = ui.add(
+        egui::Button::new(RichText::new(label.into()).size(12.0).color(p.text))
+            .frame(false)
+            .min_size(egui::vec2(0.0, 22.0)),
+    );
+    if r.hovered() {
+        ui.painter()
+            .rect_filled(r.rect, egui::CornerRadius::same(6), theme::tint(p.text, 16));
+    }
+    r
+}
+
+/// 查询栏 WHERE 芯片(漏斗 + 等宽 WHERE,DBX 蓝);有生效条件时点亮,筛选栏打开时带淡底
+fn where_chip(ui: &mut egui::Ui, active: bool, open: bool) -> egui::Response {
+    let p = theme::c();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(76.0, 24.0), egui::Sense::click());
+    if open || resp.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::same(6),
+            if open {
+                theme::tint(theme::where_color(), 34)
+            } else {
+                p.hover
+            },
+        );
+    }
+    let cy = rect.center().y;
+    icons::funnel_glyph(
+        ui.painter(),
+        egui::pos2(rect.left() + 11.0, cy),
+        if active { theme::where_color() } else { p.text2 },
+    );
+    let g = ui
+        .painter()
+        .layout_no_wrap("WHERE".to_owned(), theme::mono(12.0), theme::where_color());
+    ui.painter().galley(
+        egui::pos2(rect.left() + 24.0, cy - g.size().y / 2.0),
+        g,
+        theme::where_color(),
+    );
+    resp
+}
+
+/// 查询栏 ORDER BY 芯片(DBX 橙等宽):显示当前排序列;菜单里选列与方向,或清除。
+/// 返回是否改了排序(调用方据此重载)
+fn order_chip(ui: &mut egui::Ui, tab: &mut TableTab) -> bool {
+    let label = match &tab.sort {
+        Some((col, asc)) => {
+            format!("ORDER BY {} {}", icons::clip(col, 16), if *asc { "↑" } else { "↓" })
+        }
+        None => "ORDER BY".to_string(),
+    };
+    let mut pick: Option<(String, bool)> = None;
+    let mut clear = false;
+    ui.menu_button(
+        RichText::new(label)
+            .monospace()
+            .size(12.0)
+            .color(theme::order_color()),
+        |ui| {
+            ui.set_min_width(200.0);
+            let cols: Vec<String> = tab
+                .columns
+                .iter()
+                .filter(|c| !tab.hidden_cols.contains(c))
+                .cloned()
+                .collect();
+            for c in cols {
+                let cur = tab
+                    .sort
+                    .as_ref()
+                    .filter(|(sc, _)| *sc == c)
+                    .map(|(_, a)| *a);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    if ui
+                        .selectable_label(
+                            cur == Some(true),
+                            RichText::new(format!("{c} ↑")).size(12.0),
+                        )
+                        .clicked()
+                    {
+                        pick = Some((c.clone(), true));
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(
+                            cur == Some(false),
+                            RichText::new(format!("{c} ↓")).size(12.0),
+                        )
+                        .clicked()
+                    {
+                        pick = Some((c.clone(), false));
+                        ui.close_menu();
+                    }
+                });
+            }
+            if tab.sort.is_some() {
+                ui.separator();
+                if ui
+                    .button(RichText::new(ui_kit::t!("Clear Sort", "清除排序")).size(12.0))
+                    .clicked()
+                {
+                    clear = true;
+                    ui.close_menu();
+                }
+            }
+        },
+    );
+    if let Some((c, asc)) = pick {
+        if tab.sort != Some((c.clone(), asc)) {
+            tab.sort = Some((c, asc));
+            tab.page = 1;
+            return true;
+        }
+    }
+    if clear && tab.sort.take().is_some() {
+        tab.page = 1;
+        return true;
+    }
+    false
+}
+
 // ---------------------------------------------------------------- 表数据视图
 
 pub(crate) fn draw_table_view(
@@ -1088,11 +1201,11 @@ pub(crate) fn draw_table_view(
 
     let mut toolbar_copy: Option<String> = None;
     let mut toolbar_menu: Option<TabAction> = None;
-    // ---- 工具条(44pt):表名 + 库 chip + 状态;右侧 保存/丢弃/更多/刷新/筛选
-    egui::TopBottomPanel::top("table_toolbar")
+    // ---- 内容头(34pt,DBX 式面包屑):连接 / 库 › 表 · 字段数与状态;右侧 表结构 / 编辑表结构
+    egui::TopBottomPanel::top("table_head")
         .show_separator_line(false)
-        .exact_height(theme::TOOLBAR_H)
-        .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin {
+        .exact_height(theme::CONTENT_HEAD_H)
+        .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin {
             left: 14,
             right: 10,
             top: 0,
@@ -1100,45 +1213,37 @@ pub(crate) fn draw_table_view(
         }))
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
-                // 右侧按钮+筛选框较多;脏状态还多出保存/丢弃。窄窗口下把次要操作收进 ···,
-                // 否则 1024~1200 宽度的标题/库 chip 会被筛选框压住。
-                let compact = ui.available_width()
-                    < if tab.changes.is_empty() {
-                        900.0
-                    } else {
-                        1040.0
-                    };
-                let title_resp = ui.add(
-                    egui::Label::new(
-                        theme::strong(&tab.table, theme::FS_TABLE_TITLE).color(p.text),
-                    )
-                    .truncate(),
-                );
-                // 标题基线:同一行的 chip/提示/错误都对基线,而不是各自垂直居中
-                let title_g = ui.painter().layout_no_wrap(
-                    tab.table.clone(),
-                    theme::bold(theme::FS_TABLE_TITLE),
-                    egui::Color32::PLACEHOLDER,
-                );
-                let title_baseline = title_resp.rect.center().y - title_g.size().y / 2.0
-                    + icons::baseline_top(&title_g, theme::FS_TABLE_TITLE);
-                if let Some(db) = &tab.database {
-                    ui.add_space(2.0);
-                    icons::chip_at_baseline(ui, db, p.muted, title_baseline);
+                ui.spacing_mut().item_spacing.x = 6.0;
+                // 面包屑:连接名 / 库 › 表(粗体)。窄窗口先省略连接名,表名必须留全
+                let compact_head = ui.available_width() < 760.0;
+                if !compact_head {
+                    if let Some(cn) = conns.iter().find(|c| c.id == tab.conn_id) {
+                        ui.label(RichText::new(&cn.name).size(12.0).color(p.text2));
+                        ui.label(RichText::new("/").size(12.0).color(p.muted));
+                    }
                 }
-                ui.add_space(4.0);
-                if tab.loading {
-                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                if let Some(db) = tab.database.as_deref().filter(|d| !d.is_empty()) {
+                    ui.label(RichText::new(db).size(12.0).color(p.text2));
+                    ui.label(RichText::new("›").size(12.0).color(p.muted));
                 }
-                let hint = if tab.pk_loaded && tab.pk_cols.is_empty() {
+                ui.add(
+                    egui::Label::new(theme::strong(&tab.table, theme::FS_HEADER).color(p.text))
+                        .truncate(),
+                );
+                // 字段数 + 状态提示(只读 / 可双击编辑 / 读取中)
+                let fields = tab
+                    .columns
+                    .iter()
+                    .filter(|c| !tab.hidden_cols.contains(c))
+                    .count();
+                let state = if tab.pk_loaded && tab.pk_cols.is_empty() {
                     match tab.total {
                         Some(t) => {
-                            let msg = if ui_kit::i18n::is_english() {
+                            if ui_kit::i18n::is_english() {
                                 format!("{} rows", icons::thousands(t))
                             } else {
                                 format!("共 {} 行", icons::thousands(t))
-                            };
-                            msg
+                            }
                         }
                         None => ui_kit::t!("Read-only", "只读").to_string(),
                     }
@@ -1147,27 +1252,114 @@ pub(crate) fn draw_table_view(
                 } else {
                     ui_kit::t!("Loading structure…", "读取结构中…").to_string()
                 };
-                if compact {
-                    title_resp.clone().on_hover_text(&hint);
-                } else {
-                    icons::label_at_baseline(
-                        ui,
-                        hint,
-                        egui::FontId::proportional(theme::FS_AUX),
-                        p.muted,
-                        title_baseline,
-                        260.0,
-                    );
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        fields,
+                        ui_kit::t!("fields", "字段")
+                    ))
+                    .size(11.5)
+                    .color(p.muted),
+                );
+                if !compact_head {
+                    ui.label(RichText::new(format!("· {state}")).size(11.5).color(p.muted));
                 }
                 if let Some(err) = &tab.error {
-                    icons::label_at_baseline(
-                        ui,
-                        icons::clip(err, 60),
-                        egui::FontId::proportional(theme::FS_AUX),
-                        p.red,
-                        title_baseline,
-                        160.0,
-                    );
+                    ui.label(RichText::new(icons::clip(err, 60)).size(11.5).color(p.red))
+                        .on_hover_text(err);
+                }
+                if tab.loading {
+                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                }
+
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    // 这两个入口以前只在侧栏右键菜单里:表页直达(对齐 DBX 的"编辑表结构")
+                    if ghost_button(ui, ui_kit::t!("Edit Structure", "编辑表结构")).clicked() {
+                        actions.push(TabAction::OpenDesigner {
+                            conn_id: tab.conn_id.clone(),
+                            table: tab.table.clone(),
+                            database: tab.database.clone(),
+                        });
+                    }
+                    if ghost_button(ui, ui_kit::t!("Structure", "表结构")).clicked() {
+                        actions.push(TabAction::OpenStructure {
+                            conn_id: tab.conn_id.clone(),
+                            table: tab.table.clone(),
+                            database: tab.database.clone(),
+                        });
+                    }
+                });
+            });
+        });
+
+    // ---- 查询栏(36pt,DBX 式):WHERE / ORDER BY 芯片 + 快速筛选;右侧 更多/刷新/新增行/保存/丢弃
+    egui::TopBottomPanel::top("table_querybar")
+        .show_separator_line(false)
+        .exact_height(theme::QUERYBAR_H)
+        .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin {
+            left: 14,
+            right: 10,
+            top: 0,
+            bottom: 0,
+        }))
+        .show(ctx, |ui| {
+            theme::hairline_top(ui);
+            ui.horizontal_centered(|ui| {
+                // 窄窗口(脏状态更窄)把"新增行"收进 ···,给芯片和筛选框让位
+                let compact = ui.available_width()
+                    < if tab.changes.is_empty() {
+                        900.0
+                    } else {
+                        1040.0
+                    };
+                ui.spacing_mut().item_spacing.x = 6.0;
+
+                // WHERE 芯片:开关字段/自由模式筛选栏;已有生效条件时点亮
+                let where_active = tab
+                    .applied_where
+                    .as_deref()
+                    .is_some_and(|w| !w.trim().is_empty())
+                    || !tab.conds.is_empty();
+                let wr = where_chip(ui, where_active, tab.filter_bar_open);
+                wr.clone().on_hover_text(ui_kit::t!(
+                    "Build a WHERE clause (field mode / free SQL)",
+                    "构建 WHERE 条件(字段模式 / 自由 SQL)"
+                ));
+                if wr.clicked() {
+                    tab.filter_bar_open = !tab.filter_bar_open;
+                }
+
+                // ORDER BY 芯片:菜单里直接选排序列与方向
+                if order_chip(ui, tab) {
+                    actions.push(TabAction::Reload {
+                        tab_id: tab_id_s.clone(),
+                    });
+                }
+
+                // 快速筛选:全列模糊匹配,回车应用
+                let fresp = theme::filter_box(
+                    ui,
+                    "table-filter",
+                    &mut tab.filter,
+                    ui_kit::t!("Filter rows", "筛选行"),
+                    if compact { 150.0 } else { 220.0 },
+                );
+                fresp.clone().on_hover_text(ui_kit::t!(
+                    "Press Enter to filter (fuzzy match across all columns)",
+                    "回车应用筛选(全列模糊匹配)"
+                ));
+                let enter = fresp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if enter {
+                    let new_filter =
+                        (!tab.filter.trim().is_empty()).then(|| tab.filter.trim().to_string());
+                    if new_filter != tab.active_filter {
+                        tab.active_filter = new_filter;
+                        tab.page = 1;
+                        actions.push(TabAction::Reload {
+                            tab_id: tab_id_s.clone(),
+                        });
+                    }
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1496,31 +1688,10 @@ pub(crate) fn draw_table_view(
                     }
 
                     if !compact {
-                        // 高级筛选(字段/自由模式筛选栏)快捷开关
-                        let adv_label = if tab.filter_bar_open {
-                            ui_kit::t!("Hide Filter", "收起筛选")
-                        } else if tab.applied_where.is_some() {
-                            ui_kit::t!("Advanced Filter*", "高级筛选*")
-                        } else {
-                            ui_kit::t!("Advanced Filter", "高级筛选")
-                        };
-                        if theme::button(ui, adv_label, theme::BtnKind::Secondary)
-                            .on_hover_text(ui_kit::t!(
-                                "Field/free-mode advanced filter bar",
-                                "字段/自由模式高级筛选栏"
-                            ))
+                        // 新增行(DBX 式幽灵按钮;窄窗口收进 ···)
+                        if ghost_button(ui, ui_kit::t!("＋ Add Row", "＋ 新增行"))
+                            .on_hover_text(ui_kit::t!("Insert a new row", "插入一行新数据"))
                             .clicked()
-                        {
-                            tab.filter_bar_open = !tab.filter_bar_open;
-                        }
-                        // 新增行(快捷栏直达)
-                        if theme::button(
-                            ui,
-                            ui_kit::t!("＋ Add Row", "＋ 新增行"),
-                            theme::BtnKind::Secondary,
-                        )
-                        .on_hover_text(ui_kit::t!("Insert a new row", "插入一行新数据"))
-                        .clicked()
                         {
                             tab.insert_form = Some(
                                 tab.columns
@@ -1528,29 +1699,6 @@ pub(crate) fn draw_table_view(
                                     .map(|c| (c.clone(), String::new()))
                                     .collect(),
                             );
-                        }
-                    }
-                    let fresp = theme::filter_box(
-                        ui,
-                        "table-filter",
-                        &mut tab.filter,
-                        ui_kit::t!("Filter rows", "筛选行"),
-                        152.0,
-                    );
-                    fresp.clone().on_hover_text(ui_kit::t!(
-                        "Press Enter to filter (fuzzy match across all columns)",
-                        "回车应用筛选(全列模糊匹配)"
-                    ));
-                    let enter = fresp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if enter {
-                        let new_filter =
-                            (!tab.filter.trim().is_empty()).then(|| tab.filter.trim().to_string());
-                        if new_filter != tab.active_filter {
-                            tab.active_filter = new_filter;
-                            tab.page = 1;
-                            actions.push(TabAction::Reload {
-                                tab_id: tab_id_s.clone(),
-                            });
                         }
                     }
                 });
@@ -1571,6 +1719,7 @@ pub(crate) fn draw_table_view(
     // ---- 底部状态栏(34pt):共 N 行 | 已筛选 | 耗时;右侧翻页
     let mut clear_filter = false;
     let mut page_reload = false;
+    let mut export: Option<u8> = None;
     egui::TopBottomPanel::bottom("table_pager")
         .show_separator_line(false)
         .exact_height(theme::FOOTER_H)
@@ -1597,7 +1746,7 @@ pub(crate) fn draw_table_view(
                     }
                     None => ui_kit::t!("Unknown rows", "行数未知").to_string(),
                 };
-                let (slot, _) = ui.allocate_exact_size(egui::vec2(120.0, 18.0), Sense::hover());
+                let (slot, _) = ui.allocate_exact_size(egui::vec2(92.0, 18.0), Sense::hover());
                 ui.painter().text(
                     slot.left_top() + egui::vec2(0.0, slot.height() / 2.0),
                     egui::Align2::LEFT_CENTER,
@@ -1605,6 +1754,41 @@ pub(crate) fn draw_table_view(
                     egui::FontId::proportional(11.5),
                     p.text2,
                 );
+                // 列数(DBX 式:行数后紧跟列数与耗时)
+                let shown_cols = tab
+                    .columns
+                    .iter()
+                    .filter(|c| !tab.hidden_cols.contains(c))
+                    .count();
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        shown_cols,
+                        ui_kit::t!("cols", "列")
+                    ))
+                    .size(11.5)
+                    .color(p.text2),
+                );
+                if let Some(ms) = tab.last_elapsed_ms {
+                    vsep(ui);
+                    ui.label(RichText::new(format!("{ms} ms")).size(11.5).color(p.text2));
+                }
+                // SQL 预览(DBX 式):底栏中段显示当前数据对应的 SQL,mono 灰字可截断,
+                // 悬停看全句——用户能随时知道表格当前"凭什么条件/排序"取数
+                if !tab.load_sql.is_empty() && !compact_footer {
+                    vsep(ui);
+                    let (slot, resp) =
+                        ui.allocate_exact_size(egui::vec2(320.0, 18.0), Sense::hover());
+                    let clip_sql = icons::clip(&tab.load_sql, 66);
+                    ui.painter().text(
+                        slot.left_top() + egui::vec2(0.0, slot.height() / 2.0),
+                        egui::Align2::LEFT_CENTER,
+                        clip_sql,
+                        theme::mono(11.0),
+                        p.muted,
+                    );
+                    resp.on_hover_text(&tab.load_sql);
+                }
                 if let Some(f) = tab.active_filter.clone() {
                     vsep(ui);
                     let clip = if compact_footer { 10 } else { 20 };
@@ -1634,58 +1818,6 @@ pub(crate) fn draw_table_view(
                         clear_filter = true;
                     }
                 }
-                if let Some(ms) = tab.last_elapsed_ms {
-                    vsep(ui);
-                    ui.label(RichText::new(format!("{ms} ms")).size(11.5).color(p.text2));
-                }
-                // SQL 预览(DBX 式):底栏中段显示当前数据对应的 SQL,mono 灰字可截断,
-                // 悬停看全句——用户能随时知道表格当前"凭什么条件/排序"取数
-                if !tab.load_sql.is_empty() && !compact_footer {
-                    vsep(ui);
-                    let (slot, resp) =
-                        ui.allocate_exact_size(egui::vec2(240.0, 18.0), Sense::hover());
-                    let clip_sql = icons::clip(&tab.load_sql, 44);
-                    ui.painter().text(
-                        slot.left_top() + egui::vec2(0.0, slot.height() / 2.0),
-                        egui::Align2::LEFT_CENTER,
-                        clip_sql,
-                        theme::mono(10.0),
-                        p.muted,
-                    );
-                    resp.on_hover_text(&tab.load_sql);
-                }
-                // 每页行数快捷设置(底栏直达)
-                vsep(ui);
-                let size_opts = [50usize, 100, 200, 500];
-                let size_label = if ui_kit::i18n::is_english() {
-                    format!("{} / page ▾", tab.page_size)
-                } else {
-                    format!("每页 {} ▾", tab.page_size)
-                };
-                ui.menu_button(RichText::new(size_label).size(11.5).color(p.text2), |ui| {
-                    ui.set_min_width(90.0);
-                    for n in size_opts {
-                        if ui
-                            .selectable_label(
-                                tab.page_size == n,
-                                RichText::new(if ui_kit::i18n::is_english() {
-                                    format!("{n} rows")
-                                } else {
-                                    format!("{n} 行")
-                                })
-                                .size(12.0),
-                            )
-                            .clicked()
-                        {
-                            if tab.page_size != n {
-                                tab.page_size = n;
-                                tab.page = 1;
-                                page_reload = true;
-                            }
-                            ui.close_menu();
-                        }
-                    }
-                });
                 if !tab.changes.is_empty() {
                     vsep(ui);
                     ui.label(
@@ -1751,6 +1883,30 @@ pub(crate) fn draw_table_view(
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    // 导出(DBX 式底栏直达;··· 菜单里仍有同名项)
+                    ui.menu_button(
+                        RichText::new(format!("{} ▾", ui_kit::t!("Export", "导出")))
+                            .size(11.5)
+                            .color(p.text2),
+                        |ui| {
+                            ui.set_min_width(150.0);
+                            if ui.button(ui_kit::t!("Export CSV", "导出 CSV")).clicked() {
+                                export = Some(0);
+                                ui.close_menu();
+                            }
+                            if ui
+                                .button(ui_kit::t!("Export Excel (.xlsx)", "导出 Excel(.xlsx)"))
+                                .clicked()
+                            {
+                                export = Some(1);
+                                ui.close_menu();
+                            }
+                            if ui.button(ui_kit::t!("Export SQL", "导出 SQL")).clicked() {
+                                export = Some(2);
+                                ui.close_menu();
+                            }
+                        },
+                    );
                     let total_pages = tab
                         .total
                         .map(|t| (t.div_ceil(tab.page_size as u64) as usize).max(1));
@@ -1778,9 +1934,56 @@ pub(crate) fn draw_table_view(
                             page: tab.page.saturating_sub(1),
                         });
                     }
+                    // 每页行数(DBX 式"100 行/页 ▾")
+                    vsep(ui);
+                    let size_opts = [50usize, 100, 200, 500];
+                    let size_label = if ui_kit::i18n::is_english() {
+                        format!("{} rows / page ▾", tab.page_size)
+                    } else {
+                        format!("{} 行/页 ▾", tab.page_size)
+                    };
+                    ui.menu_button(RichText::new(size_label).size(11.5).color(p.text2), |ui| {
+                        ui.set_min_width(90.0);
+                        for n in size_opts {
+                            if ui
+                                .selectable_label(
+                                    tab.page_size == n,
+                                    RichText::new(if ui_kit::i18n::is_english() {
+                                        format!("{n} rows")
+                                    } else {
+                                        format!("{n} 行")
+                                    })
+                                    .size(12.0),
+                                )
+                                .clicked()
+                            {
+                                if tab.page_size != n {
+                                    tab.page_size = n;
+                                    tab.page = 1;
+                                    page_reload = true;
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                    });
                 });
             });
         });
+    // 底栏导出菜单:CSV / Excel / SQL
+    match export {
+        Some(0) => actions.push(TabAction::ExportCsv {
+            tab_id: tab_id_s.clone(),
+        }),
+        Some(1) => actions.push(TabAction::ExportXlsx {
+            suggest: format!("{}.xlsx", tab.table),
+            columns: tab.columns.clone(),
+            rows: tab.rows.clone(),
+        }),
+        Some(2) => actions.push(TabAction::ExportSql {
+            tab_id: tab_id_s.clone(),
+        }),
+        _ => {}
+    }
     if clear_filter {
         tab.active_filter = None;
         tab.filter.clear();
@@ -4733,6 +4936,13 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             database,
         } => {
             app.open_designer(&conn_id, Some(&table), database);
+        }
+        TabAction::OpenStructure {
+            conn_id,
+            table,
+            database,
+        } => {
+            app.open_structure(&conn_id, &table, database);
         }
         TabAction::RedisScan { tab_id, reset } => app.redis_scan(&tab_id, reset),
         TabAction::RedisSelectKey { tab_id, key } => app.redis_fetch_detail(&tab_id, &key),

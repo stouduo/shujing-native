@@ -2086,11 +2086,13 @@ fn filter_bar_clicks_work() {
         h.step();
         h.step();
     };
-    // 从截图核对的实际逻辑坐标:操作符下拉 ≈ (440, 149)
-    click(&mut harness, egui::pos2(440.0, 149.0));
+    // 从截图核对的实际逻辑坐标:操作符下拉 ≈ (440, 175)。
+    // 表页头部现为两行(标签栏 38 + 内容头 34 + 查询栏 36 = 108),筛选栏比旧的单行
+    // 工具条布局整体下移 26pt,下面的弹层/选项坐标同步 +26
+    click(&mut harness, egui::pos2(440.0, 175.0));
     harness.step();
     let out = harness.output().clone();
-    let popup_rect = egui::Rect::from_min_size(egui::pos2(399.0, 170.0), egui::vec2(96.0, 250.0));
+    let popup_rect = egui::Rect::from_min_size(egui::pos2(399.0, 196.0), egui::vec2(96.0, 250.0));
     let popup_shapes = out
         .shapes
         .iter()
@@ -2098,13 +2100,73 @@ fn filter_bar_clicks_work() {
         .count();
     eprintln!("[popup-shapes] {popup_shapes}");
     // 弹层选项第一项(= )在按钮下方 ~30px;第二项(!=)≈ +28
-    click(&mut harness, egui::pos2(440.0, 205.0));
+    click(&mut harness, egui::pos2(440.0, 231.0));
     let b = harness.state();
     let conds_op = b.borrow().tabs[2]
         .table_data()
         .map(|t| t.conds[0].1.clone())
         .unwrap_or_default();
     assert_eq!(conds_op, "!=", "操作符下拉应可选,实际为 {conds_op:?}");
+}
+
+#[test]
+fn where_chip_toggles_filter_bar() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        t.filter_bar_open = false;
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let img = harness.render().expect("render 失败");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/where_chip.png")
+        .expect("保存 PNG 失败");
+    // 查询栏 WHERE 芯片(取代了旧的"高级筛选"按钮):芯片紧贴查询栏左侧,
+    // x = 侧栏 220 + 边距 14 + 芯片宽 76 / 2 ≈ 272;y = 标签栏 38 + 内容头 34 + 查询栏 36 / 2 = 90
+    let pos = egui::pos2(272.0, 90.0);
+    harness.input_mut().events.push(egui::Event::PointerMoved(pos));
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.input_mut().events.push(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    harness.step();
+    harness.step();
+    let open = harness.state()
+        .borrow()
+        .tabs[2]
+        .table_data()
+        .map(|t| t.filter_bar_open)
+        .unwrap_or(true);
+    assert!(open, "点击 WHERE 芯片应打开筛选栏");
 }
 
 #[test]

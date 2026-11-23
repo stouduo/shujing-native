@@ -19,11 +19,11 @@ impl ShujingApp {
             .resizable(true)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::c().bg)
+                    .fill(theme::c().panel)
                     .inner_margin(egui::Margin {
                         left: 10,
                         right: 10,
-                        top: 5,
+                        top: 0,
                         bottom: 8,
                     }),
             )
@@ -52,9 +52,9 @@ impl ShujingApp {
                         band,
                         0,
                         egui::Color32::from_rgba_premultiplied(
-                            (p.bg.r() as f32 * a / 255.0) as u8,
-                            (p.bg.g() as f32 * a / 255.0) as u8,
-                            (p.bg.b() as f32 * a / 255.0) as u8,
+                            (p.panel.r() as f32 * a / 255.0) as u8,
+                            (p.panel.g() as f32 * a / 255.0) as u8,
+                            (p.panel.b() as f32 * a / 255.0) as u8,
                             a as u8,
                         ),
                     );
@@ -98,7 +98,7 @@ impl ShujingApp {
         let w = ui.available_width();
 
         // 头部:与标签栏同一水平带(高度 = 标签高度),保证 ＋ 与标题同线
-        let head_h = theme::TABBAR_H - 5.0;
+        let head_h = theme::TABBAR_H - 1.0;
         ui.allocate_ui_with_layout(
             egui::vec2(w, head_h),
             Layout::left_to_right(Align::Center),
