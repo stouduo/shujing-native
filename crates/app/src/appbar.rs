@@ -8,7 +8,8 @@ use crate::icons;
 use crate::theme;
 use egui::{Align, Color32, Layout, Sense};
 
-/// 应用工具栏高度(DBX 40)
+/// 应用工具栏高度的标准密度值:渲染测试的坐标锚点(CHROME_TOP)。
+/// 实际绘制走 theme::appbar_h()(紧凑档 36)
 pub(crate) const BAR_H: f32 = 40.0;
 
 
@@ -21,7 +22,7 @@ impl ShujingApp {
         let mut menu_act: Option<u8> = None;
         egui::TopBottomPanel::top("appbar")
             .show_separator_line(false)
-            .exact_height(BAR_H)
+            .exact_height(theme::appbar_h())
             .frame(
                 egui::Frame::new()
                     .fill(p.chrome)

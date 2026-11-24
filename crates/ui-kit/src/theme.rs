@@ -17,6 +17,9 @@
 //! | 主按钮(反色实心) | `#D0D0D6`/`#131416` | `#171717`/`#FAFAFA` |
 //!
 //! 排版:表名 15 / 连接 14 / 树 14 / 标签 12 / 列头 13 粗 + 类型 10 / 数据格 13 / 辅助 11。
+//! 字号用法:结构性文字(列头/树/标签/数据格/辅助说明)用对应 `fs_*()` 槽;
+//! 长尾小字(徽章/时间戳/占位提示)直接 `fs_px(9.5~12.5)` 保真,不强行归档
+//! (13 档并 7 档会让全站文字肉眼变样,收益不抵回归风险)。
 //! 节奏:行高 30、工具条 44、标签栏 38、通用列头 36、数据列头 52、状态栏 34。圆角 6/8。
 //!
 //! # 皮肤系统:色彩预设(Palette)× 密度(Metrics)
@@ -62,6 +65,8 @@ pub struct Metrics {
     pub fs_aux: f32,
     // 结构高度
     pub tabbar_h: f32,
+    /// 应用顶栏(数镜名 + 主功能直达,40=应用级 chrome;与页面级工具条 toolbar_h 区分)
+    pub appbar_h: f32,
     pub toolbar_h: f32,
     /// 通用结果网格的单行列头
     pub header_h: f32,
@@ -106,6 +111,7 @@ pub const STANDARD: Metrics = Metrics {
     fs_data: 13.0,
     fs_aux: 11.0,
     tabbar_h: 38.0,
+    appbar_h: 40.0,
     toolbar_h: 44.0,
     header_h: 36.0,
     data_header_h: 52.0,
@@ -142,6 +148,7 @@ pub const COMPACT: Metrics = Metrics {
     fs_data: 13.0,
     fs_aux: 11.0,
     tabbar_h: 34.0,
+    appbar_h: 36.0,
     toolbar_h: 36.0,
     header_h: 32.0,
     data_header_h: 44.0,
@@ -196,6 +203,7 @@ pub fn fs_type() -> f32 { m().fs_type * m().font_scale }
 pub fn fs_data() -> f32 { m().fs_data * m().font_scale }
 pub fn fs_aux() -> f32 { m().fs_aux * m().font_scale }
 pub fn tabbar_h() -> f32 { m().tabbar_h }
+pub fn appbar_h() -> f32 { m().appbar_h }
 pub fn toolbar_h() -> f32 { m().toolbar_h }
 pub fn header_h() -> f32 { m().header_h }
 pub fn data_header_h() -> f32 { m().data_header_h }
@@ -627,11 +635,6 @@ pub fn classify_type(ty: &str) -> TypeKind {
             _ => TypeKind::Other,
         };
     }
-}
-
-/// 字符串类型名 → 类别色(classify_type 包装;Redis 键类型等无结构元数据处用)
-pub fn kind_color(ty: &str) -> Color32 {
-    type_color(classify_type(ty))
 }
 
 /// 类别对应的类型小字颜色(DBX 明暗两套色板:浅色深而饱和,深色主题换亮阶)
@@ -1190,7 +1193,7 @@ pub fn form_tabs(ui: &mut egui::Ui, tabs: &[&str], selected: &mut usize) -> usiz
         egui::UiBuilder::new()
             .max_rect(egui::Rect::from_min_size(
                 avail.min,
-                egui::vec2(avail.width(), 26.0),
+                egui::vec2(avail.width(), ctrl_h()),
             ))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
         |ui| {
@@ -1203,7 +1206,7 @@ pub fn form_tabs(ui: &mut egui::Ui, tabs: &[&str], selected: &mut usize) -> usiz
                     .layout_no_wrap((*t).to_owned(), egui::FontId::proportional(fs_px(12.5)), color);
                 // 先铺底再画字:底色若画在 Button 之后会把文字盖住
                 let (rect, r) = ui.allocate_exact_size(
-                    egui::vec2(g.size().x + 16.0, 26.0),
+                    egui::vec2(g.size().x + 16.0, ctrl_h()),
                     egui::Sense::click(),
                 );
                 if on || r.hovered() {

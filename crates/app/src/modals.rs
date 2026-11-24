@@ -3734,22 +3734,19 @@ ui.add_space(6.0);
                     .color(p.muted),
             );
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                for (i, (en, zh, _)) in theme::DENSITIES.iter().enumerate() {
-                    let label = if ui_kit::i18n::is_english() { *en } else { *zh };
-                    let kind = if theme::density_idx() == i {
-                        theme::BtnKind::Primary
-                    } else {
-                        theme::BtnKind::Secondary
-                    };
-                    if theme::button(ui, label, kind).clicked() && theme::density_idx() != i {
-                        theme::set_density(i);
-                        theme::apply(ctx);
-                        app.save_theme_settings();
-                    }
-                }
-            });
+            let labels: Vec<&str> = theme::DENSITIES
+                .iter()
+                .map(|(en, zh, _)| {
+                    if ui_kit::i18n::is_english() { *en } else { *zh }
+                })
+                .collect();
+            let mut sel = theme::density_idx();
+            let picked = theme::form_tabs(ui, &labels, &mut sel);
+            if picked != theme::density_idx() {
+                theme::set_density(picked);
+                theme::apply(ctx);
+                app.save_theme_settings();
+            }
             ui.add_space(6.0);
             ui.label(RichText::new(ui_kit::t!("Theme", "主题")).size(theme::fs_px(11.0)).color(p.muted));
             ui.horizontal(|ui| {

@@ -5020,3 +5020,104 @@ fn render_compact_density() {
         .expect("保存 PNG 失败");
     crate::theme::set_density(0);
 }
+
+/// 紧凑密度的多页核对:查询结果网格与 Redis 控制台(结构性高度全走 token,
+/// 页面里写死的小件——WHERE 芯片 76×24、类型徽标 16 高——要能在紧凑档里放得下)
+#[test]
+fn render_compact_pages() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 查询页(带类型的结果集)
+    let (q, conns, dbs) = query_view_fixture();
+    let cell = std::cell::RefCell::new(Some(q));
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 760.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, st: &mut std::cell::RefCell<Option<QueryTab>>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::set_density(1);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = st.borrow_mut();
+                let q = b.as_mut().unwrap();
+                let _ = query::draw_query_view(
+                    &conns,
+                    ctx,
+                    "q1",
+                    q,
+                    &[],
+                    &dbs,
+                    true,
+                    &[],
+                    &Default::default(),
+                    None,
+                    false,
+                );
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    harness
+        .render()
+        .expect("render 失败")
+        .save("/tmp/shujing_ui/compact_query.png")
+        .expect("保存 PNG 失败");
+
+    // Redis 控制台
+    let mut app = test_app(vec![], 0);
+    app.open_redis("c1", 0);
+    if let TabKind::Redis(rt) = &mut app.tabs.last_mut().unwrap().kind {
+        rt.keys = vec![
+            "user:1001".into(),
+            "user:1002".into(),
+            "session:abc".into(),
+            "cache:home:banner".into(),
+        ];
+        rt.selected_key = Some("user:1001".into());
+        rt.key_types = std::collections::HashMap::from([
+            ("user:1001".to_string(), "hash".to_string()),
+            ("user:1002".to_string(), "string".to_string()),
+            ("session:abc".to_string(), "zset".to_string()),
+            ("cache:home:banner".to_string(), "stream".to_string()),
+        ]);
+        rt.detail = Some(shujing_core::redis_ops::RedisDetail {
+            key_type: "hash".into(),
+            ttl: 3600,
+            len: 2,
+            text: None,
+            pairs: vec![("name".into(), "张三".into()), ("city".into(), "北京".into())],
+        });
+    }
+    let app = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            app,
+        );
+    harness.run_steps(6);
+    harness
+        .render()
+        .expect("render 失败")
+        .save("/tmp/shujing_ui/compact_redis.png")
+        .expect("保存 PNG 失败");
+    crate::theme::set_density(0);
+}
+
