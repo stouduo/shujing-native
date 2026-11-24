@@ -1209,6 +1209,10 @@ pub fn form_tabs(ui: &mut egui::Ui, tabs: &[&str], selected: &mut usize) -> usiz
                     egui::vec2(g.size().x + 16.0, ctrl_h()),
                     egui::Sense::click(),
                 );
+                // 手绘分段补无障碍标签:读屏器可读,kittest 可按标签点分段
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t)
+                });
                 if on || r.hovered() {
                     ui.painter().rect_filled(
                         rect,
