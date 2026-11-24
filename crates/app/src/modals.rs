@@ -3585,8 +3585,7 @@ pub fn draw_parquet_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         ui,
                         "parquet-preview-grid",
                         &preview.columns,
-                        // Parquet 预览暂不取列类型,表头只有名称行
-                        &[],
+                        &preview.column_types,
                         &preview.rows,
                         &mut frozen,
                     );

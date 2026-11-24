@@ -7,6 +7,9 @@ use std::path::Path;
 #[serde(rename_all = "camelCase")]
 pub struct ParquetPreview {
     pub columns: Vec<String>,
+    /// 各列的类型名(逻辑注解优先,退到物理类型),与 columns 等长;
+    /// 嵌套列取不到时为空串。给结果网格表头第二行
+    pub column_types: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     pub total_rows: i64,
     pub row_groups: usize,
@@ -60,14 +63,80 @@ pub fn preview(path: &std::path::Path, max_rows: usize) -> Result<ParquetPreview
     }
 
     let truncated = rows.len() < total_rows.max(0) as usize;
+    // 列类型按 schema 描述符取(列名可能被行迭代器的名字覆盖,类型按下标对齐;
+    // 行数不一致的嵌套 schema 取不到的类型留空)
+    let mut column_types: Vec<String> = meta
+        .file_metadata()
+        .schema_descr()
+        .columns()
+        .iter()
+        .map(|c| column_type_name(c))
+        .collect();
+    column_types.resize(columns.len(), String::new());
     Ok(ParquetPreview {
         columns,
+        column_types,
         rows,
         total_rows,
         row_groups,
         file_size,
         truncated,
     })
+}
+
+/// 列描述符 → 类型名(小写,写法与各连接器上报的一致,归入同一套类别色):
+/// 逻辑注解优先(UTF8/DECIMAL/TIMESTAMP/整数位宽…),没有注解退到物理类型。
+/// BYTE_ARRAY/FIXED_LEN_BYTE_ARRAY 裸写通常是二进制;INT96 是遗留时间戳。
+fn column_type_name(desc: &parquet::schema::types::ColumnDescriptor) -> String {
+    // PhysicalType 是 basic::Type 的别名(物理类型枚举)
+    use parquet::basic::{LogicalType, Type as PhysicalType};
+    let logical = desc.logical_type();
+    match logical {
+        Some(LogicalType::String | LogicalType::Enum) => "string",
+        Some(LogicalType::Json) => "json",
+        Some(LogicalType::Bson) => "binary",
+        Some(LogicalType::Uuid) => "uuid",
+        Some(LogicalType::Date) => "date",
+        Some(LogicalType::Time { .. }) => "time",
+        Some(LogicalType::Timestamp { .. }) => "timestamp",
+        Some(LogicalType::Decimal { .. }) => "decimal",
+        Some(LogicalType::Float16) => "float",
+        Some(LogicalType::Integer {
+            bit_width,
+            is_signed,
+        }) => {
+            let base = match bit_width {
+                8 => "tinyint",
+                16 => "smallint",
+                32 => "int",
+                _ => "bigint",
+            };
+            return if is_signed {
+                base.to_string()
+            } else {
+                // classify_type 认 uint8/uint16/uint32/uint64
+                format!("uint{}", match bit_width {
+                    8 => 8,
+                    16 => 16,
+                    32 => 32,
+                    _ => 64,
+                })
+            };
+        }
+        // Map/List 是分组注解,叶子列没有自己的注解,退到物理类型
+        Some(LogicalType::Map | LogicalType::List | LogicalType::Unknown) | None => {
+            match desc.physical_type() {
+                PhysicalType::BOOLEAN => "bool",
+                PhysicalType::INT32 => "int",
+                PhysicalType::INT64 => "bigint",
+                PhysicalType::INT96 => "timestamp",
+                PhysicalType::FLOAT => "float",
+                PhysicalType::DOUBLE => "double",
+                PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => "binary",
+            }
+        }
+    }
+    .to_string()
 }
 
 /// Field → 文本:数值/字符串直接转,Float16/Decimal/Date/时间戳/嵌套类型
@@ -186,8 +255,13 @@ pub fn export_parquet(
             ColKind::F64 => PType::DOUBLE,
             ColKind::Str => PType::BYTE_ARRAY,
         };
-        let f = SchemaType::primitive_type_builder(name, ty)
-            .with_repetition(Repetition::OPTIONAL)
+        // 字符串列补 UTF8 逻辑注解:回读时类型名能标成 string(否则按裸 BYTE_ARRAY 报 binary)
+        let mut b = SchemaType::primitive_type_builder(name, ty)
+            .with_repetition(Repetition::OPTIONAL);
+        if ty == PType::BYTE_ARRAY {
+            b = b.with_logical_type(Some(parquet::basic::LogicalType::String));
+        }
+        let f = b
             .build()
             .map_err(|e| format!("Parquet schema 构建失败: {e}"))?;
         fields.push(std::sync::Arc::new(f));
@@ -279,6 +353,28 @@ pub fn export_parquet(
 
 #[cfg(test)]
 mod tests {
+    /// 导出→预览往返:列类型要标出来(int/double/string);字符串列带 UTF8 注解
+    #[test]
+    fn preview_reports_column_types_roundtrip() {
+        let dir = std::env::temp_dir().join("shujing-parquet-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("types.parquet");
+        let columns = ["id".to_string(), "name".to_string(), "amount".to_string()];
+        let rows = vec![
+            vec![Some("1".into()), Some("张三".into()), Some("12.5".into())],
+            vec![Some("2".into()), None, Some("-3".into())],
+            vec![None, Some("李四".into()), Some("0.25".into())],
+        ];
+        let n = export_parquet(&columns, &rows, &path).unwrap();
+        assert_eq!(n, 3);
+        let pv = preview(&path, 10).unwrap();
+        assert_eq!(pv.columns, ["id", "name", "amount"]);
+        assert_eq!(pv.column_types, ["int", "string", "double"]);
+        assert_eq!(pv.total_rows, 3);
+        assert_eq!(pv.rows[1][1], None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
     use parquet::basic::{Repetition, Type};
     use parquet::file::properties::WriterProperties;
@@ -390,6 +486,8 @@ pub fn preview_csv(path: &std::path::Path, max_rows: usize) -> Result<ParquetPre
     let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     Ok(ParquetPreview {
         columns: headers,
+        // CSV 是无 schema 来源:类型未知留空,网格退回按值判断
+        column_types: vec![String::new(); rows.first().map(|r| r.len()).unwrap_or(0)],
         rows,
         total_rows: total,
         row_groups: 0,
@@ -456,6 +554,7 @@ pub fn preview_json(path: &std::path::Path, max_rows: usize) -> Result<ParquetPr
     let rows: Vec<Vec<Option<String>>> = rows.into_iter().take(max_rows).collect();
     let truncated = rows.len() < total as usize;
     Ok(ParquetPreview {
+        column_types: vec![String::new(); columns.len()],
         columns,
         rows,
         total_rows: total,
