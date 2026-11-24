@@ -2069,7 +2069,7 @@ fn close_tab_keeps_active_tab() {
 
 #[test]
 fn deleted_badge_is_inverted() {
-    use crate::table_view::badge_value;
+    use crate::theme::badge_value;
     assert_eq!(
         badge_value("deleted", &Some("1".into())),
         Some(("1".to_string(), false))

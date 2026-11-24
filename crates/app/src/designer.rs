@@ -204,7 +204,7 @@ pub fn draw_designer_view(
 
             // SQL 预览
             ui.add_space(8.0);
-            section_label(ui, ui_kit::t!("SQL Preview", "SQL 预览"));
+            theme::section_label(ui, ui_kit::t!("SQL Preview", "SQL 预览"));
             ui.add_space(4.0);
             let sql = preview_sql(ctx, d);
             egui::Frame::new()
@@ -233,10 +233,6 @@ pub fn draw_designer_view(
     actions
 }
 
-fn section_label(ui: &mut egui::Ui, label: &str) {
-    let p = theme::c();
-    ui.label(theme::strong(label, 12.0).color(p.text2));
-}
 
 fn draw_grid_header(ui: &mut egui::Ui, _is_edit: bool) {
     let p = theme::c();
@@ -322,14 +318,14 @@ fn draw_column_row(
             egui::pos2(row_rect.left(), top),
             egui::vec2(widths.0, row_h),
         )));
-        tiny_field(&mut f, &mut c.name, "name", !lock_existing, name_color);
+        theme::tiny_field(&mut f, &mut c.name, "name", !lock_existing, name_color);
         let mut f = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
             egui::pos2(row_rect.left() + widths.0 + 6.0, top),
             egui::vec2(widths.1, row_h),
         )));
         // 类型按类别着色:与列头类型小字/结构页同一套色板
         let ty_color = theme::type_color(theme::classify_type(&c.data_type));
-        tiny_field(
+        theme::tiny_field(
             &mut f,
             &mut c.data_type,
             "type",
@@ -340,7 +336,7 @@ fn draw_column_row(
             egui::pos2(row_rect.left() + widths.0 + widths.1 + 12.0, top),
             egui::vec2(widths.2, row_h),
         )));
-        tiny_field(
+        theme::tiny_field(
             &mut f,
             &mut c.length,
             "len",
@@ -397,7 +393,7 @@ fn draw_column_row(
             egui::pos2(dx, top),
             egui::vec2(widths.6, row_h),
         )));
-        tiny_field(
+        theme::tiny_field(
             &mut f,
             &mut c.default,
             "default",
@@ -408,7 +404,7 @@ fn draw_column_row(
             egui::pos2(dx + widths.6 + 6.0, top),
             egui::vec2(widths.7, row_h),
         )));
-        tiny_field(&mut f, &mut c.comment, "comment", true, p.text2);
+        theme::tiny_field(&mut f, &mut c.comment, "comment", true, p.text2);
         // 删除按钮(已有列禁用)
         let del_x = dx + widths.6 + widths.7 + 12.0;
         let dr = egui::Rect::from_center_size(
@@ -453,21 +449,6 @@ fn draw_column_row(
 }
 
 /// 小号单行输入(设计器网格用)
-fn tiny_field(ui: &mut egui::Ui, val: &mut String, ph: &str, enabled: bool, color: Color32) {
-    let p = theme::c();
-    ui.add_sized(
-        [ui.available_width(), 24.0],
-        egui::TextEdit::singleline(val)
-            .hint_text(
-                RichText::new(ph)
-                    .font(theme::mono(10.5))
-                    .color(p.muted.gamma_multiply(0.7)),
-            )
-            .font(theme::mono(11.5))
-            .text_color(color)
-            .interactive(enabled),
-    );
-}
 
 fn col_widths(ui: &egui::Ui) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
     // 名称/类型/长度/NOT NULL/PK/自增/默认/注释。宽窗注释列吃满余量;

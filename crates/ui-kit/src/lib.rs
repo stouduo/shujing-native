@@ -14,5 +14,6 @@ pub mod i18n;
 pub mod icons;
 pub mod scroll;
 pub mod theme;
+pub mod widgets;
 
 pub use theme::{apply, c, is_dark, set_dark};

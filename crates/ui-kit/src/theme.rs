@@ -611,6 +611,11 @@ pub fn classify_type(ty: &str) -> TypeKind {
     }
 }
 
+/// 字符串类型名 → 类别色(classify_type 包装;Redis 键类型等无结构元数据处用)
+pub fn kind_color(ty: &str) -> Color32 {
+    type_color(classify_type(ty))
+}
+
 /// 类别对应的类型小字颜色(DBX 明暗两套色板:浅色深而饱和,深色主题换亮阶)
 pub fn type_color(kind: TypeKind) -> Color32 {
     let pairs: [(TypeKind, (u8, u8, u8), (u8, u8, u8)); 8] = [

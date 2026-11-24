@@ -4,13 +4,13 @@
 //! 此前这些入口散落在侧栏右键菜单、表页 ··· 菜单里——没开标签时连"设置"都点不到。
 
 use crate::app::{ShujingApp, TabKind};
+use crate::icons;
 use crate::theme;
 use egui::{Align, Color32, Layout, Sense};
 
 /// 应用工具栏高度(DBX 40)
 pub(crate) const BAR_H: f32 = 40.0;
 
-type IconFn = fn(&egui::Painter, egui::Pos2, Color32);
 
 impl ShujingApp {
     pub fn draw_app_toolbar(&mut self, ctx: &egui::Context) {
@@ -57,17 +57,17 @@ impl ShujingApp {
                         ui_kit::t!("Plugins", "插件管理"),
                     ];
                     for (i, icon) in [
-                        icon_plus_sq,
-                        icon_doc_plus,
-                        icon_swap,
-                        icon_diff,
-                        icon_diff,
-                        icon_box,
+                        crate::icons::icon_plus_sq,
+                        crate::icons::icon_doc_plus,
+                        crate::icons::icon_swap,
+                        crate::icons::icon_diff,
+                        crate::icons::icon_diff,
+                        crate::icons::icon_box,
                     ]
                     .into_iter()
                     .enumerate()
                     {
-                        if bar_button(ui, icon, &lbl(tip[i]), tip[i]) {
+                        if theme::bar_button(ui, icon, &lbl(tip[i]), tip[i]) {
                             act = Some(i as u8);
                         }
                     }
@@ -121,11 +121,11 @@ impl ShujingApp {
                     // 右侧:外观切换 / 设置
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        if icon_button(ui, "⚙", ui_kit::t!("Settings", "设置")) {
+                        if theme::icon_button(ui, "⚙", ui_kit::t!("Settings", "设置")) {
                             act = Some(7);
                         }
                         let glyph = if theme::is_dark() { "☀" } else { "☾" };
-                        if icon_button(
+                        if theme::icon_button(
                             ui,
                             glyph,
                             ui_kit::t!("Toggle light/dark appearance", "切换深浅外观"),
@@ -185,116 +185,9 @@ impl ShujingApp {
     }
 }
 
-/// 工具栏按钮:图标 + 文字(文字可空 = 只留图标),悬停淡底
-fn bar_button(ui: &mut egui::Ui, icon: IconFn, label: &str, tip: &str) -> bool {
-    let p = theme::c();
-    let g = if label.is_empty() {
-        None
-    } else {
-        Some(
-            ui.painter()
-                .layout_no_wrap(label.to_owned(), egui::FontId::proportional(12.0), p.text),
-        )
-    };
-    let w = 8.0 + 14.0 + g.as_ref().map_or(0.0, |g| 6.0 + g.size().x) + 8.0;
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::click());
-    if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(6), theme::tint(p.text, 16));
-    }
-    let cy = rect.center().y;
-    icon(ui.painter(), egui::pos2(rect.left() + 15.0, cy), p.text);
-    if let Some(g) = g {
-        ui.painter().galley(
-            egui::pos2(rect.left() + 28.0, cy - g.size().y / 2.0),
-            g,
-            p.text,
-        );
-    }
-    if !tip.is_empty() {
-        resp.clone().on_hover_text(tip.to_string());
-    }
-    let clicked = resp.clicked();
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    clicked
-}
 
-/// 纯图标按钮(28×28,文字字形当图标)
-fn icon_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
-    let p = theme::c();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
-    if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(6), theme::tint(p.text, 16));
-    }
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        glyph,
-        egui::FontId::proportional(14.0),
-        if resp.hovered() { p.text } else { p.text2 },
-    );
-    let clicked = resp.clicked();
-    resp.clone().on_hover_text(tip);
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    clicked
-}
 
-// ---------------------------------------------------------------- 矢量图标(14×14 内)
 
-fn icon_plus_sq(p: &egui::Painter, c: egui::Pos2, color: Color32) {
-    let st = egui::Stroke::new(1.2, color);
-    let r = egui::Rect::from_center_size(c, egui::vec2(12.0, 12.0));
-    p.rect_stroke(r, egui::CornerRadius::same(3), st, egui::StrokeKind::Inside);
-    let s = 2.6;
-    p.line_segment([egui::pos2(c.x - s, c.y), egui::pos2(c.x + s, c.y)], st);
-    p.line_segment([egui::pos2(c.x, c.y - s), egui::pos2(c.x, c.y + s)], st);
-}
 
-fn icon_doc_plus(p: &egui::Painter, c: egui::Pos2, color: Color32) {
-    let st = egui::Stroke::new(1.2, color);
-    let r = egui::Rect::from_center_size(egui::pos2(c.x - 1.5, c.y), egui::vec2(10.0, 12.0));
-    p.rect_stroke(r, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
-    p.line_segment(
-        [egui::pos2(r.left() + 2.5, r.top() + 4.0), egui::pos2(r.right() - 2.5, r.top() + 4.0)],
-        st,
-    );
-    p.line_segment(
-        [egui::pos2(r.left() + 2.5, r.top() + 7.0), egui::pos2(r.right() - 2.5, r.top() + 7.0)],
-        st,
-    );
-    // 右下角的加号:先用工具栏底色垫一圈,免得和文档边框糊在一起
-    let q = egui::pos2(r.right() + 0.5, r.bottom());
-    p.circle_filled(q, 3.6, theme::c().chrome);
-    let s = 2.4;
-    p.line_segment([egui::pos2(q.x - s, q.y), egui::pos2(q.x + s, q.y)], st);
-    p.line_segment([egui::pos2(q.x, q.y - s), egui::pos2(q.x, q.y + s)], st);
-}
 
-fn icon_swap(p: &egui::Painter, c: egui::Pos2, color: Color32) {
-    let st = egui::Stroke::new(1.2, color);
-    let (x, y) = (c.x, c.y);
-    p.line_segment([egui::pos2(x - 6.0, y - 2.5), egui::pos2(x + 6.0, y - 2.5)], st);
-    p.line_segment([egui::pos2(x + 3.0, y - 5.5), egui::pos2(x + 6.0, y - 2.5)], st);
-    p.line_segment([egui::pos2(x + 3.0, y + 0.5), egui::pos2(x + 6.0, y - 2.5)], st);
-    p.line_segment([egui::pos2(x + 6.0, y + 3.0), egui::pos2(x - 6.0, y + 3.0)], st);
-    p.line_segment([egui::pos2(x - 3.0, y), egui::pos2(x - 6.0, y + 3.0)], st);
-    p.line_segment([egui::pos2(x - 3.0, y + 6.0), egui::pos2(x - 6.0, y + 3.0)], st);
-}
 
-fn icon_diff(p: &egui::Painter, c: egui::Pos2, color: Color32) {
-    let st = egui::Stroke::new(1.2, color);
-    let a = egui::Rect::from_min_max(egui::pos2(c.x - 6.5, c.y - 6.5), egui::pos2(c.x + 2.5, c.y + 2.5));
-    let b = egui::Rect::from_min_max(egui::pos2(c.x - 2.5, c.y - 2.5), egui::pos2(c.x + 6.5, c.y + 6.5));
-    p.rect_filled(b, egui::CornerRadius::same(2), theme::c().chrome);
-    p.rect_stroke(a, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
-    p.rect_stroke(b, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
-}
-
-fn icon_box(p: &egui::Painter, c: egui::Pos2, color: Color32) {
-    let st = egui::Stroke::new(1.2, color);
-    let r = egui::Rect::from_center_size(c, egui::vec2(12.0, 12.0));
-    p.rect_stroke(r, egui::CornerRadius::same(3), st, egui::StrokeKind::Inside);
-    p.line_segment([r.left_center(), r.right_center()], st);
-    p.line_segment([egui::pos2(c.x, r.top()), egui::pos2(c.x, r.bottom())], st);
-}

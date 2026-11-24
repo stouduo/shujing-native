@@ -555,3 +555,58 @@ pub fn cell_text(v: &Option<String>, max_chars: usize) -> String {
         None => "NULL".into(),
     }
 }
+
+// ---------------------------------------------------------------- 顶部工具栏矢量图标
+
+pub fn icon_plus_sq(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let r = egui::Rect::from_center_size(c, egui::vec2(12.0, 12.0));
+    p.rect_stroke(r, egui::CornerRadius::same(3), st, egui::StrokeKind::Inside);
+    let s = 2.6;
+    p.line_segment([egui::pos2(c.x - s, c.y), egui::pos2(c.x + s, c.y)], st);
+    p.line_segment([egui::pos2(c.x, c.y - s), egui::pos2(c.x, c.y + s)], st);
+}
+pub fn icon_doc_plus(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let r = egui::Rect::from_center_size(egui::pos2(c.x - 1.5, c.y), egui::vec2(10.0, 12.0));
+    p.rect_stroke(r, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
+    p.line_segment(
+        [egui::pos2(r.left() + 2.5, r.top() + 4.0), egui::pos2(r.right() - 2.5, r.top() + 4.0)],
+        st,
+    );
+    p.line_segment(
+        [egui::pos2(r.left() + 2.5, r.top() + 7.0), egui::pos2(r.right() - 2.5, r.top() + 7.0)],
+        st,
+    );
+    // 右下角的加号:先用工具栏底色垫一圈,免得和文档边框糊在一起
+    let q = egui::pos2(r.right() + 0.5, r.bottom());
+    p.circle_filled(q, 3.6, crate::theme::c().chrome);
+    let s = 2.4;
+    p.line_segment([egui::pos2(q.x - s, q.y), egui::pos2(q.x + s, q.y)], st);
+    p.line_segment([egui::pos2(q.x, q.y - s), egui::pos2(q.x, q.y + s)], st);
+}
+pub fn icon_swap(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let (x, y) = (c.x, c.y);
+    p.line_segment([egui::pos2(x - 6.0, y - 2.5), egui::pos2(x + 6.0, y - 2.5)], st);
+    p.line_segment([egui::pos2(x + 3.0, y - 5.5), egui::pos2(x + 6.0, y - 2.5)], st);
+    p.line_segment([egui::pos2(x + 3.0, y + 0.5), egui::pos2(x + 6.0, y - 2.5)], st);
+    p.line_segment([egui::pos2(x + 6.0, y + 3.0), egui::pos2(x - 6.0, y + 3.0)], st);
+    p.line_segment([egui::pos2(x - 3.0, y), egui::pos2(x - 6.0, y + 3.0)], st);
+    p.line_segment([egui::pos2(x - 3.0, y + 6.0), egui::pos2(x - 6.0, y + 3.0)], st);
+}
+pub fn icon_diff(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let a = egui::Rect::from_min_max(egui::pos2(c.x - 6.5, c.y - 6.5), egui::pos2(c.x + 2.5, c.y + 2.5));
+    let b = egui::Rect::from_min_max(egui::pos2(c.x - 2.5, c.y - 2.5), egui::pos2(c.x + 6.5, c.y + 6.5));
+    p.rect_filled(b, egui::CornerRadius::same(2), crate::theme::c().chrome);
+    p.rect_stroke(a, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
+    p.rect_stroke(b, egui::CornerRadius::same(2), st, egui::StrokeKind::Inside);
+}
+pub fn icon_box(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let st = egui::Stroke::new(1.2, color);
+    let r = egui::Rect::from_center_size(c, egui::vec2(12.0, 12.0));
+    p.rect_stroke(r, egui::CornerRadius::same(3), st, egui::StrokeKind::Inside);
+    p.line_segment([r.left_center(), r.right_center()], st);
+    p.line_segment([egui::pos2(c.x, r.top()), egui::pos2(c.x, r.bottom())], st);
+}

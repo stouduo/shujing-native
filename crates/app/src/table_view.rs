@@ -1060,60 +1060,8 @@ fn draw_one_tab(
 }
 
 /// 幽灵文字按钮(DBX 工具栏款:无边框无底色,悬停淡底;12px)
-fn ghost_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
-    let p = theme::c();
-    let g = ui
-        .painter()
-        .layout_no_wrap(label.into(), egui::FontId::proportional(12.0), p.text);
-    // 左右各 6pt 内边距(DBX 的工具栏按钮):相邻按钮之间才留得出缝
-    // (egui Button 关掉 frame 后内边距也没了,英文态两个按钮会贴成一团)
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(g.size().x + 12.0, 22.0),
-        egui::Sense::click(),
-    );
-    if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(6), theme::tint(p.text, 16));
-    }
-    ui.painter().galley(
-        egui::pos2(rect.left() + 6.0, rect.center().y - g.size().y / 2.0),
-        g,
-        p.text,
-    );
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
 
 /// 查询栏 WHERE 芯片(漏斗 + 等宽 WHERE,DBX 蓝);有生效条件时点亮,筛选栏打开时带淡底
-fn where_chip(ui: &mut egui::Ui, active: bool, open: bool) -> egui::Response {
-    let p = theme::c();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(76.0, 24.0), egui::Sense::click());
-    if open || resp.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            egui::CornerRadius::same(6),
-            if open {
-                theme::tint(theme::where_color(), 34)
-            } else {
-                p.hover
-            },
-        );
-    }
-    let cy = rect.center().y;
-    icons::funnel_glyph(
-        ui.painter(),
-        egui::pos2(rect.left() + 11.0, cy),
-        if active { theme::where_color() } else { p.text2 },
-    );
-    let g = ui
-        .painter()
-        .layout_no_wrap("WHERE".to_owned(), theme::mono(12.0), theme::where_color());
-    ui.painter().galley(
-        egui::pos2(rect.left() + 24.0, cy - g.size().y / 2.0),
-        g,
-        theme::where_color(),
-    );
-    resp
-}
 
 /// 查询栏 ORDER BY 芯片(DBX 橙等宽):显示当前排序列;菜单里选列与方向,或清除。
 /// 返回是否改了排序(调用方据此重载)
@@ -1284,14 +1232,14 @@ pub(crate) fn draw_table_view(
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     // 这两个入口以前只在侧栏右键菜单里:表页直达(对齐 DBX 的"编辑表结构")
-                    if ghost_button(ui, ui_kit::t!("Edit Structure", "编辑表结构")).clicked() {
+                    if theme::ghost_button(ui, ui_kit::t!("Edit Structure", "编辑表结构")).clicked() {
                         actions.push(TabAction::OpenDesigner {
                             conn_id: tab.conn_id.clone(),
                             table: tab.table.clone(),
                             database: tab.database.clone(),
                         });
                     }
-                    if ghost_button(ui, ui_kit::t!("Structure", "表结构")).clicked() {
+                    if theme::ghost_button(ui, ui_kit::t!("Structure", "表结构")).clicked() {
                         actions.push(TabAction::OpenStructure {
                             conn_id: tab.conn_id.clone(),
                             table: tab.table.clone(),
@@ -1330,7 +1278,7 @@ pub(crate) fn draw_table_view(
                     .as_deref()
                     .is_some_and(|w| !w.trim().is_empty())
                     || !tab.conds.is_empty();
-                let wr = where_chip(ui, where_active, tab.filter_bar_open);
+                let wr = theme::where_chip(ui, where_active, tab.filter_bar_open);
                 wr.clone().on_hover_text(ui_kit::t!(
                     "Build a WHERE clause (field mode / free SQL)",
                     "构建 WHERE 条件(字段模式 / 自由 SQL)"
@@ -1698,7 +1646,7 @@ pub(crate) fn draw_table_view(
 
                     if !compact {
                         // 新增行(DBX 式幽灵按钮;窄窗口收进 ···)
-                        if ghost_button(ui, ui_kit::t!("＋ Add Row", "＋ 新增行"))
+                        if theme::ghost_button(ui, ui_kit::t!("＋ Add Row", "＋ 新增行"))
                             .on_hover_text(ui_kit::t!("Insert a new row", "插入一行新数据"))
                             .clicked()
                         {
@@ -1779,13 +1727,13 @@ pub(crate) fn draw_table_view(
                     .color(p.text2),
                 );
                 if let Some(ms) = tab.last_elapsed_ms {
-                    vsep(ui);
+                    theme::vsep(ui);
                     ui.label(RichText::new(format!("{ms} ms")).size(11.5).color(p.text2));
                 }
                 // SQL 预览(DBX 式):底栏中段显示当前数据对应的 SQL,mono 灰字可截断,
                 // 悬停看全句——用户能随时知道表格当前"凭什么条件/排序"取数
                 if !tab.load_sql.is_empty() && !compact_footer {
-                    vsep(ui);
+                    theme::vsep(ui);
                     let (slot, resp) =
                         ui.allocate_exact_size(egui::vec2(320.0, 18.0), Sense::hover());
                     let clip_sql = icons::clip(&tab.load_sql, 66);
@@ -1799,7 +1747,7 @@ pub(crate) fn draw_table_view(
                     resp.on_hover_text(&tab.load_sql);
                 }
                 if let Some(f) = tab.active_filter.clone() {
-                    vsep(ui);
+                    theme::vsep(ui);
                     let clip = if compact_footer { 10 } else { 20 };
                     ui.label(
                         RichText::new(if ui_kit::i18n::is_english() {
@@ -1828,7 +1776,7 @@ pub(crate) fn draw_table_view(
                     }
                 }
                 if !tab.changes.is_empty() {
-                    vsep(ui);
+                    theme::vsep(ui);
                     ui.label(
                         RichText::new(if ui_kit::i18n::is_english() {
                             format!("{} unsaved", tab.changes.len())
@@ -1842,7 +1790,7 @@ pub(crate) fn draw_table_view(
                 if let Some(r) = tab.sel_range {
                     let ((r1, c1), (r2, c2)) = norm_range(r);
                     if r2 > r1 || c2 > c1 {
-                        vsep(ui);
+                        theme::vsep(ui);
                         let msg = if compact_footer {
                             if ui_kit::i18n::is_english() {
                                 format!("Selected {}×{}", r2 - r1 + 1, c2 - c1 + 1)
@@ -1869,7 +1817,7 @@ pub(crate) fn draw_table_view(
                             ));
                     }
                 } else if tab.multi_sel.len() > 1 {
-                    vsep(ui);
+                    theme::vsep(ui);
                     let msg = if compact_footer {
                         if ui_kit::i18n::is_english() {
                             format!("Selected {} rows", tab.multi_sel.len())
@@ -1944,7 +1892,7 @@ pub(crate) fn draw_table_view(
                         });
                     }
                     // 每页行数(DBX 式"100 行/页 ▾")
-                    vsep(ui);
+                    theme::vsep(ui);
                     let size_opts = [50usize, 100, 200, 500];
                     let size_label = if ui_kit::i18n::is_english() {
                         format!("{} rows / page ▾", tab.page_size)
@@ -2313,9 +2261,9 @@ pub(crate) fn draw_table_view(
                 // 免投影:初始列宽按列数缓存(启发式采样 80 行×全部列每帧重算是浪费;
                 // 该值只作 Column::initial 首帧值,行数据变化无需重算)
                 if tab.base_widths.len() != columns.len() {
-                    tab.base_widths = suggested_widths_vis(rows, columns, &vis_idx);
+                    tab.base_widths = theme::suggested_widths_vis(rows, columns, &vis_idx);
                 }
-                let col_widths = fitted_from_base(tab.base_widths.clone(), ui.available_width());
+                let col_widths = theme::fitted_from_base(tab.base_widths.clone(), ui.available_width());
                 let desired_w =
                     if tab.show_rowno { 48.0 } else { 0.0 } + col_widths.iter().sum::<f32>();
 
@@ -2829,17 +2777,6 @@ pub(crate) fn draw_table_view(
 }
 
 /// 状态栏竖直分隔符
-fn vsep(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(13.0, 20.0), Sense::hover());
-    let p = theme::c();
-    ui.painter().line_segment(
-        [
-            egui::pos2(rect.center().x, rect.center().y - 6.0),
-            egui::pos2(rect.center().x, rect.center().y + 6.0),
-        ],
-        egui::Stroke::new(1.0, p.border),
-    );
-}
 
 fn centered_state(ui: &mut egui::Ui, loading: bool, msg: Option<&str>) {
     let p = theme::c();
@@ -2865,82 +2802,13 @@ fn centered_state(ui: &mut egui::Ui, loading: bool, msg: Option<&str>) {
 
 /// 启发式列宽:表头与数据采样(前 80 行最长值);ASCII 6.8pt / CJK 13pt
 /// (13px 比例字体的实测均值)。查询结果网格的单行列头用:名称 + 26 内边距
-pub(crate) fn suggested_widths(rows: &[Vec<Option<String>>], columns: &[String]) -> Vec<f32> {
-    let sample = rows.iter().take(80);
-    columns
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let head = text_width(c);
-            let data = sample
-                .clone()
-                .filter_map(|r| r.get(i).and_then(|v| v.as_deref()))
-                .map(text_width)
-                .fold(0.0_f32, f32::max);
-            (head.max(data) + 26.0).clamp(72.0, 720.0)
-        })
-        .collect()
-}
 
 /// 免投影版本:直接在全量行上按可见列下标采样(避免每帧深拷贝整页数据)。
 /// 表数据页的两行列头右侧要让出排序箭头 + 漏斗(36pt),名称另加 20pt 余量
-pub(crate) fn suggested_widths_vis(
-    rows: &[Vec<Option<String>>],
-    columns: &[String],
-    vis_idx: &[usize],
-) -> Vec<f32> {
-    let sample = rows.iter().take(80);
-    vis_idx
-        .iter()
-        .map(|&i| {
-            let c = &columns[i];
-            let head = text_width(c) + 30.0;
-            let data = sample
-                .clone()
-                .filter_map(|r| r.get(i).and_then(|v| v.as_deref()))
-                .map(text_width)
-                .fold(0.0_f32, f32::max);
-            (head.max(data) + 26.0).clamp(84.0, 720.0)
-        })
-        .collect()
-}
 
-/// 在内容宽度基础上把多余空间按比例分给各列(原型表格铺满内容区)
-pub(crate) fn fitted_widths(
-    rows: &[Vec<Option<String>>],
-    columns: &[String],
-    available: f32,
-) -> Vec<f32> {
-    fitted_from_base(suggested_widths(rows, columns), available)
-}
 
 /// 已有基础列宽 → 按可用宽度摊开(多余空间按比例分给各列,单列封顶 720)
-pub(crate) fn fitted_from_base(base: Vec<f32>, available: f32) -> Vec<f32> {
-    let sum: f32 = base.iter().sum();
-    if sum <= 0.0 {
-        return base;
-    }
-    let total = 48.0 + sum;
-    if available > total + 1.0 {
-        let scale = (available - 48.0) / sum;
-        base.iter().map(|w| (w * scale).min(720.0)).collect()
-    } else {
-        base
-    }
-}
 
-fn text_width(s: &str) -> f32 {
-    s.chars()
-        .take(160)
-        .map(|c| {
-            if c.is_ascii() && !c.is_ascii_control() {
-                6.8
-            } else {
-                13.0
-            }
-        })
-        .sum()
-}
 
 /// 数据表(TableBuilder):表头粘顶 + 行发丝线,由水平 ScrollArea 包裹
 #[allow(clippy::too_many_arguments)]
@@ -3084,7 +2952,7 @@ fn draw_data_table(
         if show_rowno {
             header.col(|ui| {
                 let rect = ui.max_rect();
-                paint_rowno_head(ui.painter(), rect);
+                theme::paint_rowno_head(ui.painter(), rect);
             });
         }
         let anno = ColAnno {
@@ -3160,14 +3028,14 @@ fn draw_data_table(
                     col_stat_col,
                     frozen_out,
                 );
-                header_bottom_line(ui);
+                theme::header_bottom_line(ui);
             });
         }
         // 末尾占位列表头:保持表头背景和底边线连续
         header.col(|ui| {
             let rect = ui.max_rect();
             ui.painter().rect_filled(rect, 0, p.header);
-            header_bottom_line(ui);
+            theme::header_bottom_line(ui);
         });
     })
     .body(|body| {
@@ -3237,7 +3105,7 @@ fn draw_data_table(
                         egui::FontId::proportional(11.0),
                         if row_selected { p.accent } else { p.muted },
                     );
-                    col_right_line(ui);
+                    theme::col_right_line(ui);
                     let resp = ui.allocate_rect(rect, Sense::click());
                     // 行号点击选择:单击=单选;⌘=切换多选;Shift=范围选(直接操作,不走弹窗)
                     let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
@@ -3615,7 +3483,7 @@ fn draw_frozen_overlay(
     painter.rect_filled(header_rect, 0, p.header);
     if show_rowno {
         painter.text(
-            egui::pos2(left + rowno_w - 14.0, top + HEAD_PAD_Y + HEAD_LINE1 / 2.0),
+            egui::pos2(left + rowno_w - 14.0, top + theme::HEAD_PAD_Y + theme::HEAD_LINE1 / 2.0),
             egui::Align2::RIGHT_CENTER,
             "#",
             egui::FontId::proportional(11.0),
@@ -3987,37 +3855,11 @@ fn header_col_menu(
     }
 }
 
-fn header_bottom_line(ui: &egui::Ui) {
-    let r = ui.max_rect();
-    let y = r.bottom() - 0.5;
-    ui.painter().line_segment(
-        [egui::pos2(r.left(), y), egui::pos2(r.right(), y)],
-        egui::Stroke::new(1.0, theme::c().border),
-    );
-}
 
 /// 数据格右侧竖线(DBX:列间有分隔线,行间只靠斑马纹)
-fn col_right_line(ui: &egui::Ui) {
-    let r = ui.max_rect();
-    ui.painter().line_segment(
-        [
-            egui::pos2(r.right() - 0.5, r.top()),
-            egui::pos2(r.right() - 0.5, r.bottom()),
-        ],
-        egui::Stroke::new(1.0, theme::c().row_line),
-    );
-}
 
 // ---------------------------------------------------------------- 列头(DBX 两行三段式)
 
-/// 列头左右内边距
-const HEAD_PAD_X: f32 = 8.0;
-/// 列头顶部内边距
-const HEAD_PAD_Y: f32 = 6.0;
-/// 第一行(名称 + 控件)行高
-const HEAD_LINE1: f32 = 16.0;
-/// 第二/三行(类型/注释)行高
-const HEAD_LINE2: f32 = 12.0;
 
 /// 列头标注素材:类型小字/注释/主键(第二、三行的内容)
 #[derive(Clone, Copy)]
@@ -4028,24 +3870,6 @@ struct ColAnno<'a> {
 }
 
 /// 主键钥匙小图标(圆环 + 钥匙柄),约 9×5
-fn paint_key(p: &egui::Painter, center: egui::Pos2, color: Color32) {
-    let st = egui::Stroke::new(1.2, color);
-    p.circle_stroke(egui::pos2(center.x - 2.6, center.y), 2.3, st);
-    p.line_segment(
-        [
-            egui::pos2(center.x - 0.4, center.y),
-            egui::pos2(center.x + 4.6, center.y),
-        ],
-        st,
-    );
-    p.line_segment(
-        [
-            egui::pos2(center.x + 3.2, center.y),
-            egui::pos2(center.x + 3.2, center.y + 2.0),
-        ],
-        st,
-    );
-}
 
 /// 未排序的双向小箭头(↑↓ 并排),提示本列可点排序
 fn paint_sort_pair(p: &egui::Painter, center: egui::Pos2, color: Color32) {
@@ -4061,30 +3885,8 @@ fn paint_sort_pair(p: &egui::Painter, center: egui::Pos2, color: Color32) {
 
 /// 行号列头(表数据页与结果网格共用):"#" 对齐列名的名称行,
 /// 右缘一道分隔线 + 底线
-pub(crate) fn paint_rowno_head(painter: &egui::Painter, rect: egui::Rect) {
-    let p = theme::c();
-    painter.rect_filled(rect, 0, p.header);
-    painter.text(
-        egui::pos2(rect.right() - 14.0, rect.top() + HEAD_PAD_Y + HEAD_LINE1 / 2.0),
-        egui::Align2::RIGHT_CENTER,
-        "#",
-        egui::FontId::proportional(11.0),
-        p.muted,
-    );
-    let st = egui::Stroke::new(1.0, p.border);
-    painter.line_segment(
-        [egui::pos2(rect.right() - 0.5, rect.top()), egui::pos2(rect.right() - 0.5, rect.bottom())],
-        st,
-    );
-    painter.line_segment([rect.left_bottom(), rect.right_bottom()], st);
-}
 
 /// 结果网格的列头(不能排序/筛选):只有 名称 + 类型 两行
-pub(crate) fn paint_result_col_head(painter: &egui::Painter, rect: egui::Rect, name: &str, ty: &str) {
-    paint_col_title(painter, rect, name, 0.0);
-    let ty = (!ty.is_empty()).then_some(ty);
-    paint_col_anno(painter, rect, ty, None, false);
-}
 
 /// DBX 式列头:第一行 名称 + 排序 + 漏斗;第二行 🔑 + 类型(按类别着色);
 /// 第三行 注释(有才显示)。返回漏斗控件的命中矩形
@@ -4098,14 +3900,14 @@ fn paint_col_head(
     hovered: bool,
 ) -> egui::Rect {
     let p = theme::c();
-    let cy1 = rect.top() + HEAD_PAD_Y + HEAD_LINE1 / 2.0;
+    let cy1 = rect.top() + theme::HEAD_PAD_Y + theme::HEAD_LINE1 / 2.0;
     let sort_center = egui::pos2(rect.right() - 20.0, cy1);
     let funnel_rect = egui::Rect::from_center_size(
         egui::pos2(rect.right() - 6.0, cy1),
         egui::vec2(16.0, 16.0),
     );
     // 名称右侧让出排序箭头(16)+ 漏斗(16)+ 间距
-    paint_col_title(painter, rect, name, 36.0);
+    theme::paint_col_title(painter, rect, name, 36.0);
     match sorted {
         Some(asc) => paint_sort_arrow(painter, sort_center.x, cy1, asc, p.accent),
         None => paint_sort_pair(painter, sort_center, p.muted),
@@ -4124,7 +3926,7 @@ fn paint_col_head(
     );
     let ty = anno.types.get(name).map(String::as_str).filter(|t| !t.is_empty());
     let comment = anno.comments.get(name).map(|s| s.trim()).filter(|s| !s.is_empty());
-    paint_col_anno(
+    theme::paint_col_anno(
         painter,
         rect,
         ty,
@@ -4135,77 +3937,8 @@ fn paint_col_head(
 }
 
 /// 第一行:列名(13px 粗体);`reserve_right` 是名称右侧让给控件的宽度
-fn paint_col_title(painter: &egui::Painter, rect: egui::Rect, name: &str, reserve_right: f32) {
-    let p = theme::c();
-    let cy1 = rect.top() + HEAD_PAD_Y + HEAD_LINE1 / 2.0;
-    let name_w = (rect.width() - HEAD_PAD_X * 2.0 - reserve_right).max(24.0);
-    let g = icons::text_galley(
-        painter,
-        name.to_owned(),
-        theme::bold(theme::fs_header()),
-        p.text,
-        name_w,
-    );
-    painter.galley(
-        egui::pos2(rect.left() + HEAD_PAD_X, cy1 - g.size().y / 2.0),
-        g,
-        p.text,
-    );
-}
 
 /// 第二行:主键钥匙 + 类型小字(按类别着色);第三行:列注释(灰字,有才显示)
-fn paint_col_anno(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    ty: Option<&str>,
-    comment: Option<&str>,
-    pk: bool,
-) {
-    let p = theme::c();
-    let y2 = rect.top() + HEAD_PAD_Y + HEAD_LINE1;
-    let mut x = rect.left() + HEAD_PAD_X;
-    if pk {
-        paint_key(
-            painter,
-            egui::pos2(x + 5.0, y2 + HEAD_LINE2 / 2.0),
-            theme::pk_key_color(),
-        );
-        x += 12.0;
-    }
-    if let Some(ty) = ty {
-        let color = theme::type_color(theme::classify_type(ty));
-        let avail = (rect.right() - HEAD_PAD_X - x).max(8.0);
-        let tg = icons::text_galley(
-            painter,
-            ty.to_owned(),
-            egui::FontId::proportional(theme::fs_type()),
-            color,
-            avail,
-        );
-        painter.galley(
-            egui::pos2(x, y2 + (HEAD_LINE2 - tg.size().y) / 2.0),
-            tg,
-            color,
-        );
-    }
-    if let Some(cm) = comment {
-        let cg = icons::text_galley(
-            painter,
-            cm.to_owned(),
-            egui::FontId::proportional(theme::fs_type()),
-            p.muted,
-            (rect.width() - HEAD_PAD_X * 2.0).max(8.0),
-        );
-        painter.galley(
-            egui::pos2(
-                rect.left() + HEAD_PAD_X,
-                y2 + HEAD_LINE2 + (HEAD_LINE2 - cg.size().y) / 2.0,
-            ),
-            cg,
-            p.muted,
-        );
-    }
-}
 
 fn paint_sort_arrow(p: &egui::Painter, x: f32, y: f32, asc: bool, color: Color32) {
     let s = 3.0;
@@ -4292,8 +4025,8 @@ fn draw_data_cell(
         }
     }
 
-    if let Some((label, on)) = badge_value(col_name, v) {
-        paint_badge(&painter, rect.left() + 12.0, rect.center().y, &label, on);
+    if let Some((label, on)) = theme::badge_value(col_name, v) {
+        theme::paint_badge(&painter, rect.left() + 12.0, rect.center().y, &label, on);
     } else {
         let text = icons::cell_text(v, 512);
         let color = icons::cell_text_color(v, changed);
@@ -4311,7 +4044,7 @@ fn draw_data_cell(
             color,
         );
     }
-    col_right_line(ui);
+    theme::col_right_line(ui);
 
     let resp = ui.allocate_rect(rect, Sense::click());
     if resp.clicked() {
@@ -4474,91 +4207,8 @@ fn draw_data_cell(
 }
 
 /// 画状态徽章(语义色 16% 底 + 语义色文字),原型 status 列样式
-pub(crate) fn paint_badge(p: &egui::Painter, x: f32, cy: f32, label: &str, on: bool) {
-    let c = theme::c();
-    let (fg, bg) = if on {
-        (c.green, theme::tint(c.green, 38))
-    } else {
-        (c.red, theme::tint(c.red, 38))
-    };
-    let font = theme::bold(9.5);
-    let g = p.layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
-    let w = (g.size().x + 9.0).max(16.0);
-    let rect = egui::Rect::from_min_size(egui::pos2(x, cy - 8.0), egui::vec2(w, 16.0));
-    p.rect_filled(rect, egui::CornerRadius::same(4), bg);
-    p.galley(
-        egui::pos2(
-            rect.center().x - g.size().x / 2.0,
-            rect.center().y - g.size().y / 2.0,
-        ),
-        g,
-        fg,
-    );
-}
 
 /// 短状态值 → 徽章(仅 status/state/enabled/active/deleted 类列)
-pub(crate) fn badge_value(col: &str, v: &Option<String>) -> Option<(String, bool)> {
-    let val = v.as_deref()?.trim();
-    if val.is_empty() || val.chars().count() > 6 {
-        return None;
-    }
-    let name = col.to_ascii_lowercase();
-    let is_state = [
-        "status",
-        "state",
-        "enabled",
-        "is_enabled",
-        "active",
-        "is_active",
-        "deleted",
-        "is_deleted",
-        "disabled",
-        "is_disabled",
-    ]
-    .iter()
-    .any(|k| name == *k || name.ends_with(&format!("_{k}")));
-    if !is_state {
-        return None;
-    }
-    let on = matches!(
-        val.to_ascii_lowercase().as_str(),
-        "1" | "true"
-            | "yes"
-            | "y"
-            | "on"
-            | "active"
-            | "enabled"
-            | "normal"
-            | "启用"
-            | "正常"
-            | "成功"
-    );
-    let off = matches!(
-        val.to_ascii_lowercase().as_str(),
-        "0" | "2"
-            | "false"
-            | "no"
-            | "n"
-            | "off"
-            | "inactive"
-            | "disabled"
-            | "deleted"
-            | "禁用"
-            | "删除"
-            | "失败"
-    );
-    // deleted/disabled 类列是反语义:1=true 表示"已删除/已禁用",应显示红色
-    let invert = ["deleted", "is_deleted", "disabled", "is_disabled"]
-        .iter()
-        .any(|k| name == *k || name.ends_with(&format!("_{k}")));
-    if on {
-        Some((val.to_string(), !invert))
-    } else if off {
-        Some((val.to_string(), invert))
-    } else {
-        None
-    }
-}
 
 fn app_tabs_set_saving(app: &mut ShujingApp, tab_id: &str, saving: bool) {
     if let Some(t) = app.tabs.iter_mut().find(|t| t.id == tab_id) {

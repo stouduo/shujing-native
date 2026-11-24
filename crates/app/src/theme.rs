@@ -2,6 +2,7 @@
 //! 以免全应用逐文件改 import;新代码可直接用 ui_kit::。
 
 pub use ui_kit::theme::*;
+pub use ui_kit::widgets::*;
 
 /// 弹窗内长表单的滚动条:常驻可见,避免"内容被裁但看不出能滚"
 pub fn modal_scroll_style(ui: &mut egui::Ui) {
