@@ -1095,6 +1095,47 @@ mod column_type_tests {
         assert_eq!(rs[1].column_type(0), "");
     }
 
+    /// ClickHouse 实连:HTTP JSONCompact 回包的 meta.type 原样进 column_types
+    /// (映射是直通,这里验证的是解析与列对齐)。需本机容器:
+    /// podman run -d --name shujing-clickhouse -p 8124:8123
+    ///   -e CLICKHOUSE_USER=default -e CLICKHOUSE_PASSWORD=clickhouse-test-1234
+    ///   clickhouse/clickhouse-server:24.8-alpine
+    #[tokio::test]
+    #[ignore]
+    async fn live_clickhouse_reports_meta_types() {
+        if !live_enabled() {
+            return;
+        }
+        let st = crate::model::ClickHouseState {
+            base: "http://127.0.0.1:8124".into(),
+            auth: Some(("default".into(), "clickhouse-test-1234".into())),
+            http: reqwest::Client::new(),
+        };
+        let _ = crate::clickhouse::query(&st, "DROP TABLE IF EXISTS sj_ct", None, 1).await;
+        crate::clickhouse::query(&st, "CREATE TABLE sj_ct (id UInt32, name Nullable(String), amount Nullable(Decimal(18, 2)), created DateTime64(3), score Float64, flag Bool, tags Array(Int32), uid UUID) ENGINE = Memory", None, 1).await.unwrap();
+        crate::clickhouse::query(&st, "INSERT INTO sj_ct VALUES (1, 'a', 1.5, now64(3), 2.5, true, [1,2], generateUUIDv4())", None, 1).await.unwrap();
+        let r = crate::clickhouse::query(&st, "SELECT * FROM sj_ct", None, 10).await.unwrap();
+        assert_eq!(
+            r.columns,
+            ["id", "name", "amount", "created", "score", "flag", "tags", "uid"]
+        );
+        assert_eq!(
+            r.column_types,
+            [
+                "UInt32",
+                "Nullable(String)",
+                "Nullable(Decimal(18, 2))",
+                "DateTime64(3)",
+                "Float64",
+                "Bool",
+                "Array(Int32)",
+                "UUID"
+            ]
+        );
+        assert_eq!(r.rows.len(), 1);
+        crate::clickhouse::query(&st, "DROP TABLE sj_ct", None, 1).await.unwrap();
+    }
+
     /// SQL Server TDS 类型码 → 类型名
     #[test]
     fn mssql_type_names() {
