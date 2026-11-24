@@ -18,6 +18,21 @@
 //!
 //! 排版:表名 15 / 连接 14 / 树 14 / 标签 12 / 列头 13 粗 + 类型 10 / 数据格 13 / 辅助 11。
 //! 节奏:行高 30、工具条 44、标签栏 38、通用列头 36、数据列头 52、状态栏 34。圆角 6/8。
+//!
+//! # 皮肤系统:色彩预设(Palette)× 密度(Metrics)
+//!
+//! 皮肤由两个正交维度组成,用户在设置弹窗切换,持久化在 settings.json
+//! (preset / accent / density):
+//!
+//! - **色彩**:PRESETS 表(9 个,7 个经 `..DARK`/`..LIGHT` 继承基底)。
+//!   加一个色彩预设 = 写一个 `Palette` 字面量加进 PRESETS;
+//! - **度量**:DENSITIES 表(标准 STANDARD / 紧凑 COMPACT)。
+//!   加一个密度皮肤 = 写一个 `Metrics` 字面量加进 DENSITIES。
+//!
+//! 取值一律走函数不写字面量:颜色 `c().字段`(强调色每帧覆盖)、度量
+//! `row_h()/radius_ctrl()/fs_aux()…`(统一乘 font_scale)、任意字号
+//! `fs_px(n)`、字体 `bold(n)/mono(n)`(内部缩放)。切换密度后需 `apply(ctx)`
+//! 重写 egui style;`c()/m()` 每帧取值,即时生效。
 
 use egui::{style::Selection, Color32, FontFamily, FontId, RichText, Stroke, TextStyle};
 
