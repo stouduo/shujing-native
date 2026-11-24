@@ -170,29 +170,23 @@ pub fn draw_designer_view(
                         egui::vec2(130.0, 26.0),
                     );
                     ui.allocate_rect(add_rect, Sense::hover());
-                    ui.painter().rect_stroke(
-                        add_rect,
-                        egui::CornerRadius::same(7),
-                        egui::Stroke::new(1.0, p.border),
-                        egui::StrokeKind::Inside,
-                    );
+                    let add_resp =
+                        ui.interact(add_rect, egui::Id::new("designer-add"), Sense::click());
+                    // ghost 按钮:悬停淡底,无常驻描边(与工具栏按钮同语义)
+                    if add_resp.hovered() {
+                        ui.painter().rect_filled(
+                            add_rect,
+                            egui::CornerRadius::same(6),
+                            theme::tint(p.text, 16),
+                        );
+                    }
                     ui.painter().text(
                         add_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         ui_kit::t!("+ Add Field", "＋ 添加字段"),
                         egui::FontId::proportional(12.0),
-                        p.text2,
+                        if add_resp.hovered() { p.text } else { p.text2 },
                     );
-                    let add_resp =
-                        ui.interact(add_rect, egui::Id::new("designer-add"), Sense::click());
-                    if add_resp.hovered() {
-                        ui.painter().rect_stroke(
-                            add_rect,
-                            egui::CornerRadius::same(7),
-                            egui::Stroke::new(1.0, p.accent),
-                            egui::StrokeKind::Inside,
-                        );
-                    }
                     if add_resp.clicked() {
                         d.columns.push(DesignerColumn {
                             name: String::new(),
@@ -249,8 +243,8 @@ fn draw_grid_header(ui: &mut egui::Ui, _is_edit: bool) {
     let widths = col_widths(ui);
     let xs = col_x(&widths);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
-    // 表头底色浮起(与数据网格同语义),窄窗压缩列宽时逐列裁剪防标签溢出碰撞
-    ui.painter().rect_filled(rect, 0, p.elevated);
+    // 表头底色与数据网格同款(p.header),窄窗压缩列宽时逐列裁剪防标签溢出碰撞
+    ui.painter().rect_filled(rect, 0, p.header);
     for (i, h) in [
         ui_kit::t!("Name", "字段名"),
         ui_kit::t!("Type", "类型"),
@@ -308,6 +302,9 @@ fn draw_column_row(
     } else if ui.rect_contains_pointer(row_rect) {
         ui.painter()
             .rect_filled(row_rect, egui::CornerRadius::same(6), p.row_hover);
+    } else if i % 2 == 1 {
+        ui.painter()
+            .rect_filled(row_rect, egui::CornerRadius::same(6), p.stripe);
     }
     let top = row_rect.top();
     let mut remove = false;
@@ -330,12 +327,14 @@ fn draw_column_row(
             egui::pos2(row_rect.left() + widths.0 + 6.0, top),
             egui::vec2(widths.1, row_h),
         )));
+        // 类型按类别着色:与列头类型小字/结构页同一套色板
+        let ty_color = theme::type_color(theme::classify_type(&c.data_type));
         tiny_field(
             &mut f,
             &mut c.data_type,
             "type",
             !(lock_existing && sqlite),
-            p.text2,
+            ty_color,
         );
         let mut f = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
             egui::pos2(row_rect.left() + widths.0 + widths.1 + 12.0, top),
