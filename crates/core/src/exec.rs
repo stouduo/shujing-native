@@ -1136,6 +1136,59 @@ mod column_type_tests {
         crate::clickhouse::query(&st, "DROP TABLE sj_ct", None, 1).await.unwrap();
     }
 
+    /// SQL Server 实连:TDS 类型码 → 类型名(变宽码 Intn/Floatn 等实际宽度只在
+    /// TypeInfo 里,统一按最常见宽度给名)。需本机容器(arm64 用 azure-sql-edge):
+    /// podman run -d --name shujing-mssql -p 1434:1433 -e ACCEPT_EULA=Y
+    ///   -e MSSQL_SA_PASSWORD='Shujing#2026test' -e MSSQL_PID=Developer
+    ///   mcr.microsoft.com/azure-sql-edge:latest
+    ///
+    /// ⚠ 未实跑:本机 mcr.microsoft.com 拉不动镜像,且 podman 机器只有 2GB 内存,
+    /// 再塞一个 SQL Server 容器会 OOM 杀掉别的容器。期望值是从映射单测
+    /// (mssql_type_names)抄的,没被真实回包验证过——跑通之前不要当作已验证。
+    #[tokio::test]
+    #[ignore]
+    async fn live_mssql_reports_tds_types() {
+        if !live_enabled() {
+            return;
+        }
+        use tokio_util::compat::TokioAsyncWriteCompatExt;
+        let tcp = tokio::net::TcpStream::connect("127.0.0.1:1434").await.unwrap();
+        let mut cfg = tiberius::Config::new();
+        cfg.host("127.0.0.1");
+        cfg.port(1434);
+        cfg.authentication(tiberius::AuthMethod::sql_server("sa", "Shujing#2026test"));
+        cfg.trust_cert();
+        let client = tiberius::Client::connect(cfg, tcp.compat_write())
+            .await
+            .unwrap();
+        let mut st = crate::model::MssqlState {
+            clients: vec![tokio::sync::Mutex::new(client)],
+            next: Default::default(),
+        };
+        // 真实表(临时表跨查询不保活):先清后建,查完删
+        let _ = crate::mssql::query(&mut st, "IF OBJECT_ID('sj_ct') IS NOT NULL DROP TABLE sj_ct", 1).await;
+        crate::mssql::query(&mut st, "CREATE TABLE sj_ct (id INT IDENTITY PRIMARY KEY, big BIGINT, small SMALLINT, tiny TINYINT, flag BIT, deci DECIMAL(10,2), f FLOAT, r REAL, d DATE, t TIME, dt2 DATETIME2(3), dto DATETIMEOFFSET, uid UNIQUEIDENTIFIER, vc VARCHAR(20), nvc NVARCHAR(20), vb VARBINARY(16), m MONEY)", 1).await.unwrap();
+        crate::mssql::query(&mut st, "INSERT INTO sj_ct (big, small, tiny, flag, deci, f, r, d, t, dt2, dto, uid, vc, nvc, vb, m) VALUES (1, 2, 3, 1, 1.5, 2.5, 3.5, '2026-11-24', '12:34:56', '2026-11-24 12:34:56.789', '2026-11-24 12:34:56.789 +08:00', NEWID(), 'a', N'b', 0x00, 1.23)", 1).await.unwrap();
+        let r = crate::mssql::query(&mut st, "SELECT * FROM sj_ct", 10).await.unwrap();
+        assert_eq!(
+            r.columns,
+            [
+                "id", "big", "small", "tiny", "flag", "deci", "f", "r", "d", "t", "dt2", "dto",
+                "uid", "vc", "nvc", "vb", "m"
+            ]
+        );
+        assert_eq!(
+            r.column_types,
+            [
+                "int", "bigint", "smallint", "tinyint", "bit", "decimal", "float", "real", "date",
+                "time", "datetime2", "datetimeoffset", "uniqueidentifier", "varchar", "nvarchar",
+                "varbinary", "money"
+            ]
+        );
+        assert_eq!(r.rows.len(), 1);
+        crate::mssql::query(&mut st, "DROP TABLE sj_ct", 1).await.unwrap();
+    }
+
     /// SQL Server TDS 类型码 → 类型名
     #[test]
     fn mssql_type_names() {
