@@ -2187,7 +2187,7 @@ fn tabbar_wheel_ignored_when_pointer_over_table() {
     harness.run_steps(6);
     let before = harness.render().expect("render before");
     let width = before.width() as usize;
-    let top_len = (crate::theme::TABBAR_H * 2.0) as usize * width * 4;
+    let top_len = (crate::theme::tabbar_h() * 2.0) as usize * width * 4;
     let before_top = before.as_raw()[..top_len].to_vec();
 
     // 指针放到表格内容上,注入纵向滚轮(标签栏不应响应)
@@ -4337,7 +4337,7 @@ fn tab_click_survives_wobble_and_no_phantom_swap() {
     // 场景 3:无溢出时低带点击(tab 底缘上 3px = y35,在 × 区 y≤32.5 之外)带 12px
     // 手抖 → 应激活 tab1;不得误触右侧 × 关闭区(× 为 22×22 居中矩形),不得换位
     // 标签条紧贴顶栏下缘(条顶 0)、标签高 TABBAR_H-1:底缘上 3px = 34,在 × 区(居中 22 高,7.5~29.5)之外
-    let low_y = CHROME_TOP + (ui_kit::theme::TABBAR_H - 1.0) - 3.0;
+    let low_y = CHROME_TOP + (ui_kit::theme::tabbar_h() - 1.0) - 3.0;
     let order_low = titles(&harness);
     wobble_click(&mut harness, 430.0, low_y, 12.0);
     assert_eq!(

@@ -23,7 +23,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
     // ---- 工具条
     egui::TopBottomPanel::top("er_toolbar")
         .show_separator_line(false)
-        .exact_height(theme::TOOLBAR_H)
+        .exact_height(theme::toolbar_h())
         .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin {
             left: 14,
             right: 10,
@@ -33,14 +33,14 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 let title = ui_kit::t!("ER Diagram", "ER 图");
-                let tr = ui.label(theme::strong(title, theme::FS_TABLE_TITLE).color(p.text));
+                let tr = ui.label(theme::strong(title, theme::fs_table_title()).color(p.text));
                 let g = ui.painter().layout_no_wrap(
                     title.to_string(),
-                    theme::bold(theme::FS_TABLE_TITLE),
+                    theme::bold(theme::fs_table_title()),
                     Color32::PLACEHOLDER,
                 );
                 let baseline =
-                    tr.rect.center().y - g.size().y / 2.0 + icons::baseline_top(&g, theme::FS_TABLE_TITLE);
+                    tr.rect.center().y - g.size().y / 2.0 + icons::baseline_top(&g, theme::fs_table_title());
                 if let Some(db) = &e.database {
                     icons::chip_at_baseline(ui, db, p.text2, baseline);
                 }
@@ -53,7 +53,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                 icons::label_at_baseline(
                     ui,
                     summary,
-                    egui::FontId::proportional(theme::FS_AUX),
+                    egui::FontId::proportional(theme::fs_aux()),
                     p.muted,
                     baseline,
                     140.0,
@@ -65,7 +65,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                     icons::label_at_baseline(
                         ui,
                         icons::clip(err, 70),
-                        egui::FontId::proportional(theme::FS_AUX),
+                        egui::FontId::proportional(theme::fs_aux()),
                         p.red,
                         baseline,
                         200.0,

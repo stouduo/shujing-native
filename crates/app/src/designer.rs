@@ -19,7 +19,7 @@ pub fn draw_designer_view(
     // ---- 工具条:模式徽标 + 表名 + 类型提示 + 保存
     egui::TopBottomPanel::top("designer_toolbar")
         .show_separator_line(false)
-        .exact_height(theme::TOOLBAR_H)
+        .exact_height(theme::toolbar_h())
         .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin {
             left: 14,
             right: 10,
@@ -90,14 +90,14 @@ pub fn draw_designer_view(
                 if let Some(err) = &d.error {
                     ui.label(
                         RichText::new(icons::clip(err, 60))
-                            .size(theme::FS_AUX)
+                            .size(theme::fs_aux())
                             .color(p.red),
                     );
                 }
                 if let Some(info) = &d.info {
                     ui.label(
                         RichText::new(icons::clip(info, 60))
-                            .size(theme::FS_AUX)
+                            .size(theme::fs_aux())
                             .color(p.green),
                     );
                 }

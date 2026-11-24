@@ -23,7 +23,7 @@ pub fn draw_redis_view(
     // ---- 工具条
     egui::TopBottomPanel::top("redis_toolbar")
         .show_separator_line(false)
-        .exact_height(theme::TOOLBAR_H)
+        .exact_height(theme::toolbar_h())
         .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin {
             left: 14,
             right: 10,
@@ -33,14 +33,14 @@ pub fn draw_redis_view(
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 let title = format!("db{}", rt.db);
-                let tr = ui.label(theme::strong(&title, theme::FS_TABLE_TITLE).color(p.red));
+                let tr = ui.label(theme::strong(&title, theme::fs_table_title()).color(p.red));
                 let g = ui.painter().layout_no_wrap(
                     title.clone(),
-                    theme::bold(theme::FS_TABLE_TITLE),
+                    theme::bold(theme::fs_table_title()),
                     Color32::PLACEHOLDER,
                 );
                 let baseline =
-                    tr.rect.center().y - g.size().y / 2.0 + icons::baseline_top(&g, theme::FS_TABLE_TITLE);
+                    tr.rect.center().y - g.size().y / 2.0 + icons::baseline_top(&g, theme::fs_table_title());
                 icons::label_at_baseline(
                     ui,
                     "REDIS",
@@ -134,7 +134,7 @@ pub fn draw_redis_view(
                 if let Some(err) = &rt.error {
                     ui.label(
                         RichText::new(icons::clip(err, 50))
-                            .size(theme::FS_AUX)
+                            .size(theme::fs_aux())
                             .color(p.red),
                     );
                 }
@@ -145,7 +145,7 @@ pub fn draw_redis_view(
                             rt.keys.len(),
                             ui_kit::t!("keys", "个 key")
                         ))
-                            .size(theme::FS_AUX)
+                            .size(theme::fs_aux())
                             .color(p.muted),
                     );
                 });

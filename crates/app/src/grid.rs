@@ -88,7 +88,7 @@ pub fn result_rows(
                 let in_body: bool = started
                     .map(|p| {
                         content.contains(p)
-                            && p.y > content.top() + HEADER_H
+                            && p.y > content.top() + theme::header_h()
                             && p.x < content.right() - 16.0
                     })
                     .unwrap_or(false);
@@ -120,7 +120,7 @@ pub fn result_rows(
                     .column(Column::initial(col_widths[i]).resizable(true).clip(true).at_least(40.0));
             }
             tb = tb.column(Column::remainder().at_least(0.0));
-            tb.header(HEADER_H, |mut header| {
+            tb.header(theme::header_h(), |mut header| {
                 header.col(|ui| {
                     let rect = ui.max_rect();
                     if geom.header_top.is_none() {
@@ -159,7 +159,7 @@ pub fn result_rows(
                         })
                         .unwrap_or(false)
                 };
-                body.rows(theme::ROW_H, rows.len(), |mut row| {
+                body.rows(theme::row_h(), rows.len(), |mut row| {
                     let ri = row.index();
                     let row_y = std::cell::Cell::new(f32::NAN);
                     let rowdata = &rows[ri];
@@ -194,12 +194,12 @@ pub fn result_rows(
 
                 // 空白区网格延续(与数据表格页同款):斑马纹 + 列分隔线,竖线位置与数据列右缘对齐
                 {
-                    let mut y = brect.top() + rows.len() as f32 * theme::ROW_H;
+                    let mut y = brect.top() + rows.len() as f32 * theme::row_h();
                     let mut empty_ri = rows.len();
-                    while y + theme::ROW_H <= brect.bottom() + 0.5 {
+                    while y + theme::row_h() <= brect.bottom() + 0.5 {
                         let band = egui::Rect::from_min_max(
                             egui::pos2(brect.left(), y),
-                            egui::pos2(brect.right(), y + theme::ROW_H),
+                            egui::pos2(brect.right(), y + theme::row_h()),
                         );
                         if empty_ri % 2 == 1 {
                             body_painter.rect_filled(band, 0, p.stripe);
@@ -219,7 +219,7 @@ pub fn result_rows(
                                 egui::Stroke::new(1.0, p.row_line),
                             );
                         }
-                        y += theme::ROW_H;
+                        y += theme::row_h();
                         empty_ri += 1;
                     }
                 }
@@ -248,7 +248,6 @@ pub fn result_rows(
 // ---------------------------------------------------------------- 绘制(三处网格同一套)
 
 /// 表头高度:与表数据页同一套两行列头(名称 + 类型)
-const HEADER_H: f32 = theme::DATA_HEADER_H;
 /// 行号列宽
 const ROWNO_W: f32 = 48.0;
 
@@ -326,7 +325,7 @@ fn paint_grid_cell_text(
         let g = icons::text_galley(
             painter,
             icons::cell_text(shown, 4000),
-            egui::FontId::proportional(theme::FS_DATA),
+            egui::FontId::proportional(theme::fs_data()),
             color,
             rect.width() - 24.0,
         );
@@ -480,7 +479,7 @@ pub fn result_rows_editable(
                 let in_body: bool = started
                     .map(|p| {
                         content.contains(p)
-                            && p.y > content.top() + HEADER_H
+                            && p.y > content.top() + theme::header_h()
                             && p.x < content.right() - 16.0
                     })
                     .unwrap_or(false);
@@ -512,7 +511,7 @@ pub fn result_rows_editable(
                     .column(Column::initial(col_widths[i]).resizable(true).clip(true).at_least(40.0));
             }
             tb = tb.column(Column::remainder().at_least(0.0));
-            tb.header(HEADER_H, |mut header| {
+            tb.header(theme::header_h(), |mut header| {
                 header.col(|ui| {
                     let rect = ui.max_rect();
                     if geom.header_top.is_none() {
@@ -551,7 +550,7 @@ pub fn result_rows_editable(
                         })
                         .unwrap_or(false)
                 };
-                body.rows(theme::ROW_H, rows.len(), |mut row| {
+                body.rows(theme::row_h(), rows.len(), |mut row| {
                     let ri = row.index();
                     let row_y = std::cell::Cell::new(f32::NAN);
                     let rowdata = &rows[ri];
@@ -583,7 +582,7 @@ pub fn result_rows_editable(
                                 );
                                 let resp = eui.add(
                                     egui::TextEdit::singleline(draft)
-                                        .font(egui::FontId::proportional(theme::FS_DATA))
+                                        .font(egui::FontId::proportional(theme::fs_data()))
                                         .frame(false)
                                         .desired_width(inner.width()),
                                 );
@@ -634,12 +633,12 @@ pub fn result_rows_editable(
 
                 // 空白区网格延续:斑马纹 + 列分隔线(与只读网格同一套)
                 {
-                    let mut y = brect.top() + rows.len() as f32 * theme::ROW_H;
+                    let mut y = brect.top() + rows.len() as f32 * theme::row_h();
                     let mut empty_ri = rows.len();
-                    while y + theme::ROW_H <= brect.bottom() + 0.5 {
+                    while y + theme::row_h() <= brect.bottom() + 0.5 {
                         let band = egui::Rect::from_min_max(
                             egui::pos2(brect.left(), y),
-                            egui::pos2(brect.right(), y + theme::ROW_H),
+                            egui::pos2(brect.right(), y + theme::row_h()),
                         );
                         if empty_ri % 2 == 1 {
                             body_painter.rect_filled(band, 0, p.stripe);
@@ -658,7 +657,7 @@ pub fn result_rows_editable(
                                 egui::Stroke::new(1.0, p.row_line),
                             );
                         }
-                        y += theme::ROW_H;
+                        y += theme::row_h();
                         empty_ri += 1;
                     }
                 }
@@ -762,12 +761,12 @@ fn draw_frozen_grid_overlay(
     // 钉住的表头
     crate::table_view::paint_rowno_head(
         &painter,
-        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(ROWNO_W, HEADER_H)),
+        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(ROWNO_W, theme::header_h())),
     );
     let mut hx = left + ROWNO_W;
     for (vw, c) in columns.iter().enumerate().take(frozen_n) {
         let w = frozen_ws[vw];
-        let rect = egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, HEADER_H));
+        let rect = egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, theme::header_h()));
         paint_grid_head(&painter, rect, c, type_at(column_types, vw));
         let resp = ui.interact(rect, egui::Id::new(("qfz-h", id_salt, vw)), Sense::click());
         grid_header_freeze_menu(&resp, vw, columns.len(), frozen);
@@ -784,24 +783,24 @@ fn draw_frozen_grid_overlay(
         }
         let rowdata = &rows[ri];
         let hovered = pointer
-            .map(|pt| pt.y >= y && pt.y < y + theme::ROW_H && pt.x >= left && pt.x < left + region_w)
+            .map(|pt| pt.y >= y && pt.y < y + theme::row_h() && pt.x >= left && pt.x < left + region_w)
             .unwrap_or(false);
         paint_grid_row_bg(
             &painter,
-            egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(region_w, theme::ROW_H)),
+            egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(region_w, theme::row_h())),
             ri,
             hovered,
             false,
         );
         paint_grid_rowno(
             &painter,
-            egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(ROWNO_W, theme::ROW_H)),
+            egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(ROWNO_W, theme::row_h())),
             ri + 1,
         );
         let mut x = left + ROWNO_W;
         for (ci, col) in columns.iter().enumerate().take(frozen_n) {
             let w = frozen_ws[ci];
-            let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, theme::ROW_H));
+            let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, theme::row_h()));
             let v = &rowdata[ci.min(rowdata.len().saturating_sub(1))];
             let cp = painter.with_clip_rect(rect);
             let changed = edits
@@ -824,7 +823,7 @@ fn draw_frozen_grid_overlay(
                 );
                 let resp = eui.add(
                     egui::TextEdit::singleline(e.draft)
-                        .font(egui::FontId::proportional(theme::FS_DATA))
+                        .font(egui::FontId::proportional(theme::fs_data()))
                         .frame(false)
                         .desired_width(inner.width()),
                 );

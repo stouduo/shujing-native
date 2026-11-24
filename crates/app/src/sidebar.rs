@@ -99,7 +99,7 @@ impl ShujingApp {
 
         // 头部:与标签栏同一水平带(高度 = 标签高度)。左:导入/导出(连接的三条导入导出
         // 通道,原 ＋ 右键菜单里的项);右:新建连接 ＋。应用名与主功能入口在顶部应用工具栏
-        let head_h = theme::TABBAR_H - 1.0;
+        let head_h = theme::tabbar_h() - 1.0;
         ui.allocate_ui_with_layout(
             egui::vec2(w, head_h),
             Layout::left_to_right(Align::Center),
@@ -389,7 +389,7 @@ impl ShujingApp {
         painter.circle_filled(egui::pos2(rect.left() + 5.0, rect.center().y), 4.0, dot);
         // 同一行里不同字号的文字统一按基线排,而不是各自垂直居中
         let baseline = rect.center().y + 5.0;
-        let name_font = theme::bold(theme::FS_CONN);
+        let name_font = theme::bold(theme::fs_conn());
         // 行内只留 状态点+名字+权限徽标(Navicat/TablePlus 式克制):
         // 版本号不再行内展示(PG 完整串 170pt 曾与名字叠印),进 hover tooltip;
         // 名字预留只给徽标链+悬停漏斗位
@@ -403,7 +403,7 @@ impl ShujingApp {
         painter.galley(
             egui::pos2(
                 rect.left() + 17.0,
-                baseline - icons::baseline_top(&name_galley, theme::FS_CONN),
+                baseline - icons::baseline_top(&name_galley, theme::fs_conn()),
             ),
             name_galley.clone(),
             if online { p.text } else { p.text2 },
@@ -921,7 +921,7 @@ impl ShujingApp {
             .map(|t| matches!(&t.kind, crate::app::TabKind::Ddl(d) if d.conn_id == conn_id && d.name == name))
             .unwrap_or(false);
         let (rect, resp) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+            egui::vec2(ui.available_width(), theme::tree_row_h()),
             Sense::click(),
         );
         let hl = egui::Rect::from_min_max(
@@ -938,7 +938,7 @@ impl ShujingApp {
         let g = icons::text_galley(
             ui.painter(),
             name.to_string(),
-            egui::FontId::proportional(theme::FS_TREE),
+            egui::FontId::proportional(theme::fs_tree()),
             Color32::PLACEHOLDER,
             rect.width() - 120.0,
         );
@@ -1078,7 +1078,7 @@ impl ShujingApp {
             if resp.hovered() { p.text } else { p.text2 },
         );
         let baseline = rect.center().y + 4.5;
-        let f = theme::bold(theme::FS_TREE + 0.5);
+        let f = theme::bold(theme::fs_tree() + 0.5);
         let g = icons::text_galley(
             ui.painter(),
             db.to_string(),
@@ -1089,7 +1089,7 @@ impl ShujingApp {
         ui.painter().galley(
             egui::pos2(
                 rect.left() + 28.0,
-                baseline - icons::baseline_top(&g, theme::FS_TREE + 0.5),
+                baseline - icons::baseline_top(&g, theme::fs_tree() + 0.5),
             ),
             g,
             p.text,
@@ -1204,7 +1204,7 @@ impl ShujingApp {
     fn draw_db_collapsed(&mut self, ui: &mut egui::Ui, conn_id: &str, db: &str) {
         let p = theme::c();
         let (rect, resp) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+            egui::vec2(ui.available_width(), theme::tree_row_h()),
             Sense::click(),
         );
         if resp.hovered() {
@@ -1225,14 +1225,14 @@ impl ShujingApp {
         let g = icons::text_galley(
             ui.painter(),
             db.to_string(),
-            theme::bold(theme::FS_TREE + 0.5),
+            theme::bold(theme::fs_tree() + 0.5),
             Color32::PLACEHOLDER,
             rect.width() - 76.0,
         );
         ui.painter().galley(
             egui::pos2(
                 rect.left() + 28.0,
-                baseline - icons::baseline_top(&g, theme::FS_TREE + 0.5),
+                baseline - icons::baseline_top(&g, theme::fs_tree() + 0.5),
             ),
             g,
             if resp.hovered() { p.text } else { p.text2 },
@@ -1351,7 +1351,7 @@ impl ShujingApp {
             let _ = rest;
             ui.push_id(("rabbitconsole", conn_id), |ui| {
                 let (rect, resp) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+                    egui::vec2(ui.available_width(), theme::tree_row_h()),
                     Sense::click(),
                 );
                 let hl = egui::Rect::from_min_max(
@@ -1392,7 +1392,7 @@ impl ShujingApp {
             let _ = rest;
             ui.push_id(("mqttconsole", conn_id), |ui| {
                 let (rect, resp) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+                    egui::vec2(ui.available_width(), theme::tree_row_h()),
                     Sense::click(),
                 );
                 let hl = egui::Rect::from_min_max(
@@ -1433,7 +1433,7 @@ impl ShujingApp {
             let _ = rest;
             ui.push_id(("kvconsole", conn_id), |ui| {
                 let (rect, resp) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+                    egui::vec2(ui.available_width(), theme::tree_row_h()),
                     Sense::click(),
                 );
                 let hl = egui::Rect::from_min_max(
@@ -1475,7 +1475,7 @@ impl ShujingApp {
             ui.push_id(("kafkaconsole", conn_id), |ui| {
                 // Kafka 控制台行:主题图标+行文字,点击开控制台标签
                 let (rect, resp) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+                    egui::vec2(ui.available_width(), theme::tree_row_h()),
                     Sense::click(),
                 );
                 let hl = egui::Rect::from_min_max(
@@ -1528,7 +1528,7 @@ impl ShujingApp {
             .map(|(c, t, d)| c == conn_id && t == name && d == Some(db))
             .unwrap_or(false);
         let (rect, resp) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+            egui::vec2(ui.available_width(), theme::tree_row_h()),
             Sense::click(),
         );
         let hl = egui::Rect::from_min_max(
@@ -1574,7 +1574,7 @@ impl ShujingApp {
         let g = icons::text_galley(
             ui.painter(),
             name.to_string(),
-            egui::FontId::proportional(theme::FS_TREE),
+            egui::FontId::proportional(theme::fs_tree()),
             Color32::PLACEHOLDER,
             rect.width() - 56.0,
         );
@@ -1851,7 +1851,7 @@ impl ShujingApp {
             .map(|t| matches!(&t.kind, crate::app::TabKind::Redis(rt) if rt.conn_id == conn_id && rt.db == idx))
             .unwrap_or(false);
         let (rect, resp) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), theme::TREE_ROW_H),
+            egui::vec2(ui.available_width(), theme::tree_row_h()),
             Sense::click(),
         );
         let hl = egui::Rect::from_min_max(
@@ -1884,7 +1884,7 @@ impl ShujingApp {
         let g = icons::text_galley(
             ui.painter(),
             name.clone(),
-            egui::FontId::proportional(theme::FS_TREE),
+            egui::FontId::proportional(theme::fs_tree()),
             Color32::PLACEHOLDER,
             rect.width() - 96.0,
         );

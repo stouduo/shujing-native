@@ -16,7 +16,7 @@ pub fn draw_structure_view(
 
     egui::TopBottomPanel::top("struct_toolbar")
         .show_separator_line(false)
-        .exact_height(theme::TOOLBAR_H)
+        .exact_height(theme::toolbar_h())
         .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin {
             left: 14,
             right: 10,
@@ -26,14 +26,14 @@ pub fn draw_structure_view(
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 let title_resp =
-                    ui.label(theme::strong(&s.table, theme::FS_TABLE_TITLE).color(p.text));
+                    ui.label(theme::strong(&s.table, theme::fs_table_title()).color(p.text));
                 let title_g = ui.painter().layout_no_wrap(
                     s.table.clone(),
-                    theme::bold(theme::FS_TABLE_TITLE),
+                    theme::bold(theme::fs_table_title()),
                     egui::Color32::PLACEHOLDER,
                 );
                 let title_baseline = title_resp.rect.center().y - title_g.size().y / 2.0
-                    + icons::baseline_top(&title_g, theme::FS_TABLE_TITLE);
+                    + icons::baseline_top(&title_g, theme::fs_table_title());
                 if let Some(db) = &s.database {
                     ui.add_space(2.0);
                     icons::chip_at_baseline(ui, db, p.text2, title_baseline);
@@ -42,7 +42,7 @@ pub fn draw_structure_view(
                 icons::label_at_baseline(
                     ui,
                     ui_kit::t!("Structure", "表结构"),
-                    egui::FontId::proportional(theme::FS_AUX),
+                    egui::FontId::proportional(theme::fs_aux()),
                     p.muted,
                     title_baseline,
                     120.0,
@@ -54,7 +54,7 @@ pub fn draw_structure_view(
                     icons::label_at_baseline(
                         ui,
                         icons::clip(err, 70),
-                        egui::FontId::proportional(theme::FS_AUX),
+                        egui::FontId::proportional(theme::fs_aux()),
                         p.red,
                         title_baseline,
                         180.0,
@@ -315,7 +315,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                 .clip(true),
         )
         .column(Column::remainder().clip(true));
-    tb.header(theme::HEADER_H, |mut header| {
+    tb.header(theme::header_h(), |mut header| {
         for h in [
             ui_kit::t!("Name", "名称"),
             ui_kit::t!("Type", "类型"),
@@ -332,7 +332,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                     egui::pos2(rect.left() + 12.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     h,
-                    egui::FontId::proportional(theme::FS_HEADER),
+                    egui::FontId::proportional(theme::fs_header()),
                     p.text2,
                 );
                 cell_line(ui, p.border);
@@ -340,7 +340,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
         }
     })
     .body(|body| {
-        body.rows(theme::ROW_H, cols.len(), |mut row| {
+        body.rows(theme::row_h(), cols.len(), |mut row| {
             let ri = row.index();
             let c = &cols[ri];
             let is_pk = c.key == "PRI";
@@ -364,7 +364,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                     ui.painter(),
                     rect,
                     &c.name,
-                    theme::mono(theme::FS_DATA),
+                    theme::mono(theme::fs_data()),
                     if is_pk { p.accent } else { p.cell_text },
                     12.0,
                     rect.width() - 24.0,
@@ -597,7 +597,7 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
 
     egui::TopBottomPanel::top("ddl_toolbar")
         .show_separator_line(false)
-        .exact_height(theme::TOOLBAR_H)
+        .exact_height(theme::toolbar_h())
         .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin {
             left: 14,
             right: 10,
@@ -607,14 +607,14 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 let title = format!("{} {}", d.name, kind_label(&d.kind));
-                let tr = ui.label(theme::strong(&title, theme::FS_TABLE_TITLE).color(p.text));
+                let tr = ui.label(theme::strong(&title, theme::fs_table_title()).color(p.text));
                 let g = ui.painter().layout_no_wrap(
                     title.clone(),
-                    theme::bold(theme::FS_TABLE_TITLE),
+                    theme::bold(theme::fs_table_title()),
                     Color32::PLACEHOLDER,
                 );
                 let baseline = tr.rect.center().y - g.size().y / 2.0
-                    + icons::baseline_top(&g, theme::FS_TABLE_TITLE);
+                    + icons::baseline_top(&g, theme::fs_table_title());
                 if let Some(db) = &d.database {
                     icons::chip_at_baseline(ui, db, p.text2, baseline);
                 }
@@ -625,7 +625,7 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
                     icons::label_at_baseline(
                         ui,
                         icons::clip(err, 70),
-                        egui::FontId::proportional(theme::FS_AUX),
+                        egui::FontId::proportional(theme::fs_aux()),
                         p.red,
                         baseline,
                         220.0,

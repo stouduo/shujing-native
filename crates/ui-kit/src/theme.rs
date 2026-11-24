@@ -28,33 +28,181 @@ pub const MONO_BOLD: &str = "mono-bold";
 
 // ---------------------------------------------------------------- 排版节奏
 
-pub const FS_TABLE_TITLE: f32 = 15.0;
-pub const FS_CONN: f32 = 14.0;
-/// 侧栏树(DBX 14px)
-pub const FS_TREE: f32 = 14.0;
-/// 标签文字(DBX 12px/500)
-pub const FS_TAB: f32 = 12.0;
-/// 列头名称(DBX 13px/600)
-pub const FS_HEADER: f32 = 13.0;
-/// 列头类型小字(DBX 10px)
-pub const FS_TYPE: f32 = 10.0;
-/// 数据格(DBX 13px 比例字体)
-pub const FS_DATA: f32 = 13.0;
-pub const FS_AUX: f32 = 11.0;
+/// 度量 token 集:字号槽与整体缩放、结构高度、控件高度、圆角、表单与全局间距。
+/// 皮肤 = 色彩预设(Palette,PRESETS 表)× 密度(Metrics,本表);字段值是
+/// 缩放 1.0 时的基准值,取值函数(fs_aux() 等)与 bold()/mono()/fs_px() 会
+/// 统一乘 font_scale——紧凑皮肤只调 font_scale 和高度,不动字号槽。
+/// 加一个密度皮肤 = 在 DENSITIES 里加一项;加一个色彩预设 = 在 PRESETS 里加一项。
+#[derive(Clone, Copy)]
+pub struct Metrics {
+    pub font_scale: f32,
+    // 字号槽(基准值,经 font_scale 缩放后生效)
+    pub fs_table_title: f32,
+    pub fs_conn: f32,
+    pub fs_tree: f32,
+    pub fs_tab: f32,
+    pub fs_header: f32,
+    pub fs_type: f32,
+    pub fs_data: f32,
+    pub fs_aux: f32,
+    // 结构高度
+    pub tabbar_h: f32,
+    pub toolbar_h: f32,
+    /// 通用结果网格的单行列头
+    pub header_h: f32,
+    /// 表数据网格列头:两行三段式
+    pub data_header_h: f32,
+    /// 表页内容头(面包屑 + 动作)
+    pub content_head_h: f32,
+    pub querybar_h: f32,
+    /// 数据行高
+    pub row_h: f32,
+    pub tree_row_h: f32,
+    pub footer_h: f32,
+    // 控件高度
+    pub field_h: f32,
+    pub ctrl_h: f32,
+    pub chip_h: f32,
+    pub mini_h: f32,
+    // 圆角
+    pub radius_ctrl: f32,
+    pub radius_card: f32,
+    pub radius_pill: f32,
+    pub radius_small: f32,
+    // 表单
+    pub form_label_w: f32,
+    pub form_gap: f32,
+    pub form_row_min_w: f32,
+    // egui 全局间距(apply 用)
+    pub item_gap: egui::Vec2,
+    pub button_padding: egui::Vec2,
+    pub interact_h: f32,
+}
 
-pub const TABBAR_H: f32 = 38.0;
-pub const TOOLBAR_H: f32 = 44.0;
-/// 通用结果网格的单行列头
-pub const HEADER_H: f32 = 36.0;
-/// 表数据网格列头:DBX 两行三段式(名称 16 + 类型 12 + 注释 12,上下内边距各 6)
-pub const DATA_HEADER_H: f32 = 52.0;
-/// 表页内容头(面包屑 + 动作)与查询栏(WHERE/ORDER BY + 动作),对齐 DBX 的 34/36
-pub const CONTENT_HEAD_H: f32 = 34.0;
-pub const QUERYBAR_H: f32 = 36.0;
-/// 数据行高:对齐 DBX 的 29-30(此前 36 偏松,同屏行数少约 17%)
-pub const ROW_H: f32 = 30.0;
-pub const TREE_ROW_H: f32 = 34.0;
-pub const FOOTER_H: f32 = 34.0;
+/// 标准(历史定稿值,默认密度)
+pub const STANDARD: Metrics = Metrics {
+    font_scale: 1.0,
+    fs_table_title: 15.0,
+    fs_conn: 14.0,
+    fs_tree: 14.0,
+    fs_tab: 12.0,
+    fs_header: 13.0,
+    fs_type: 10.0,
+    fs_data: 13.0,
+    fs_aux: 11.0,
+    tabbar_h: 38.0,
+    toolbar_h: 44.0,
+    header_h: 36.0,
+    data_header_h: 52.0,
+    content_head_h: 34.0,
+    querybar_h: 36.0,
+    row_h: 30.0,
+    tree_row_h: 34.0,
+    footer_h: 34.0,
+    field_h: 30.0,
+    ctrl_h: 26.0,
+    chip_h: 22.0,
+    mini_h: 18.0,
+    radius_ctrl: 6.0,
+    radius_card: 8.0,
+    radius_pill: 11.0,
+    radius_small: 4.0,
+    form_label_w: 104.0,
+    form_gap: 10.0,
+    form_row_min_w: 284.0,
+    item_gap: egui::Vec2::new(8.0, 6.0),
+    button_padding: egui::Vec2::new(10.0, 5.0),
+    interact_h: 26.0,
+};
+
+/// 紧凑:结构高度收一档、字号整体 ×0.94、圆角收小(行高 26 ≈ +15% 同屏行数)
+pub const COMPACT: Metrics = Metrics {
+    font_scale: 0.94,
+    fs_table_title: 15.0,
+    fs_conn: 14.0,
+    fs_tree: 14.0,
+    fs_tab: 12.0,
+    fs_header: 13.0,
+    fs_type: 10.0,
+    fs_data: 13.0,
+    fs_aux: 11.0,
+    tabbar_h: 34.0,
+    toolbar_h: 36.0,
+    header_h: 32.0,
+    data_header_h: 44.0,
+    content_head_h: 30.0,
+    querybar_h: 32.0,
+    row_h: 26.0,
+    tree_row_h: 30.0,
+    footer_h: 30.0,
+    field_h: 26.0,
+    ctrl_h: 24.0,
+    chip_h: 20.0,
+    mini_h: 16.0,
+    radius_ctrl: 5.0,
+    radius_card: 7.0,
+    radius_pill: 10.0,
+    radius_small: 3.0,
+    form_label_w: 96.0,
+    form_gap: 8.0,
+    form_row_min_w: 264.0,
+    item_gap: egui::Vec2::new(6.0, 4.0),
+    button_padding: egui::Vec2::new(8.0, 4.0),
+    interact_h: 22.0,
+};
+
+/// 密度皮肤表(下标即持久化 id;切换后需 theme::apply 重写 egui style)
+pub const DENSITIES: [(&str, &str, Metrics); 2] =
+    [("Standard", "标准", STANDARD), ("Compact", "紧凑", COMPACT)];
+
+static DENSITY_IDX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// 切换密度皮肤(越界钳制;切换后调用方需 theme::apply 重写 egui style)
+pub fn set_density(idx: usize) {
+    DENSITY_IDX.store(idx.min(DENSITIES.len() - 1), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn density_idx() -> usize {
+    DENSITY_IDX.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 当前密度皮肤的度量 token(每帧取,按值返回,与 c() 同风格)
+pub fn m() -> Metrics {
+    DENSITIES[density_idx()].2
+}
+
+/// 度量取值函数:读当前密度并统一乘 font_scale(原同名常量已移入 Metrics)
+pub fn fs_table_title() -> f32 { m().fs_table_title * m().font_scale }
+pub fn fs_conn() -> f32 { m().fs_conn * m().font_scale }
+pub fn fs_tree() -> f32 { m().fs_tree * m().font_scale }
+pub fn fs_tab() -> f32 { m().fs_tab * m().font_scale }
+pub fn fs_header() -> f32 { m().fs_header * m().font_scale }
+pub fn fs_type() -> f32 { m().fs_type * m().font_scale }
+pub fn fs_data() -> f32 { m().fs_data * m().font_scale }
+pub fn fs_aux() -> f32 { m().fs_aux * m().font_scale }
+pub fn tabbar_h() -> f32 { m().tabbar_h }
+pub fn toolbar_h() -> f32 { m().toolbar_h }
+pub fn header_h() -> f32 { m().header_h }
+pub fn data_header_h() -> f32 { m().data_header_h }
+pub fn content_head_h() -> f32 { m().content_head_h }
+pub fn querybar_h() -> f32 { m().querybar_h }
+pub fn row_h() -> f32 { m().row_h }
+pub fn tree_row_h() -> f32 { m().tree_row_h }
+pub fn footer_h() -> f32 { m().footer_h }
+pub fn field_h() -> f32 { m().field_h }
+pub fn ctrl_h() -> f32 { m().ctrl_h }
+pub fn chip_h() -> f32 { m().chip_h }
+pub fn mini_h() -> f32 { m().mini_h }
+pub fn radius_ctrl() -> f32 { m().radius_ctrl }
+pub fn radius_card() -> f32 { m().radius_card }
+pub fn radius_pill() -> f32 { m().radius_pill }
+pub fn radius_small() -> f32 { m().radius_small }
+pub fn form_label_w() -> f32 { m().form_label_w }
+pub fn form_gap() -> f32 { m().form_gap }
+pub fn form_row_min_w() -> f32 { m().form_row_min_w }
+
+/// 任意字号按当前密度缩放(RichText .size(theme::fs_px(n)) 用)
+pub fn fs_px(n: f32) -> f32 { n * m().font_scale }
 
 /// 中文字形相对拉丁基线的视觉偏移系数(冬青黑体回退时整体偏高)
 pub const CJK_BASELINE_FACTOR: f32 = 0.25;
@@ -530,11 +678,11 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 // ---------------------------------------------------------------- 字体
 
 pub fn bold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(BOLD.into()))
+    FontId::new(size * m().font_scale, FontFamily::Name(BOLD.into()))
 }
 
 pub fn mono(size: f32) -> FontId {
-    FontId::monospace(size)
+    FontId::monospace(size * m().font_scale)
 }
 
 /// 粗体标签(原型里的标题/连接名/按钮)
@@ -590,8 +738,8 @@ pub fn apply(ctx: &egui::Context) {
         bg_fill: tint(p.accent, 70),
         stroke: Stroke::NONE,
     };
-    v.window_corner_radius = egui::CornerRadius::same(8);
-    v.menu_corner_radius = egui::CornerRadius::same(6);
+    v.window_corner_radius = egui::CornerRadius::same(radius_card() as u8);
+    v.menu_corner_radius = egui::CornerRadius::same(radius_ctrl() as u8);
     v.window_shadow = egui::epaint::Shadow {
         offset: [0, 12],
         blur: 32,
@@ -605,45 +753,46 @@ pub fn apply(ctx: &egui::Context) {
         color: p.shadow,
     };
 
+    let m = m();
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.panel;
     w.noninteractive.weak_bg_fill = p.panel;
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text2);
     w.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
-    w.noninteractive.corner_radius = egui::CornerRadius::same(6);
+    w.noninteractive.corner_radius = egui::CornerRadius::same(radius_ctrl() as u8);
     w.inactive.bg_fill = Color32::TRANSPARENT;
     w.inactive.weak_bg_fill = Color32::TRANSPARENT;
     w.inactive.fg_stroke = Stroke::new(1.0, p.text2);
     w.inactive.bg_stroke = Stroke::NONE;
-    w.inactive.corner_radius = egui::CornerRadius::same(6);
+    w.inactive.corner_radius = egui::CornerRadius::same(radius_ctrl() as u8);
     w.hovered.bg_fill = p.hover;
     w.hovered.weak_bg_fill = p.hover;
     w.hovered.fg_stroke = Stroke::new(1.0, p.text);
     w.hovered.bg_stroke = Stroke::NONE;
-    w.hovered.corner_radius = egui::CornerRadius::same(6);
+    w.hovered.corner_radius = egui::CornerRadius::same(radius_ctrl() as u8);
     w.active.bg_fill = tint(p.accent, 56);
     w.active.weak_bg_fill = tint(p.accent, 56);
     w.active.fg_stroke = Stroke::new(1.0, p.text);
     w.active.bg_stroke = Stroke::NONE;
-    w.active.corner_radius = egui::CornerRadius::same(6);
+    w.active.corner_radius = egui::CornerRadius::same(radius_ctrl() as u8);
     w.open.bg_fill = p.elevated;
     w.open.weak_bg_fill = p.elevated;
     w.open.fg_stroke = Stroke::new(1.0, p.text);
     w.open.bg_stroke = Stroke::new(1.0, p.border);
-    w.open.corner_radius = egui::CornerRadius::same(6);
+    w.open.corner_radius = egui::CornerRadius::same(radius_ctrl() as u8);
 
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    style.spacing.item_spacing = m.item_gap;
+    style.spacing.button_padding = m.button_padding;
     style.spacing.menu_margin = egui::Margin::symmetric(6, 5);
-    style.spacing.interact_size.y = 26.0;
+    style.spacing.interact_size.y = m.interact_h;
     style.spacing.scroll = thin_scroll(&p);
     style.spacing.text_edit_width = 220.0;
 
     style.text_styles = [
         (TextStyle::Heading, bold(15.0)),
-        (TextStyle::Body, FontId::proportional(13.0)),
-        (TextStyle::Button, FontId::proportional(13.0)),
-        (TextStyle::Small, FontId::proportional(11.0)),
+        (TextStyle::Body, FontId::proportional(fs_px(13.0))),
+        (TextStyle::Button, FontId::proportional(fs_px(13.0))),
+        (TextStyle::Small, FontId::proportional(fs_px(11.0))),
         (TextStyle::Monospace, mono(12.0)),
     ]
     .into();
@@ -945,15 +1094,6 @@ pub fn mini_text_button(ui: &mut egui::Ui, label: &str, color: Color32) -> (bool
 
 // ---------------------------------------------------------------- 表单
 
-/// 表单标签列宽(标签在控件左侧,DBX 式横排)
-pub const FORM_LABEL_W: f32 = 104.0;
-/// 标签列与控件之间的间距
-pub const FORM_GAP: f32 = 10.0;
-/// 表单控件高
-pub const FIELD_H: f32 = 30.0;
-/// 可用宽度不到这个数的窄列(并排布局)退回"标签在上"
-pub const FORM_ROW_MIN_W: f32 = 284.0;
-
 /// 宽度语义:调用方给的 width ≥ 可用宽 = "占满";否则按给定宽
 pub fn fit_width(width: f32, avail: f32) -> f32 {
     if width >= avail - 1.0 {
@@ -976,13 +1116,13 @@ pub fn form_row<R>(
         egui::UiBuilder::new()
             .max_rect(egui::Rect::from_min_size(
                 avail.min,
-                egui::vec2(avail.width(), FIELD_H),
+                egui::vec2(avail.width(), field_h()),
             ))
             .layout(egui::Layout::top_down(egui::Align::Min)),
         |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
             let row = ui.max_rect();
-            let ctrl_left = row.left() + FORM_LABEL_W + FORM_GAP;
+            let ctrl_left = row.left() + form_label_w() + form_gap();
             let mut ctrl = ui.new_child(
                 egui::UiBuilder::new()
                     .max_rect(egui::Rect::from_min_max(
@@ -992,14 +1132,14 @@ pub fn form_row<R>(
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             let out = add(&mut ctrl);
-            let h = ctrl.min_rect().height().max(FIELD_H);
+            let h = ctrl.min_rect().height().max(field_h());
             let _ = ui.allocate_exact_size(egui::vec2(row.width(), h), egui::Sense::hover());
             let mut job = egui::text::LayoutJob::simple_singleline(
                 label.to_owned(),
                 egui::FontId::proportional(13.0),
                 p.text,
             );
-            job.wrap.max_width = FORM_LABEL_W;
+            job.wrap.max_width = form_label_w();
             job.wrap.max_rows = 2;
             job.wrap.break_anywhere = true;
             job.wrap.overflow_character = Some('…');
@@ -1007,7 +1147,7 @@ pub fn form_row<R>(
             ui.painter().galley(
                 egui::pos2(
                     row.left(),
-                    row.top() + h.min(FIELD_H) / 2.0 - g.size().y / 2.0,
+                    row.top() + h.min(field_h()) / 2.0 - g.size().y / 2.0,
                 ),
                 g,
                 p.text,
@@ -1087,7 +1227,7 @@ pub fn field_hint(
     hint: &str,
 ) -> egui::Response {
     let p = c();
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, FIELD_H), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, field_h()), egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(6), p.input_bg);
     let show_id = egui::Id::new((id_salt, "field-show"));
@@ -1224,7 +1364,7 @@ pub fn form_field_multiline(
     width: f32,
     rows: usize,
 ) -> egui::Response {
-    if ui.available_width() >= FORM_ROW_MIN_W {
+    if ui.available_width() >= form_row_min_w() {
         form_row(ui, label, |ui| {
             multiline_box(ui, id_salt, text, fit_width(width, ui.available_width()), rows)
         })
@@ -1247,7 +1387,7 @@ pub fn form_field(
     width: f32,
     pwd: bool,
 ) -> egui::Response {
-    if ui.available_width() >= FORM_ROW_MIN_W {
+    if ui.available_width() >= form_row_min_w() {
         form_row(ui, label, |ui| {
             field(ui, id_salt, text, fit_width(width, ui.available_width()), pwd)
         })
@@ -1586,6 +1726,31 @@ pub fn modal_footer(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut egui::Ui)) 
 
 #[cfg(test)]
 mod tests {
+    /// 密度切换:下标钳制、m() 取值、字号缩放三件事
+    #[test]
+    fn density_switch_and_font_scale() {
+        set_density(0);
+        assert_eq!(density_idx(), 0);
+        assert!((row_h() - 30.0).abs() < 1e-6);
+        assert!((fs_px(12.0) - 12.0).abs() < 1e-6, "标准档不缩放");
+        assert!((fs_aux() - 11.0).abs() < 1e-6);
+        assert!((bold(13.0).size - 13.0).abs() < 1e-6);
+
+        set_density(1);
+        assert_eq!(density_idx(), 1);
+        assert!((row_h() - 26.0).abs() < 1e-6, "紧凑档行高 26");
+        assert!((data_header_h() - 44.0).abs() < 1e-6);
+        assert!((fs_px(12.0) - 12.0 * 0.94).abs() < 1e-3, "紧凑档字号整体缩放");
+        assert!((fs_aux() - 11.0 * 0.94).abs() < 1e-3, "字号槽同样走缩放");
+        assert!((bold(13.0).size - 13.0 * 0.94).abs() < 1e-3);
+        assert!((radius_ctrl() - 5.0).abs() < 1e-6);
+        // 越界钳制
+        set_density(99);
+        assert_eq!(density_idx(), DENSITIES.len() - 1);
+        set_density(0);
+        let _ = m();
+    }
+
     use super::*;
 
     #[test]

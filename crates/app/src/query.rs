@@ -24,7 +24,7 @@ pub fn draw_query_view(
 
     egui::TopBottomPanel::top("query_toolbar")
         .show_separator_line(false)
-        .exact_height(theme::TOOLBAR_H)
+        .exact_height(theme::toolbar_h())
         .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin {
             left: 14,
             right: 10,
@@ -42,7 +42,7 @@ pub fn draw_query_view(
                     .find(|c| c.id == q.conn_id)
                     .map(|c| c.name.clone())
                     .unwrap_or_else(|| ui_kit::t!("Select connection", "选择连接").into());
-                ui.label(RichText::new(ui_kit::t!("Connection", "连接")).size(theme::FS_AUX).color(p.muted));
+                ui.label(RichText::new(ui_kit::t!("Connection", "连接")).size(theme::fs_aux()).color(p.muted));
                 if let Some(new_id) =
                     theme::select(ui, "query-conn-select", &sel_name, &opts, 180.0)
                 {
@@ -58,7 +58,7 @@ pub fn draw_query_view(
                         .database
                         .clone()
                         .unwrap_or_else(|| ui_kit::t!("(default db)", "(连接默认库)").into());
-                    ui.label(RichText::new(ui_kit::t!("DB", "库")).size(theme::FS_AUX).color(p.muted));
+                    ui.label(RichText::new(ui_kit::t!("DB", "库")).size(theme::fs_aux()).color(p.muted));
                     if let Some(new_db) =
                         theme::select(ui, "query-db-select", &sel_db, &db_opts, 150.0)
                     {
@@ -76,7 +76,7 @@ pub fn draw_query_view(
                 if let Some(err) = &q.error {
                     ui.label(
                         RichText::new(crate::icons::clip(err, 90))
-                            .size(theme::FS_AUX)
+                            .size(theme::fs_aux())
                             .color(p.red),
                     );
                 }

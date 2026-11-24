@@ -475,7 +475,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.style_mut().always_scroll_the_only_direction = true;
             // 标签条单独占左侧可滚动视口;“全部标签/＋”固定在右侧,不随标签滚动,
             // 标签再多也能直接点到,不需要先滚到末尾。
-            let bar_h = theme::TABBAR_H - 1.0;
+            let bar_h = theme::tabbar_h() - 1.0;
             let full_w = ui.available_width();
             let controls_w = 92.0 + 30.0 + 8.0;
             let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(full_w, bar_h), Sense::hover());
@@ -903,8 +903,8 @@ fn draw_one_tab(
     mut rename_draft: Option<&mut String>,
 ) -> (TabEvents, egui::Rect) {
     let p = theme::c();
-    let h = theme::TABBAR_H - 1.0;
-    let font = egui::FontId::proportional(theme::FS_TAB);
+    let h = theme::tabbar_h() - 1.0;
+    let font = egui::FontId::proportional(theme::fs_tab());
     let title_g =
         ui.painter()
             .layout_no_wrap(title.to_string(), font.clone(), Color32::PLACEHOLDER);
@@ -1000,7 +1000,7 @@ fn draw_one_tab(
         );
         let r = rui.add(
             egui::TextEdit::singleline(draft)
-                .font(egui::FontId::proportional(theme::FS_TAB))
+                .font(egui::FontId::proportional(theme::fs_tab()))
                 .frame(false)
                 .desired_width(iren.width()),
         );
@@ -1213,7 +1213,7 @@ pub(crate) fn draw_table_view(
     // ---- 内容头(34pt,DBX 式面包屑):连接 / 库 › 表 · 字段数与状态;右侧 表结构 / 编辑表结构
     egui::TopBottomPanel::top("table_head")
         .show_separator_line(false)
-        .exact_height(theme::CONTENT_HEAD_H)
+        .exact_height(theme::content_head_h())
         .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin {
             left: 14,
             right: 10,
@@ -1236,7 +1236,7 @@ pub(crate) fn draw_table_view(
                     ui.label(RichText::new("›").size(12.0).color(p.muted));
                 }
                 ui.add(
-                    egui::Label::new(theme::strong(&tab.table, theme::FS_HEADER).color(p.text))
+                    egui::Label::new(theme::strong(&tab.table, theme::fs_header()).color(p.text))
                         .truncate(),
                 );
                 // 字段数 + 状态提示(只读 / 可双击编辑 / 读取中)
@@ -1305,7 +1305,7 @@ pub(crate) fn draw_table_view(
     // ---- 查询栏(36pt,DBX 式):WHERE / ORDER BY 芯片 + 快速筛选;右侧 更多/刷新/新增行/保存/丢弃
     egui::TopBottomPanel::top("table_querybar")
         .show_separator_line(false)
-        .exact_height(theme::QUERYBAR_H)
+        .exact_height(theme::querybar_h())
         .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin {
             left: 14,
             right: 10,
@@ -1731,7 +1731,7 @@ pub(crate) fn draw_table_view(
     let mut export: Option<u8> = None;
     egui::TopBottomPanel::bottom("table_pager")
         .show_separator_line(false)
-        .exact_height(theme::FOOTER_H)
+        .exact_height(theme::footer_h())
         .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin {
             left: 14,
             right: 12,
@@ -2756,7 +2756,7 @@ pub(crate) fn draw_table_view(
                         "Empty fields use the database default / NULL",
                         "留空的字段取数据库默认值 / NULL"
                     ))
-                    .size(theme::FS_AUX)
+                    .size(theme::fs_aux())
                     .color(p.muted),
                 );
                 ui.add_space(12.0);
@@ -3080,7 +3080,7 @@ fn draw_data_table(
                 .unwrap_or(false)
         })
         .collect();
-    tb.header(theme::DATA_HEADER_H, |mut header| {
+    tb.header(theme::data_header_h(), |mut header| {
         if show_rowno {
             header.col(|ui| {
                 let rect = ui.max_rect();
@@ -3206,7 +3206,7 @@ fn draw_data_table(
         };
         // rows() 消费 body:先取数据区矩形供空行延伸
         let brect = body.max_rect();
-        body.rows(theme::ROW_H, rows.len(), |mut row| {
+        body.rows(theme::row_h(), rows.len(), |mut row| {
             let ri = row.index();
             let row_y = std::cell::Cell::new(f32::NAN);
             let rowdata = &rows[ri];
@@ -3288,7 +3288,7 @@ fn draw_data_table(
                                         egui::TextEdit::singleline(draft)
                                             .frame(false)
                                             .margin(egui::Margin::symmetric(6, 0))
-                                            .font(egui::FontId::proportional(theme::FS_DATA))
+                                            .font(egui::FontId::proportional(theme::fs_data()))
                                             .desired_width(inner.width()),
                                     )
                                 },
@@ -3374,12 +3374,12 @@ fn draw_data_table(
             // 空白区网格延续(Notion/Linear 式):数据行下方到网格底部画空行
             // 斑马纹+行线——评审两轮共指"5 行数据下方 500px 纯背景的断裂感"
             {
-                let mut y = brect.top() + rows.len() as f32 * theme::ROW_H;
+                let mut y = brect.top() + rows.len() as f32 * theme::row_h();
                 let mut empty_ri = rows.len();
-                while y + theme::ROW_H <= brect.bottom() + 0.5 {
+                while y + theme::row_h() <= brect.bottom() + 0.5 {
                     let band = egui::Rect::from_min_max(
                         egui::pos2(brect.left(), y),
-                        egui::pos2(brect.right(), y + theme::ROW_H),
+                        egui::pos2(brect.right(), y + theme::row_h()),
                     );
                     if empty_ri % 2 == 1 {
                         body_painter.rect_filled(band, 0, p.stripe);
@@ -3396,7 +3396,7 @@ fn draw_data_table(
                             egui::Stroke::new(1.0, p.row_line),
                         );
                     }
-                    y += theme::ROW_H;
+                    y += theme::row_h();
                     empty_ri += 1;
                 }
             }
@@ -3416,13 +3416,13 @@ fn draw_data_table(
                     .copied()
                     .unwrap_or(120.0)
             };
-            let body_top = geom.header_top.unwrap_or(f32::NEG_INFINITY) + theme::DATA_HEADER_H;
+            let body_top = geom.header_top.unwrap_or(f32::NEG_INFINITY) + theme::data_header_h();
             let off_x = LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
             // 屏幕 y → 行号(行虚拟化首行带裁剪,须按记录的真实行带查)
             let row_at = |py: f32| -> Option<usize> {
                 geom.vis_rows
                     .iter()
-                    .find(|(_, y)| py >= *y && py < *y + theme::ROW_H)
+                    .find(|(_, y)| py >= *y && py < *y + theme::row_h())
                     .map(|(ri, _)| *ri)
             };
             // 屏幕坐标 → (行, 可视列);行号列返回 None 由行号分支处理
@@ -3611,7 +3611,7 @@ fn draw_frozen_overlay(
 
     // ---- 钉住的表头(与底层列头同一套两行三段式绘制)
     let header_rect =
-        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(region_w, theme::DATA_HEADER_H));
+        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(region_w, theme::data_header_h()));
     painter.rect_filled(header_rect, 0, p.header);
     if show_rowno {
         painter.text(
@@ -3638,7 +3638,7 @@ fn draw_frozen_overlay(
     for (vw, &vi) in vis_idx.iter().enumerate().take(frozen_vis) {
         let c = &columns[vi];
         let w = frozen_ws[vw];
-        let rect = egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, theme::DATA_HEADER_H));
+        let rect = egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, theme::data_header_h()));
         let cp = painter.with_clip_rect(rect);
         let sorted = sort
             .as_ref()
@@ -3697,11 +3697,11 @@ fn draw_frozen_overlay(
             matches!(*selected, Some((sr, _)) if sr == ri) || multi_sel.binary_search(&ri).is_ok();
         let hovered = pointer
             .map(|pt| {
-                pt.y >= y && pt.y < y + theme::ROW_H && pt.x >= left && pt.x < left + region_w
+                pt.y >= y && pt.y < y + theme::row_h() && pt.x >= left && pt.x < left + region_w
             })
             .unwrap_or(false);
         let band =
-            egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(region_w, theme::ROW_H));
+            egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(region_w, theme::row_h()));
         if row_selected {
             painter.rect_filled(band, 0, p.selected_row);
         } else if hovered {
@@ -3710,7 +3710,7 @@ fn draw_frozen_overlay(
         // 行号格(交互与底层行号列一致:单击单选 / ⌘ 切换 / Shift 范围)
         if show_rowno {
             painter.text(
-                egui::pos2(left + rowno_w - 14.0, y + theme::ROW_H / 2.0),
+                egui::pos2(left + rowno_w - 14.0, y + theme::row_h() / 2.0),
                 egui::Align2::RIGHT_CENTER,
                 format!("{}", ri + 1),
                 egui::FontId::proportional(11.0),
@@ -3718,13 +3718,13 @@ fn draw_frozen_overlay(
             );
             painter.line_segment(
                 [
-                    egui::pos2(left, y + theme::ROW_H - 0.5),
-                    egui::pos2(left + region_w, y + theme::ROW_H - 0.5),
+                    egui::pos2(left, y + theme::row_h() - 0.5),
+                    egui::pos2(left + region_w, y + theme::row_h() - 0.5),
                 ],
                 egui::Stroke::new(1.0, p.row_line),
             );
             let r =
-                egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(rowno_w, theme::ROW_H));
+                egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(rowno_w, theme::row_h()));
             let resp = ui.interact(r, egui::Id::new(("fz-r", tab_id, ri)), Sense::click());
             let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
             if resp.clicked() {
@@ -3753,7 +3753,7 @@ fn draw_frozen_overlay(
         for (ci, &vi) in vis_idx.iter().enumerate().take(frozen_vis) {
             let col_name = &columns[vi];
             let w = frozen_ws[ci];
-            let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, theme::ROW_H));
+            let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, theme::row_h()));
             let v = rowdata.get(vi).unwrap_or(&None);
             let (range_hit, range_edges) = match sel_range.map(norm_range) {
                 Some(((r1, c1), (r2, c2))) => {
@@ -3792,7 +3792,7 @@ fn draw_frozen_overlay(
                     egui::TextEdit::singleline(draft)
                         .frame(false)
                         .margin(egui::Margin::symmetric(6, 0))
-                        .font(egui::FontId::proportional(theme::FS_DATA))
+                        .font(egui::FontId::proportional(theme::fs_data()))
                         .desired_width(inner.width()),
                 );
                 resp.request_focus();
@@ -4142,7 +4142,7 @@ fn paint_col_title(painter: &egui::Painter, rect: egui::Rect, name: &str, reserv
     let g = icons::text_galley(
         painter,
         name.to_owned(),
-        theme::bold(theme::FS_HEADER),
+        theme::bold(theme::fs_header()),
         p.text,
         name_w,
     );
@@ -4178,7 +4178,7 @@ fn paint_col_anno(
         let tg = icons::text_galley(
             painter,
             ty.to_owned(),
-            egui::FontId::proportional(theme::FS_TYPE),
+            egui::FontId::proportional(theme::fs_type()),
             color,
             avail,
         );
@@ -4192,7 +4192,7 @@ fn paint_col_anno(
         let cg = icons::text_galley(
             painter,
             cm.to_owned(),
-            egui::FontId::proportional(theme::FS_TYPE),
+            egui::FontId::proportional(theme::fs_type()),
             p.muted,
             (rect.width() - HEAD_PAD_X * 2.0).max(8.0),
         );
@@ -4297,7 +4297,7 @@ fn draw_data_cell(
     } else {
         let text = icons::cell_text(v, 512);
         let color = icons::cell_text_color(v, changed);
-        let font = egui::FontId::proportional(theme::FS_DATA);
+        let font = egui::FontId::proportional(theme::fs_data());
         let g = icons::text_galley(&painter, text, font, color, rect.width() - 24.0);
         // 数字列右对齐(DBX 式:数值按个位对齐,量级一眼可比;NULL 仍靠左)
         let x = if numeric && v.is_some() {
