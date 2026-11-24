@@ -286,6 +286,26 @@ fn type_label(t: &str) -> &str {
 /// set / list 各占剩余一色;认不出的类型用次文字色。
 /// 类型不是状态——不用描边,描边留给 TTL 这类徽标,"即将过期"才是红的
 
+/// 键类型 → 类别色:沿用列类型那套色板(明暗主题各一套),与数据页类型小字同源。
+/// string 同字符串、hash 同 JSON(都是字段-值结构)、stream 同时间、zset 同数值(分数),
+/// set / list 各占剩余一色;认不出的类型用次文字色。
+/// 注意:这里必须用 Redis 自己的映射,不能走 theme::classify_type——
+/// hash/zset/stream/list 不是 SQL 列类型,classify_type 会把它们归成灰色"其他"
+/// (74·二 上收时踩过,STRING 恰好认识所以只有它是绿的)。
+fn type_color(t: &str) -> Color32 {
+    use theme::TypeKind as K;
+    let kind = match t {
+        "string" => K::String,
+        "hash" => K::Structured,
+        "stream" => K::Temporal,
+        "zset" => K::Numeric,
+        "set" => K::Integer,
+        "list" => K::Identifier,
+        _ => K::Other,
+    };
+    theme::type_color(kind)
+}
+
 fn draw_key_row(
     ui: &mut egui::Ui,
     tab_id: &str,
@@ -340,7 +360,7 @@ fn draw_key_row(
             egui::pos2(right - w, rect.center().y - 8.0),
             egui::vec2(w, 16.0),
         );
-        let color = theme::kind_color(&ktype);
+        let color = type_color(&ktype);
         ui.painter()
             .rect_filled(br, egui::CornerRadius::same(theme::radius_small() as u8), theme::tint(color, 42));
         ui.painter().galley(
@@ -474,7 +494,7 @@ fn draw_detail(
                 ui.painter().galley(egui::pos2(kx, ky), kg, p.text);
                 ui.allocate_space(egui::vec2(kw, 0.0));
                 ui.add_space(6.0);
-                icons::chip(ui, type_label(&d.key_type), theme::kind_color(&d.key_type));
+                icons::chip(ui, type_label(&d.key_type), type_color(&d.key_type));
                 ui.add_space(4.0);
                 // TTL 是状态:永久(-1)不强调,有过期时间用橙色,
                 // 5 分钟内到期或已过期(-2,键已不存在)用红
@@ -1480,5 +1500,33 @@ fn draw_edit_string_modal(
         rt.edit_value = None;
     } else if cancel || modal.should_close() {
         rt.edit_value = None;
+    }
+}
+
+#[cfg(test)]
+mod type_color_tests {
+    use super::type_color;
+
+    /// 74·二 曾把键类型映射错误地上收给 classify_type:hash/zset/stream/list
+    /// 不是 SQL 列类型,全部落成灰色"其他"。此测试锁住 Redis 自己的语义映射——
+    /// 六种键类型都要有独立的非灰色类别色
+    #[test]
+    fn redis_key_types_keep_their_semantic_colors() {
+        let p = crate::theme::c();
+        let grey = p.text2;
+        for ty in ["string", "hash", "zset", "stream", "set", "list"] {
+            let c = type_color(ty);
+            assert_ne!(c, grey, "{ty} 不应落到次文字灰");
+            assert_ne!(c, crate::theme::c().text, "{ty} 不应与主文字同色");
+        }
+        // 认不出的类型才是灰
+        assert_eq!(type_color("no-such-type"), grey);
+        // 各类型互不相同
+        let cs = ["string", "hash", "zset", "stream", "set", "list"].map(type_color);
+        for i in 0..cs.len() {
+            for j in i + 1..cs.len() {
+                assert_ne!(cs[i], cs[j], "{} 与 {} 同色", ["string","hash","zset","stream","set","list"][i], ["string","hash","zset","stream","set","list"][j]);
+            }
+        }
     }
 }
