@@ -87,7 +87,7 @@ pub fn result_rows(
                 let in_body: bool = started
                     .map(|p| {
                         content.contains(p)
-                            && p.y > content.top() + theme::header_h()
+                            && p.y > content.top() + theme::data_header_h()
                             && p.x < content.right() - 16.0
                     })
                     .unwrap_or(false);
@@ -119,7 +119,7 @@ pub fn result_rows(
                     .column(Column::initial(col_widths[i]).resizable(true).clip(true).at_least(40.0));
             }
             tb = tb.column(Column::remainder().at_least(0.0));
-            tb.header(theme::header_h(), |mut header| {
+            tb.header(theme::data_header_h(), |mut header| {
                 header.col(|ui| {
                     let rect = ui.max_rect();
                     if geom.header_top.is_none() {
@@ -339,7 +339,7 @@ pub fn result_rows_editable(
                 let in_body: bool = started
                     .map(|p| {
                         content.contains(p)
-                            && p.y > content.top() + theme::header_h()
+                            && p.y > content.top() + theme::data_header_h()
                             && p.x < content.right() - 16.0
                     })
                     .unwrap_or(false);
@@ -371,7 +371,7 @@ pub fn result_rows_editable(
                     .column(Column::initial(col_widths[i]).resizable(true).clip(true).at_least(40.0));
             }
             tb = tb.column(Column::remainder().at_least(0.0));
-            tb.header(theme::header_h(), |mut header| {
+            tb.header(theme::data_header_h(), |mut header| {
                 header.col(|ui| {
                     let rect = ui.max_rect();
                     if geom.header_top.is_none() {
@@ -621,12 +621,12 @@ fn draw_frozen_grid_overlay(
     // 钉住的表头
     crate::theme::paint_rowno_head(
         &painter,
-        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(theme::ROWNO_W, theme::header_h())),
+        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(theme::ROWNO_W, theme::data_header_h())),
     );
     let mut hx = left + theme::ROWNO_W;
     for (vw, c) in columns.iter().enumerate().take(frozen_n) {
         let w = frozen_ws[vw];
-        let rect = egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, theme::header_h()));
+        let rect = egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, theme::data_header_h()));
         theme::paint_grid_head(&painter, rect, c, theme::type_at(column_types, vw));
         let resp = ui.interact(rect, egui::Id::new(("qfz-h", id_salt, vw)), Sense::click());
         grid_header_freeze_menu(&resp, vw, columns.len(), frozen);

@@ -536,6 +536,9 @@ pub struct ShotState {
     pub sent: bool,
 }
 
+/// settings.json 里密度皮肤(标准 / 紧凑)的键:保存与启动恢复共用同一个名字
+pub(crate) const SETTINGS_KEY_DENSITY: &str = "density";
+
 impl ShujingApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         Self::install_fonts(cc);
@@ -586,7 +589,7 @@ impl ShujingApp {
         // 密度皮肤(标准/紧凑)在 apply 之前恢复,apply 读当前度量
         let density = settings
             .as_ref()
-            .and_then(|v| v.get("density").and_then(|x| x.as_u64()))
+            .and_then(|v| v.get(SETTINGS_KEY_DENSITY).and_then(|x| x.as_u64()))
             .unwrap_or(0) as usize;
         crate::theme::set_density(density);
         // 预设显式持久化优先;旧配置只有 dark 布尔 → 基调默认预设;
@@ -947,16 +950,16 @@ impl ShujingApp {
 
     pub fn save_theme_settings(&self) {
         let path = self.config_dir.join("settings.json");
-        let json = serde_json::json!({
+        let mut json = serde_json::json!({
             "dark": self.dark_mode,
             "preset": crate::theme::preset_idx(),
             "autoBackup": &self.auto_backup,
             "accent": crate::theme::accent_idx(),
-            "density": crate::theme::density_idx(),
             "followSystem": self.follow_system_theme,
             "ai": &self.ai_config,
             "english": ui_kit::i18n::is_english(),
         });
+        json[SETTINGS_KEY_DENSITY] = serde_json::json!(crate::theme::density_idx());
         let _ = std::fs::write(path, json.to_string());
     }
 

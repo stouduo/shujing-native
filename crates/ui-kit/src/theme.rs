@@ -68,9 +68,12 @@ pub struct Metrics {
     /// 应用顶栏(数镜名 + 主功能直达,40=应用级 chrome;与页面级工具条 toolbar_h 区分)
     pub appbar_h: f32,
     pub toolbar_h: f32,
-    /// 通用结果网格的单行列头
+    /// 单行列头(只有列名):结构页的字段/索引表在用。
+    /// 注意与 data_header_h 的区别——名字相近,曾把两行列头的结果网格误设成这个值
     pub header_h: f32,
-    /// 表数据网格列头:两行三段式
+    /// 两行列头(名称 + 类型小字):数据页与结果网格(查询结果 / 执行计划 /
+    /// Parquet 预览 / Kafka 消息)共用,二者必须同高。
+    /// render_test::result_grid_header_matches_data_page_header 量像素锁住
     pub data_header_h: f32,
     /// 表页内容头(面包屑 + 动作)
     pub content_head_h: f32,
@@ -205,6 +208,7 @@ pub fn fs_aux() -> f32 { m().fs_aux * m().font_scale }
 pub fn tabbar_h() -> f32 { m().tabbar_h }
 pub fn appbar_h() -> f32 { m().appbar_h }
 pub fn toolbar_h() -> f32 { m().toolbar_h }
+/// 单行列头高度(结构页)。两行列头请用 [`data_header_h`]
 pub fn header_h() -> f32 { m().header_h }
 pub fn data_header_h() -> f32 { m().data_header_h }
 pub fn content_head_h() -> f32 { m().content_head_h }

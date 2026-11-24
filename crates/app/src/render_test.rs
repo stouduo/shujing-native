@@ -17,8 +17,21 @@ static RENDER_LOCK: Mutex<()> = Mutex::new(());
 /// draw_app 夹具不含工具栏,走它的测试不加
 const CHROME_TOP: f32 = crate::appbar::BAR_H;
 
-fn render(name: &str, w: f32, h: f32, dark: bool, mut draw: impl FnMut(&egui::Context) + 'static) {
+fn render(name: &str, w: f32, h: f32, dark: bool, draw: impl FnMut(&egui::Context) + 'static) {
     let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    render_locked(name, w, h, dark, draw);
+}
+
+/// 渲染并落盘(调用方须已持有 RENDER_LOCK)。要把"锁外的全局状态切换"也纳入
+/// 同一把锁的保护范围时用它——例如英文测试:语言是进程级全局,切语言若发生在
+/// 锁外,并行运行的其他渲染测试会随机渲染成英文,落盘的图就不可复现、不可对比
+fn render_locked(
+    name: &str,
+    w: f32,
+    h: f32,
+    dark: bool,
+    mut draw: impl FnMut(&egui::Context) + 'static,
+) {
     let out_dir = std::path::PathBuf::from("/tmp/shujing_ui");
     let _ = std::fs::create_dir_all(&out_dir);
     let setup_done = std::cell::Cell::new(false);
@@ -567,8 +580,12 @@ fn render_data_table() {
 #[test]
 fn render_english_mode() {
     // i18n 冒烟:英文开关下渲染同一数据表场景,输出 data_table_en.png 供比对;
-    // 结束复位中文(语言是全局静态,渲染测试无文本断言,串扰无害但保持整洁)
+    // 结束复位中文(语言是进程级全局,切换全程在本测试持有的 RENDER_LOCK 内)
     assert_eq!(ui_kit::i18n::t("Tables", "表"), "表");
+    // 全程持 RENDER_LOCK:语言是进程级全局,切语言若在锁外,并行运行的其他渲染
+    // 测试会随机渲染成英文(同一次运行里前几张图英文、后几张中文),落盘的图
+    // 既不可复现也不可用于前后版本的像素对比
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     ui_kit::i18n::set_english(true);
     assert_eq!(ui_kit::i18n::t("Tables", "表"), "Tables");
     let mut tab = role_tab();
@@ -576,7 +593,7 @@ fn render_english_mode() {
         .push((1, "role_name".into(), Some("内容编辑".into())));
     let cell = std::cell::RefCell::new(Some(tab));
     let conns: Vec<shujing_core::ConnInfo> = vec![];
-    render("data_table_en", 1280.0, 780.0, true, move |ctx| {
+    render_locked("data_table_en", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let tab = b.as_mut().unwrap();
         let _actions = table_view::draw_table_view(ctx, "t1", tab, &conns);
@@ -2640,18 +2657,30 @@ fn modal_footer_buttons_work() {
         let mut app = full_app("role");
         app.settings_open = true;
         let mut h = harness_with(app, crate::modals::draw_settings_modal, 1400.0);
+        // 落盘的值:启动时按同一个键恢复(见 SETTINGS_KEY_DENSITY),内存对了文件没对等于白点
+        let saved_density = |h: &egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| {
+            let cfg = h.state().borrow().config_dir.clone();
+            let text = std::fs::read_to_string(cfg.join("settings.json"))
+                .expect("切换密度后应写出 settings.json");
+            let v: serde_json::Value =
+                serde_json::from_str(&text).expect("settings.json 应是合法 JSON");
+            v.get(crate::app::SETTINGS_KEY_DENSITY)
+                .and_then(|x| x.as_u64())
+        };
         click(&mut h, "紧凑");
         assert_eq!(
             crate::theme::density_idx(),
             1,
             "点「紧凑」应切到紧凑密度"
         );
+        assert_eq!(saved_density(&h), Some(1), "点「紧凑」后 settings.json 应记录 density=1");
         click(&mut h, "标准");
         assert_eq!(
             crate::theme::density_idx(),
             0,
             "点「标准」应切回标准密度"
         );
+        assert_eq!(saved_density(&h), Some(0), "点「标准」后 settings.json 应记录 density=0");
     }
     // 数据传输:取消
     {
@@ -2942,6 +2971,9 @@ fn frozen_overlay_editor_and_unfreeze() {
 
 #[test]
 fn query_grid_frozen_columns_pin() {
+    // 必须持 RENDER_LOCK:坐标按标准密度写死,而紧凑档渲染测试会在锁内把
+    // 进程级密度切到紧凑——不持锁时若与之重叠,就在紧凑布局上按标准坐标点击
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 查询结果网格冻结 1 列:横向滚动两段后,冻结区逐像素钉住;整幅画面必须已变化
     let filler = "value-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
     let mut q = QueryTab {
@@ -5121,3 +5153,121 @@ fn render_compact_pages() {
     crate::theme::set_density(0);
 }
 
+// ---------------------------------------------------------------- 几何的像素断言
+
+/// 在 RGBA8 原始像素里量某种颜色的纵向色带高度:逐列取最长连续段,返回全图里
+/// 出现最多的段高 (众数, 命中列数)。不取"第一条够长的"——网格最右缘的列头会被
+/// 上方控件和面板边缘切掉一截,残段高度参差不齐,先撞上它就量错了
+fn color_band_height(
+    w: u32,
+    h: u32,
+    raw: &[u8],
+    color: [u8; 3],
+    min_len: u32,
+) -> Option<(u32, u32)> {
+    let px = |x: u32, y: u32| -> [u8; 3] {
+        let i = ((y * w + x) * 4) as usize;
+        [raw[i], raw[i + 1], raw[i + 2]]
+    };
+    let mut counts: std::collections::HashMap<u32, u32> = Default::default();
+    for x in (0..w).step_by(3) {
+        let (mut best, mut cur) = (0u32, 0u32);
+        for y in 0..h {
+            if px(x, y) == color {
+                cur += 1;
+                best = best.max(cur);
+            } else {
+                cur = 0;
+            }
+        }
+        if best >= min_len {
+            *counts.entry(best).or_default() += 1;
+        }
+    }
+    counts.into_iter().max_by_key(|(_, n)| *n)
+}
+
+/// 渲染一个场景并返回 (宽, 高, RGBA8 原始像素)。调用方须已持有 RENDER_LOCK
+fn render_pixels(
+    w: f32,
+    h: f32,
+    mut draw: impl FnMut(&egui::Context),
+) -> (u32, u32, Vec<u8>) {
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(w, h))
+        .with_pixels_per_point(2.0)
+        .build(move |ctx| {
+            if !setup_done.get() {
+                setup_done.set(true);
+                ShujingApp::apply_fonts(ctx);
+                crate::theme::set_dark(true);
+                crate::theme::apply(ctx);
+                return;
+            }
+            draw(ctx);
+        });
+    harness.run_steps(6);
+    let img = harness.render().expect("render 失败");
+    (img.width(), img.height(), img.into_raw())
+}
+
+/// 结果网格的表头必须与数据页同高(两行列头:名称 + 类型)。
+///
+/// 74·一 迁移度量常量时,grid.rs 的表头高度被换成了名字相近的"单行列头"token,
+/// 查询结果 / 执行计划 / Parquet 预览 / Kafka 消息共用的结果网格表头从 52pt
+/// 压到 36pt——两行文字仍画得下,所以肉眼和不量几何的测试都没看出来,还装了机。
+/// 这里直接量渲染出来的列头底色段,不看 token 叫什么。
+#[test]
+fn result_grid_header_matches_data_page_header() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let header = crate::theme::c().header;
+    let color = [header.r(), header.g(), header.b()];
+    const MIN: u32 = 24;
+
+    // 数据页
+    let mut tab = role_tab();
+    tab.pk_cols = vec!["id".into()];
+    let cell = std::cell::RefCell::new(Some(tab));
+    let conns: Vec<shujing_core::ConnInfo> = vec![];
+    let (w, h, raw) = render_pixels(1280.0, 780.0, |ctx| {
+        let mut b = cell.borrow_mut();
+        let tab = b.as_mut().unwrap();
+        let _ = table_view::draw_table_view(ctx, "t1", tab, &conns);
+    });
+    let (data_page, data_page_cols) = color_band_height(w, h, &raw, color, MIN)
+        .expect("数据页应能找到列头底色段");
+
+    // 查询结果网格(带类型的结果集)
+    let (q, qconns, dbs) = query_view_fixture();
+    let cell = std::cell::RefCell::new(Some(q));
+    let (w, h, raw) = render_pixels(1280.0, 780.0, |ctx| {
+        let mut b = cell.borrow_mut();
+        let q = b.as_mut().unwrap();
+        let _ = query::draw_query_view(
+            &qconns, ctx, "q1", q, &[], &dbs, true, &[], &Default::default(), None, false,
+        );
+    });
+    let (result_grid, result_grid_cols) = color_band_height(w, h, &raw, color, MIN)
+        .expect("查询结果网格应能找到列头底色段");
+    assert!(
+        data_page_cols >= 8 && result_grid_cols >= 8,
+        "命中列数太少(数据页 {data_page_cols},结果网格 {result_grid_cols}),众数不可信"
+    );
+
+    // 底部那条 1pt 横线不是列头底色,所以量到的比"高度×2"略短
+    let expect = (crate::theme::data_header_h() * 2.0).round() as i64;
+    for (what, measured) in [("数据页", data_page), ("结果网格", result_grid)] {
+        let short = expect - measured as i64;
+        assert!(
+            (0..=4).contains(&short),
+            "{what}表头量到 {measured}px;data_header_h={} 应约 {expect}px(只允许底部横线占 0~4px)",
+            crate::theme::data_header_h()
+        );
+    }
+    // 两处底线的抗锯齿可能差 1px,允许 1px
+    assert!(
+        result_grid.abs_diff(data_page) <= 1,
+        "结果网格表头 {result_grid}px 应与数据页 {data_page}px 同高(两行列头对齐)"
+    );
+}
