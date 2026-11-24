@@ -283,6 +283,24 @@ fn type_label(t: &str) -> &str {
     }
 }
 
+/// 键类型的类别色:沿用列类型那套色板(明暗主题各一套),与数据页的类型小字同源。
+/// string 同字符串、hash 同 JSON(都是字段-值结构)、stream 同时间、zset 同数值(分数),
+/// set / list 各占剩余一色;认不出的类型用次文字色。
+/// 类型不是状态——不用描边,描边留给 TTL 这类徽标,"即将过期"才是红的
+fn type_color(t: &str) -> Color32 {
+    use theme::TypeKind as K;
+    let kind = match t {
+        "string" => K::String,
+        "hash" => K::Structured,
+        "stream" => K::Temporal,
+        "zset" => K::Numeric,
+        "set" => K::Integer,
+        "list" => K::Identifier,
+        _ => K::Other,
+    };
+    theme::type_color(kind)
+}
+
 fn draw_key_row(
     ui: &mut egui::Ui,
     tab_id: &str,
@@ -337,12 +355,13 @@ fn draw_key_row(
             egui::pos2(right - w, rect.center().y - 8.0),
             egui::vec2(w, 16.0),
         );
+        let color = type_color(&ktype);
         ui.painter()
-            .rect_stroke(br, egui::CornerRadius::same(4), egui::Stroke::new(1.0, p.red), egui::StrokeKind::Inside);
+            .rect_filled(br, egui::CornerRadius::same(4), theme::tint(color, 42));
         ui.painter().galley(
             egui::pos2(br.center().x - g.size().x / 2.0, br.center().y - g.size().y / 2.0),
             g,
-            p.red,
+            color,
         );
         right -= w + 4.0;
     }
@@ -467,12 +486,21 @@ fn draw_detail(
                 let (kw, kh) = (kg.size().x, kg.size().y);
                 let ky = ui.cursor().center().y - kh / 2.0;
                 let kx = ui.cursor().left();
-                ui.painter().galley(egui::pos2(kx, ky), kg, p.red);
+                ui.painter().galley(egui::pos2(kx, ky), kg, p.text);
                 ui.allocate_space(egui::vec2(kw, 0.0));
                 ui.add_space(6.0);
-                icons::chip(ui, type_label(&d.key_type), p.accent);
+                icons::chip(ui, type_label(&d.key_type), type_color(&d.key_type));
                 ui.add_space(4.0);
-                ui.label(RichText::new(ttl_text(d.ttl)).size(11.0).color(ORANGE));
+                // TTL 是状态:永久(-1)不强调,有过期时间用橙色,
+                // 5 分钟内到期或已过期(-2,键已不存在)用红
+                let ttl_color = if d.ttl == -1 {
+                    p.muted
+                } else if d.ttl < 300 {
+                    p.red
+                } else {
+                    ORANGE
+                };
+                ui.label(RichText::new(ttl_text(d.ttl)).size(11.0).color(ttl_color));
                 ui.label(
                     RichText::new(format!("len {}", icons::thousands(d.len)))
                         .size(11.0)

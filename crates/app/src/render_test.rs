@@ -684,6 +684,56 @@ fn render_mongo_v2_modals() {
     });
 }
 
+/// Kafka 控制台读过消息之后:消息网格(两行列头 + 类型小字)与底部发送区
+#[test]
+fn render_kafka_console_msgs() {
+    let msg = |offset: i64, key: Option<&str>, payload: &str, time: &str| shujing_core::kafka::StreamMsg {
+        topic: "orders".into(),
+        partition: 0,
+        offset,
+        key: key.map(str::to_string),
+        payload: Some(payload.to_string()),
+        ts_millis: 0,
+        time: time.to_string(),
+    };
+    // 直接把带消息的状态放进标签页:clone_shell 是"状态从零"的空壳,不带消息
+    let kafka_tab = crate::app::KafkaTab {
+        conn_id: "c1".into(),
+        topics: vec!["orders".into(), "payments".into()],
+        selected: Some("orders".into()),
+        msgs: vec![
+            msg(7, Some("order-1001"), "{\"id\": 1001, \"amount\": 199.00}", "11-24 09:12:01"),
+            msg(8, None, "{\"id\": 1002, \"amount\": 88.50}", "11-24 09:12:05"),
+            msg(9, Some("order-1003"), "{\"id\": 1003, \"amount\": 1200.00}", "11-24 09:12:09"),
+        ],
+        loading: false,
+        error: None,
+        send_key: String::new(),
+        send_payload: String::new(),
+        sending: false,
+        groups: None,
+        groups_open: false,
+        frozen: 0,
+        new_open: false,
+        new_name: String::new(),
+        new_parts: "1".into(),
+        new_repl: "1".into(),
+        drop_arm: false,
+        topic_busy: false,
+    };
+    let tabs = vec![Tab {
+        id: "k1".into(),
+        title: "Kafka 控制台".into(),
+        kind: TabKind::Kafka(kafka_tab),
+    }];
+    let app = test_app(tabs, 0);
+    let app = std::cell::RefCell::new(app);
+    render("kafka_console_msgs", 1100.0, 620.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
 #[test]
 fn render_data_table_narrow() {
     // 窄视口 + 长 access_urls:验证表格整体溢出时底部出现横向滚动条
@@ -746,8 +796,8 @@ fn render_structure_view() {
     });
 }
 
-#[test]
-fn render_query_view() {
+/// 查询页夹具:带类型的结果集(类型名是 MySQL 文本协议的写法)
+fn query_view_fixture() -> (QueryTab, Vec<shujing_core::ConnInfo>, Vec<String>) {
     let mut q = QueryTab {
         conn_id: "c1".into(),
         database: None,
@@ -823,13 +873,18 @@ fn render_query_view() {
         plugin: None,
         ssh: None,
     }];
-    let cell = std::cell::RefCell::new(Some(q));
     let dbs = vec![
         "dramato".to_string(),
         "shop".to_string(),
         "stats".to_string(),
     ];
-    render("query", 1280.0, 780.0, true, move |ctx| {
+    (q, conns, dbs)
+}
+
+fn render_query_view_in(name: &str, dark: bool) {
+    let (q, conns, dbs) = query_view_fixture();
+    let cell = std::cell::RefCell::new(Some(q));
+    render(name, 1280.0, 780.0, dark, move |ctx| {
         let mut b = cell.borrow_mut();
         let q = b.as_mut().unwrap();
         let _ = query::draw_query_view(
@@ -846,6 +901,17 @@ fn render_query_view() {
             false,
         );
     });
+}
+
+#[test]
+fn render_query_view() {
+    render_query_view_in("query", true);
+}
+
+/// 浅色主题:类型小字的浅色色板(深而饱和)与表头/斑马纹的浅灰层次
+#[test]
+fn render_query_view_light() {
+    render_query_view_in("query_light", false);
 }
 
 /// 带库下拉的查询工具栏在窄窗口下不应溢出/换行塌陷
@@ -1742,6 +1808,44 @@ fn render_redis_panel() {
     }
     let app = std::cell::RefCell::new(app);
     render("redis_panel", 1200.0, 700.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
+/// 同一面板的浅色主题:类型徽标的淡彩底在浅色下要能看清又不刺眼
+#[test]
+fn render_redis_panel_light() {
+    let mut app = test_app(vec![], 0);
+    app.open_redis("c1", 0);
+    if let TabKind::Redis(rt) = &mut app.tabs.last_mut().unwrap().kind {
+        rt.keys = vec![
+            "user:1001".into(),
+            "user:1002".into(),
+            "session:abc".into(),
+            "cache:home:banner".into(),
+        ];
+        rt.selected_key = Some("user:1002".into());
+        rt.key_types = std::collections::HashMap::from([
+            ("user:1001".to_string(), "hash".to_string()),
+            ("user:1002".to_string(), "string".to_string()),
+            ("session:abc".to_string(), "zset".to_string()),
+            ("cache:home:banner".to_string(), "stream".to_string()),
+        ]);
+        rt.key_ttls = std::collections::HashMap::from([
+            ("user:1001".to_string(), -1i64),
+            ("session:abc".to_string(), 120i64),
+        ]);
+        rt.detail = Some(shujing_core::redis_ops::RedisDetail {
+            key_type: "string".into(),
+            ttl: 3600,
+            len: 0,
+            text: Some("hello".into()),
+            pairs: vec![],
+        });
+    }
+    let app = std::cell::RefCell::new(app);
+    render("redis_panel_light", 1200.0, 700.0, false, move |ctx| {
         let mut b = app.borrow_mut();
         draw_app(&mut b, ctx);
     });
