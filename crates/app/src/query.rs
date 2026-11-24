@@ -66,7 +66,7 @@ pub fn draw_query_view(
                     }
                 }
                 if q.running {
-                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(11.0)).color(p.muted));
                     if theme::button(ui, ui_kit::t!("Cancel", "取消"), theme::BtnKind::Secondary).clicked() {
                         actions.push(TabAction::CancelQuery {
                             tab_id: tab_id.to_string(),
@@ -127,14 +127,14 @@ pub fn draw_query_view(
                     // (按钮常驻,不可用时菜单内灰置——随结果集异步出现/消失会把
                     // 右侧按钮整体平移,按压中的点击被吞)
                     let exp = ui.menu_button(
-                        RichText::new(ui_kit::t!("Export ▾", "导出 ▾")).size(12.5).color(p.text2),
+                        RichText::new(ui_kit::t!("Export ▾", "导出 ▾")).size(theme::fs_px(12.5)).color(p.text2),
                         |ui| {
                             ui.set_min_width(180.0);
                             macro_rules! item {
                                 ($label:expr, $enabled:expr) => {{
                                     let b = ui.add_enabled(
                                         $enabled,
-                                        egui::Button::new(RichText::new($label).size(12.0).color(
+                                        egui::Button::new(RichText::new($label).size(theme::fs_px(12.0)).color(
                                             if $enabled { p.text } else { p.muted },
                                         )),
                                     );
@@ -198,14 +198,14 @@ pub fn draw_query_view(
                     // 低频操作收进「更多 ▾」:存为新表/插件/计划/优化
                     // (工具栏可见控件收敛到 运行/AI/格式化/片段/历史/导出/更多)
                     ui.menu_button(
-                        RichText::new(ui_kit::t!("More ▾", "更多 ▾")).size(12.5).color(p.text2),
+                        RichText::new(ui_kit::t!("More ▾", "更多 ▾")).size(theme::fs_px(12.5)).color(p.text2),
                         |ui| {
                             ui.set_min_width(200.0);
                             macro_rules! low_item {
                                 ($label:expr, $tip:expr, $enabled:expr) => {{
                                     let b = ui.add_enabled(
                                         $enabled,
-                                        egui::Button::new(RichText::new($label).size(12.0).color(
+                                        egui::Button::new(RichText::new($label).size(theme::fs_px(12.0)).color(
                                             if $enabled { p.text } else { p.muted },
                                         )),
                                     );
@@ -292,7 +292,7 @@ pub fn draw_query_view(
                     {
                         q.sql = shujing_core::sql_format::format_sql(&q.sql);
                     }
-                    ui.menu_button(RichText::new(ui_kit::t!("Snippets", "片段")).size(12.5).color(p.text2), |ui| {
+                    ui.menu_button(RichText::new(ui_kit::t!("Snippets", "片段")).size(theme::fs_px(12.5)).color(p.text2), |ui| {
                             ui.set_min_width(300.0);
                             if !is_redis && !q.sql.trim().is_empty() {
                                 if ui.button(ui_kit::t!("☆ Save Current SQL as Snippet", "☆ 保存当前 SQL 为片段")).clicked() {
@@ -304,7 +304,7 @@ pub fn draw_query_view(
                                 ui.separator();
                             }
                             if snippets.is_empty() {
-                                ui.label(RichText::new(ui_kit::t!("No snippets", "暂无片段")).size(12.0).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("No snippets", "暂无片段")).size(theme::fs_px(12.0)).color(p.muted));
                             }
                             for (i, snip) in snippets.iter().enumerate() {
                                 let preview: String = snip.chars().take(56).collect();
@@ -320,7 +320,7 @@ pub fn draw_query_view(
                                         q.sql.push_str(snip);
                                         ui.close_menu();
                                     }
-                                    if ui.small_button(RichText::new(ui_kit::t!("Del", "删")).size(10.0)).clicked() {
+                                    if ui.small_button(RichText::new(ui_kit::t!("Del", "删")).size(theme::fs_px(10.0))).clicked() {
                                         actions.push(TabAction::SnippetDelete { idx: i });
                                         ui.close_menu();
                                     }
@@ -329,10 +329,10 @@ pub fn draw_query_view(
                         });
                     let history = q.history.clone();
                     let hist =
-                        ui.menu_button(RichText::new(ui_kit::t!("History", "历史")).size(12.5).color(p.text2), |ui| {
+                        ui.menu_button(RichText::new(ui_kit::t!("History", "历史")).size(theme::fs_px(12.5)).color(p.text2), |ui| {
                             ui.set_min_width(280.0);
                             if history.is_empty() {
-                                ui.label(RichText::new(ui_kit::t!("No history", "暂无记录")).size(12.0).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("No history", "暂无记录")).size(theme::fs_px(12.0)).color(p.muted));
                             }
                             for (i, h) in history.iter().enumerate() {
                                 let preview: String = h.chars().take(52).collect();
@@ -350,7 +350,7 @@ pub fn draw_query_view(
                             }
                             ui.separator();
                             if ui.button(
-                                RichText::new(ui_kit::t!("Open full history…", "打开完整历史…")).size(12.0),
+                                RichText::new(ui_kit::t!("Open full history…", "打开完整历史…")).size(theme::fs_px(12.0)),
                             ).clicked() {
                                 actions.push(TabAction::OpenQueryHistory {
                                     tab_id: tab_id.to_string(),
@@ -407,7 +407,7 @@ pub fn draw_query_view(
                 ui.allocate_ui(egui::vec2(ui.available_width(), 16.0), |ui| {
                     if findings.is_empty() {
                         // 无问题:只占位不画字
-                        let _ = ui.label(RichText::new("").size(10.5));
+                        let _ = ui.label(RichText::new("").size(theme::fs_px(10.5)));
                     } else {
                         let ft = |f: &shujing_core::sql_lint::Finding| -> String {
                             let msg = match f.kind {
@@ -451,11 +451,10 @@ pub fn draw_query_view(
                                     | shujing_core::sql_lint::LintKind::DeleteNoWhere
                             )
                         });
-                        const LINT_ORANGE: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
-                        let resp = ui.label(
+                                                let resp = ui.label(
                             RichText::new(format!("● {}", icons::clip(&label, 120)))
-                                .size(10.5)
-                                .color(if danger { p.red } else { LINT_ORANGE }),
+                                .size(theme::fs_px(10.5))
+                                .color(if danger { p.red } else { theme::c().orange }),
                         );
                         let tip = findings
                             .iter()
@@ -472,7 +471,7 @@ pub fn draw_query_view(
             let editor_frame = egui::Frame::new()
                 .fill(p.input_bg)
                 .stroke(egui::Stroke::new(1.0, p.border))
-                .corner_radius(egui::CornerRadius::same(8))
+                .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                 .inner_margin(egui::Margin {
                     left: 44,
                     right: 12,
@@ -647,7 +646,7 @@ pub fn draw_query_view(
                 let inner = rect.shrink2(egui::vec2(0.0, 10.0));
                 ui.painter().rect_stroke(
                     inner,
-                    egui::CornerRadius::same(8),
+                    egui::CornerRadius::same(theme::radius_card() as u8),
                     egui::Stroke::new(1.0, p.border),
                     egui::StrokeKind::Inside,
                 );
@@ -660,7 +659,7 @@ pub fn draw_query_view(
                     inner.center(),
                     egui::Align2::CENTER_CENTER,
                     msg,
-                    egui::FontId::proportional(12.0),
+                    egui::FontId::proportional(theme::fs_px(12.0)),
                     p.muted,
                 );
                 return;
@@ -676,7 +675,7 @@ pub fn draw_query_view(
                         let label = format!("{} {}", ui_kit::t!("Result", "结果"), i + 1);
                         let selected = i == q.active_set;
                         let btn =
-                            egui::Button::new(RichText::new(label).size(11.5).color(if selected {
+                            egui::Button::new(RichText::new(label).size(theme::fs_px(11.5)).color(if selected {
                                 p.text
                             } else {
                                 p.text2
@@ -687,7 +686,7 @@ pub fn draw_query_view(
                                 egui::Color32::TRANSPARENT
                             })
                             .stroke(egui::Stroke::NONE)
-                            .corner_radius(egui::CornerRadius::same(6))
+                            .corner_radius(egui::CornerRadius::same(theme::radius_ctrl() as u8))
                             .min_size(egui::vec2(0.0, 24.0));
                         if ui.add(btn).clicked() {
                             go = Some(i);
@@ -712,7 +711,7 @@ pub fn draw_query_view(
                         } else {
                             format!("OK · 影响 {} 行", r.affected)
                         })
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.green),
                     );
                 } else {
@@ -728,7 +727,7 @@ pub fn draw_query_view(
                             },
                             r.elapsed_ms
                         ))
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.text2),
                     );
                 }
@@ -768,7 +767,7 @@ pub fn draw_query_view(
                                 ui_kit::t!("lineage", "字段来源"),
                                 icons::clip(&summary, 120)
                             ))
-                                .size(10.5)
+                                .size(theme::fs_px(10.5))
                                 .color(p.muted),
                         );
                         resp.on_hover_text(detail);
@@ -781,7 +780,7 @@ pub fn draw_query_view(
                                 ui_kit::t!("not traced", "未追踪"),
                                 e.0
                             ))
-                                .size(10.5)
+                                .size(theme::fs_px(10.5))
                                 .color(p.muted),
                         );
                         resp.on_hover_text(ui_kit::t!(
@@ -807,8 +806,8 @@ pub fn draw_query_view(
                                 } else {
                                     format!("{} 处修改(未保存)", q.q_changes.len())
                                 })
-                                .size(11.5)
-                                .color(ORANGE),
+                                .size(theme::fs_px(11.5))
+                                .color(theme::c().orange),
                             );
                             if theme::button(ui, ui_kit::t!("Commit Changes ⌘S", "保存修改 ⌘S"), theme::BtnKind::Primary)
                                 .clicked()
@@ -903,7 +902,7 @@ pub fn draw_optimize_modal(
             let sql = q.sql.trim().to_string();
             egui::Frame::new()
                 .fill(p.input_bg)
-                .corner_radius(egui::CornerRadius::same(6))
+                .corner_radius(egui::CornerRadius::same(theme::radius_ctrl() as u8))
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     ui.add(
@@ -918,15 +917,15 @@ pub fn draw_optimize_modal(
 
             if state.running {
                 ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(12.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(12.0)).color(p.muted));
                     ui.label(
                         RichText::new(ui_kit::t!("EXPLAIN running…", "EXPLAIN 执行中…"))
-                            .size(12.0)
+                            .size(theme::fs_px(12.0))
                             .color(p.muted),
                     );
                 });
             } else if let Some(err) = &state.error {
-                ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(12.0)).color(p.red));
             } else if state.ran {
                 // 诊断
                 let mut findings = shujing_core::sql_advisor::static_check(&sql);
@@ -944,7 +943,7 @@ pub fn draw_optimize_modal(
                 let (grade, gcol) = if danger > 0 {
                     (ui_kit::t!("Needs Optimization", "需优化"), p.red)
                 } else if warn > 0 {
-                    (ui_kit::t!("Needs Improvement", "可改进"), ORANGE)
+                    (ui_kit::t!("Needs Improvement", "可改进"), theme::c().orange)
                 } else {
                     (ui_kit::t!("Good", "良好"), p.green)
                 };
@@ -961,7 +960,7 @@ pub fn draw_optimize_modal(
                     ui.allocate_rect(gr, Sense::hover());
                     ui.painter().rect_filled(
                         gr,
-                        egui::CornerRadius::same(6),
+                        egui::CornerRadius::same(theme::radius_ctrl() as u8),
                         theme::tint(gcol, 36),
                     );
                     ui.painter().galley(
@@ -984,7 +983,7 @@ pub fn draw_optimize_modal(
                                 findings.len() - danger - warn
                             )
                         })
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.muted),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -995,7 +994,7 @@ pub fn draw_optimize_modal(
                             }
                             _ => "mysql · EXPLAIN",
                         };
-                        ui.label(RichText::new(dialect).size(11.0).color(p.muted));
+                        ui.label(RichText::new(dialect).size(theme::fs_px(11.0)).color(p.muted));
                     });
                 });
                 ui.add_space(2.0);
@@ -1016,7 +1015,7 @@ pub fn draw_optimize_modal(
                                     (ui_kit::t!("Danger", "危险"), p.red)
                                 }
                                 shujing_core::sql_advisor::Level::Warn => {
-                                    (ui_kit::t!("Warning", "警告"), ORANGE)
+                                    (ui_kit::t!("Warning", "警告"), theme::c().orange)
                                 }
                                 shujing_core::sql_advisor::Level::Info => {
                                     (ui_kit::t!("Info", "提示"), p.accent)
@@ -1036,7 +1035,7 @@ pub fn draw_optimize_modal(
                                 ui.allocate_rect(br, Sense::hover());
                                 ui.painter().rect_filled(
                                     br,
-                                    egui::CornerRadius::same(4),
+                                    egui::CornerRadius::same(theme::radius_small() as u8),
                                     theme::tint(col, 40),
                                 );
                                 ui.painter().galley(
@@ -1048,8 +1047,8 @@ pub fn draw_optimize_modal(
                                     col,
                                 );
                                 ui.vertical(|ui| {
-                                    ui.label(RichText::new(&f.title).size(12.0).color(p.text));
-                                    ui.label(RichText::new(&f.detail).size(11.0).color(p.muted));
+                                    ui.label(RichText::new(&f.title).size(theme::fs_px(12.0)).color(p.text));
+                                    ui.label(RichText::new(&f.detail).size(theme::fs_px(11.0)).color(p.muted));
                                 });
                             });
                         }
@@ -1109,7 +1108,7 @@ pub fn draw_optimize_modal(
                         "Static rules don't execute; EXPLAIN only reads the plan",
                         "静态规则不执行;EXPLAIN 仅读取计划"
                     ))
-                    .size(11.0)
+                    .size(theme::fs_px(11.0))
                     .color(p.muted),
                 );
             });
@@ -1127,8 +1126,6 @@ pub fn draw_optimize_modal(
     actions
 }
 
-/// iOS 橙(警告级)
-const ORANGE: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
 
 /// 选中行注释切换:已注释的去 `-- `,未注释的加
 fn toggle_comment(sql: &mut String, sel_a: usize, sel_b: usize) {
@@ -1478,7 +1475,7 @@ fn draw_autocomplete(
                 egui::Frame::new()
                     .fill(p.elevated)
                     .stroke(egui::Stroke::new(1.0, p.border))
-                    .corner_radius(egui::CornerRadius::same(8))
+                    .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                     .inner_margin(egui::Margin::same(6))
                     .shadow(egui::Shadow {
                         offset: [0, 6],
@@ -1552,7 +1549,7 @@ fn draw_autocomplete(
                                         egui::pos2(rect.right() - 10.0, rect.center().y),
                                         egui::Align2::RIGHT_CENTER,
                                         kind_label,
-                                        egui::FontId::proportional(10.0),
+                                        egui::FontId::proportional(theme::fs_px(10.0)),
                                         p.muted,
                                     );
                                     if selectable {
@@ -1568,7 +1565,7 @@ fn draw_autocomplete(
                                 "↑↓ Select · Tab/Enter Insert · Esc Close",
                                 "↑↓ 选择 · Tab/Enter 插入 · Esc 关闭"
                             ))
-                            .size(10.0)
+                            .size(theme::fs_px(10.0))
                             .color(p.muted),
                         );
                     });

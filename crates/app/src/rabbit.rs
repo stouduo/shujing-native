@@ -33,11 +33,11 @@ pub fn draw_rabbit_view(
                             o.connections,
                             ui_kit::t!("connections", "连接")
                         ))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.text2),
                     );
                 } else if r.loading {
-                    ui.label(RichText::new(ui_kit::t!("Loading…", "加载中…")).size(11.0).color(p.muted));
+                    ui.label(RichText::new(ui_kit::t!("Loading…", "加载中…")).size(theme::fs_px(11.0)).color(p.muted));
                 }
                 let refresh = theme::button(
                     ui,
@@ -76,7 +76,7 @@ pub fn draw_rabbit_view(
                 }
             });
             if let Some(err) = &r.error {
-                ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(11.5)).color(p.red));
             }
         });
 
@@ -96,7 +96,7 @@ pub fn draw_rabbit_view(
                 };
                 ui.label(
                     RichText::new(icons::clip(&text, 40))
-                        .size(12.5)
+                        .size(theme::fs_px(12.5))
                         .color(if target.is_empty() { p.muted } else { p.text }),
                 )
                 .on_hover_text(ui_kit::t!(
@@ -150,7 +150,7 @@ pub fn draw_rabbit_view(
             if r.loading && r.queues.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.add_space(30.0);
-                    ui.add(egui::Spinner::new().size(16.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(16.0)).color(p.muted));
                 });
                 return;
             }
@@ -159,7 +159,7 @@ pub fn draw_rabbit_view(
                     ui.add_space(30.0);
                     ui.label(
                         RichText::new(ui_kit::t!("No queues", "暂无队列"))
-                            .size(12.0)
+                            .size(theme::fs_px(12.0))
                             .color(p.muted),
                     );
                 });
@@ -170,7 +170,7 @@ pub fn draw_rabbit_view(
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(format!("{q} · {} {}", r.msgs.len(), ui_kit::t!("messages fetched", "条已取回")))
-                            .size(11.0)
+                            .size(theme::fs_px(11.0))
                             .color(p.muted),
                     );
                     let getb = theme::button(
@@ -200,9 +200,9 @@ pub fn draw_rabbit_view(
                                 .num_columns(3)
                                 .spacing([12.0, 3.0])
                                 .show(ui, |ui| {
-                                    ui.label(RichText::new(ui_kit::t!("Exchange", "交换机")).size(10.5).color(p.muted));
-                                    ui.label(RichText::new(ui_kit::t!("Routing Key", "路由键")).size(10.5).color(p.muted));
-                                    ui.label(RichText::new(ui_kit::t!("Payload", "消息体")).size(10.5).color(p.muted));
+                                    ui.label(RichText::new(ui_kit::t!("Exchange", "交换机")).size(theme::fs_px(10.5)).color(p.muted));
+                                    ui.label(RichText::new(ui_kit::t!("Routing Key", "路由键")).size(theme::fs_px(10.5)).color(p.muted));
+                                    ui.label(RichText::new(ui_kit::t!("Payload", "消息体")).size(theme::fs_px(10.5)).color(p.muted));
                                     ui.end_row();
                                     for m in &r.msgs {
                                         ui.label(RichText::new(icons::clip(&m.exchange, 20)).font(theme::mono(11.0)).color(p.text2));
@@ -223,7 +223,7 @@ pub fn draw_rabbit_view(
             // 队列列表
             ui.label(
                 RichText::new(ui_kit::t!("Queues", "队列"))
-                    .size(11.5)
+                    .size(theme::fs_px(11.5))
                     .color(p.text2),
             );
             ui.add_space(2.0);
@@ -243,7 +243,7 @@ pub fn draw_rabbit_view(
                                 ui_kit::t!("Consumers", "消费者").to_string(),
                                 ui_kit::t!("Type", "类型").to_string(),
                             ] {
-                                ui.label(RichText::new(h).size(10.5).color(p.muted));
+                                ui.label(RichText::new(h).size(theme::fs_px(10.5)).color(p.muted));
                             }
                             ui.end_row();
                             for q in r.queues.clone() {
@@ -253,17 +253,17 @@ pub fn draw_rabbit_view(
                                     .map(|(v, n)| v == &q.vhost && n == &q.name)
                                     .unwrap_or(false);
                                 if ui
-                                    .selectable_label(selected, RichText::new(&q.name).size(11.5).color(p.text))
+                                    .selectable_label(selected, RichText::new(&q.name).size(theme::fs_px(11.5)).color(p.text))
                                     .clicked()
                                 {
                                     r.selected = Some((q.vhost.clone(), q.name.clone()));
                                     r.msgs.clear();
                                 }
-                                ui.label(RichText::new(q.messages.to_string()).size(11.5).color(if q.messages > 0 { p.accent } else { p.muted }));
-                                ui.label(RichText::new(q.messages_ready.to_string()).size(11.5).color(p.text2));
-                                ui.label(RichText::new(q.messages_unacked.to_string()).size(11.5).color(p.text2));
-                                ui.label(RichText::new(q.consumers.to_string()).size(11.5).color(if q.consumers == 0 { DIFF_ORANGE } else { p.text }));
-                                ui.label(RichText::new(&q.queue_type).size(11.0).color(p.muted));
+                                ui.label(RichText::new(q.messages.to_string()).size(theme::fs_px(11.5)).color(if q.messages > 0 { p.accent } else { p.muted }));
+                                ui.label(RichText::new(q.messages_ready.to_string()).size(theme::fs_px(11.5)).color(p.text2));
+                                ui.label(RichText::new(q.messages_unacked.to_string()).size(theme::fs_px(11.5)).color(p.text2));
+                                ui.label(RichText::new(q.consumers.to_string()).size(theme::fs_px(11.5)).color(if q.consumers == 0 { theme::c().orange } else { p.text }));
+                                ui.label(RichText::new(&q.queue_type).size(theme::fs_px(11.0)).color(p.muted));
                                 ui.end_row();
                             }
                         });
@@ -272,4 +272,3 @@ pub fn draw_rabbit_view(
     actions
 }
 
-const DIFF_ORANGE: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x8A, 0x00);

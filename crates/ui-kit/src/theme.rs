@@ -229,6 +229,7 @@ pub struct Palette {
     // 语义
     pub accent: Color32,
     pub green: Color32,
+    pub orange: Color32,
     pub red: Color32,
     // 主按钮:DBX 的反色实心(深色主题浅灰底,浅色主题近黑底)
     pub primary_bg: Color32,
@@ -268,6 +269,7 @@ pub const DARK: Palette = Palette {
     cell_text: Color32::from_rgb(0xd7, 0xd7, 0xdb),
     null_text: Color32::from_rgb(0x74, 0x75, 0x7b),
     accent: Color32::from_rgb(0x60, 0xa5, 0xfa),
+    orange: Color32::from_rgb(0xE0, 0x8A, 0x00),
     green: Color32::from_rgb(0x4a, 0xde, 0x80),
     red: Color32::from_rgb(0xf3, 0x62, 0x5f),
     primary_bg: Color32::from_rgb(0xd0, 0xd0, 0xd6),
@@ -304,6 +306,7 @@ pub const LIGHT: Palette = Palette {
     cell_text: Color32::from_rgb(0x0a, 0x0a, 0x0a),
     null_text: Color32::from_rgb(0x7a, 0x7a, 0x7a),
     accent: Color32::from_rgb(0x25, 0x63, 0xeb),
+    orange: Color32::from_rgb(0xE0, 0x8A, 0x00),
     green: Color32::from_rgb(0x16, 0xa3, 0x4a),
     red: Color32::from_rgb(0xe7, 0x00, 0x0b),
     primary_bg: Color32::from_rgb(0x17, 0x17, 0x17),
@@ -984,11 +987,11 @@ pub fn button_ex(
     } else {
         fill
     };
-    painter.rect_filled(rect, egui::CornerRadius::same(6), fill_now);
+    painter.rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), fill_now);
     if stroke_color != Color32::TRANSPARENT {
         painter.rect_stroke(
             rect,
-            egui::CornerRadius::same(6),
+            egui::CornerRadius::same(radius_ctrl() as u8),
             Stroke::new(1.0, if hovered { p.hover } else { stroke_color }),
             egui::StrokeKind::Inside,
         );
@@ -1013,7 +1016,7 @@ pub fn button_ex(
 pub fn checkbox(ui: &mut egui::Ui, checked: &mut bool, label: &str) -> egui::Response {
     let p = c();
     let enabled = ui.is_enabled();
-    let font = egui::FontId::proportional(11.5);
+    let font = egui::FontId::proportional(fs_px(11.5));
     let g = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font.clone(), Color32::PLACEHOLDER);
@@ -1040,10 +1043,10 @@ pub fn checkbox(ui: &mut egui::Ui, checked: &mut bool, label: &str) -> egui::Res
         )
     };
     ui.painter()
-        .rect_filled(box_rect, egui::CornerRadius::same(4), fill);
+        .rect_filled(box_rect, egui::CornerRadius::same(radius_small() as u8), fill);
     ui.painter().rect_stroke(
         box_rect,
-        egui::CornerRadius::same(4),
+        egui::CornerRadius::same(radius_small() as u8),
         egui::Stroke::new(1.0, stroke),
         egui::StrokeKind::Inside,
     );
@@ -1087,7 +1090,7 @@ pub fn checkbox(ui: &mut egui::Ui, checked: &mut bool, label: &str) -> egui::Res
 /// 次级小文字按钮(悬停行操作),带语义色;返回 (是否点击, 响应)
 pub fn mini_text_button(ui: &mut egui::Ui, label: &str, color: Color32) -> (bool, egui::Response) {
     let r = ui.add(
-        egui::Button::new(RichText::new(label).size(11.0).color(color))
+        egui::Button::new(RichText::new(label).size(fs_px(11.0)).color(color))
             .fill(Color32::TRANSPARENT)
             .stroke(Stroke::NONE)
             .min_size(egui::vec2(0.0, 20.0)),
@@ -1141,7 +1144,7 @@ pub fn form_row<R>(
             let _ = ui.allocate_exact_size(egui::vec2(row.width(), h), egui::Sense::hover());
             let mut job = egui::text::LayoutJob::simple_singleline(
                 label.to_owned(),
-                egui::FontId::proportional(13.0),
+                egui::FontId::proportional(fs_px(13.0)),
                 p.text,
             );
             job.wrap.max_width = form_label_w();
@@ -1182,7 +1185,7 @@ pub fn form_tabs(ui: &mut egui::Ui, tabs: &[&str], selected: &mut usize) -> usiz
                 let color = if on { p.text } else { p.text2 };
                 let g = ui
                     .painter()
-                    .layout_no_wrap((*t).to_owned(), egui::FontId::proportional(12.5), color);
+                    .layout_no_wrap((*t).to_owned(), egui::FontId::proportional(fs_px(12.5)), color);
                 // 先铺底再画字:底色若画在 Button 之后会把文字盖住
                 let (rect, r) = ui.allocate_exact_size(
                     egui::vec2(g.size().x + 16.0, 26.0),
@@ -1191,7 +1194,7 @@ pub fn form_tabs(ui: &mut egui::Ui, tabs: &[&str], selected: &mut usize) -> usiz
                 if on || r.hovered() {
                     ui.painter().rect_filled(
                         rect,
-                        egui::CornerRadius::same(6),
+                        egui::CornerRadius::same(radius_ctrl() as u8),
                         if on { p.hover } else { tint(p.text, 10) },
                     );
                 }
@@ -1234,7 +1237,7 @@ pub fn field_hint(
     let p = c();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, field_h()), egui::Sense::hover());
     ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(6), p.input_bg);
+        .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), p.input_bg);
     let show_id = egui::Id::new((id_salt, "field-show"));
     let mut show = pwd
         && ui.memory(|m| m.data.get_temp::<bool>(show_id))
@@ -1260,13 +1263,13 @@ pub fn field_hint(
                     .id(egui::Id::new(id_salt))
                     .frame(false)
                     .margin(egui::Margin::ZERO)
-                    .font(egui::FontId::proportional(13.0))
+                    .font(egui::FontId::proportional(fs_px(13.0)))
                     .desired_width(inner.width());
                 if pwd && !show {
                     te = te.password(true);
                 }
                 if !hint.is_empty() {
-                    te = te.hint_text(RichText::new(hint).size(12.5).color(p.muted));
+                    te = te.hint_text(RichText::new(hint).size(fs_px(12.5)).color(p.muted));
                 }
                 ui.add(te)
             },
@@ -1289,20 +1292,20 @@ pub fn field_hint(
     if resp.has_focus() {
         ui.painter().rect_stroke(
             rect.expand(2.5),
-            egui::CornerRadius::same(8),
+            egui::CornerRadius::same(radius_card() as u8),
             Stroke::new(3.0, tint(p.accent, 40)),
             egui::StrokeKind::Inside,
         );
         ui.painter().rect_stroke(
             rect,
-            egui::CornerRadius::same(6),
+            egui::CornerRadius::same(radius_ctrl() as u8),
             Stroke::new(1.5, p.accent),
             egui::StrokeKind::Inside,
         );
     } else {
         ui.painter().rect_stroke(
             rect,
-            egui::CornerRadius::same(6),
+            egui::CornerRadius::same(radius_ctrl() as u8),
             Stroke::new(1.0, p.border),
             egui::StrokeKind::Inside,
         );
@@ -1322,7 +1325,7 @@ fn multiline_box(
     let h = (rows.max(2) as f32 * 17.0 + 12.0).min(260.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
     ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(6), p.input_bg);
+        .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), p.input_bg);
     let inner = egui::Rect::from_min_max(
         egui::pos2(rect.left() + 10.0, rect.top() + 6.0),
         egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
@@ -1341,7 +1344,7 @@ fn multiline_box(
                         .id(egui::Id::new(id_salt))
                         .frame(false)
                         .margin(egui::Margin::ZERO)
-                        .font(egui::FontId::proportional(13.0)),
+                        .font(egui::FontId::proportional(fs_px(13.0))),
                 )
             },
         )
@@ -1353,7 +1356,7 @@ fn multiline_box(
     };
     ui.painter().rect_stroke(
         rect,
-        egui::CornerRadius::same(6),
+        egui::CornerRadius::same(radius_ctrl() as u8),
         st,
         egui::StrokeKind::Inside,
     );
@@ -1376,7 +1379,7 @@ pub fn form_field_multiline(
     } else {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 5.0;
-            ui.label(RichText::new(label).size(11.5).color(c().muted));
+            ui.label(RichText::new(label).size(fs_px(11.5)).color(c().muted));
             multiline_box(ui, id_salt, text, fit_width(width, ui.available_width()), rows)
         })
         .inner
@@ -1399,7 +1402,7 @@ pub fn form_field(
     } else {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 5.0;
-            ui.label(RichText::new(label).size(11.5).color(c().muted));
+            ui.label(RichText::new(label).size(fs_px(11.5)).color(c().muted));
             field(ui, id_salt, text, fit_width(width, ui.available_width()), pwd)
         })
         .inner
@@ -1466,7 +1469,7 @@ fn input_with_icon(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let fill = if card { p.input_bg } else { p.bg };
     ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(6), fill);
+        .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), fill);
     match icon {
         InputIcon::Search => crate::icons::magnifier(
             ui.painter(),
@@ -1494,8 +1497,8 @@ fn input_with_icon(
                         .id(egui::Id::new(id_salt))
                         .frame(false)
                         .margin(egui::Margin::ZERO)
-                        .hint_text(RichText::new(hint).size(12.5).color(p.muted))
-                        .font(egui::FontId::proportional(12.5))
+                        .hint_text(RichText::new(hint).size(fs_px(12.5)).color(p.muted))
+                        .font(egui::FontId::proportional(fs_px(12.5)))
                         .desired_width(inner.width()),
                 )
             },
@@ -1510,7 +1513,7 @@ fn input_with_icon(
     };
     ui.painter().rect_stroke(
         rect,
-        egui::CornerRadius::same(6),
+        egui::CornerRadius::same(radius_ctrl() as u8),
         Stroke::new(1.0, border),
         egui::StrokeKind::Inside,
     );
@@ -1536,10 +1539,10 @@ pub fn select(
 
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::click());
     let painter = ui.painter();
-    painter.rect_filled(rect, egui::CornerRadius::same(6), p.bg);
+    painter.rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), p.bg);
     painter.rect_stroke(
         rect,
-        egui::CornerRadius::same(6),
+        egui::CornerRadius::same(radius_ctrl() as u8),
         Stroke::new(
             1.0,
             if resp.hovered() || opened {
@@ -1565,7 +1568,7 @@ pub fn select(
         } else {
             shown
         },
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(fs_px(13.0)),
         if placeholder { p.muted } else { p.text },
     );
     let tri = egui::pos2(rect.right() - 14.0, rect.center().y - 1.0);
@@ -1613,7 +1616,7 @@ pub fn select(
                 for (val, label) in options {
                     let is_sel = val == selected;
                     let item =
-                        egui::Button::new(RichText::new(label).size(12.5).color(if is_sel {
+                        egui::Button::new(RichText::new(label).size(fs_px(12.5)).color(if is_sel {
                             p.text
                         } else {
                             p.text2
@@ -1624,7 +1627,7 @@ pub fn select(
                             Color32::TRANSPARENT
                         })
                         .stroke(Stroke::NONE)
-                        .corner_radius(egui::CornerRadius::same(6))
+                        .corner_radius(egui::CornerRadius::same(radius_ctrl() as u8))
                         .min_size(egui::vec2(width - 20.0, 26.0));
                     if ui.add(item).clicked() {
                         picked = Some(val.clone());
@@ -1666,7 +1669,7 @@ pub fn modal_title(ui: &mut egui::Ui, title: &str) {
             let (rect, r) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
             if r.hovered() {
                 ui.painter()
-                    .rect_filled(rect, egui::CornerRadius::same(6), tint(p.text, 18));
+                    .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), tint(p.text, 18));
             }
             crate::icons::paint_close(
                 ui.painter(),

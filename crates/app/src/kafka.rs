@@ -20,7 +20,7 @@ pub fn draw_kafka_view(
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(ui_kit::t!("Topic", "主题")).size(11.0).color(p.muted));
+                ui.label(RichText::new(ui_kit::t!("Topic", "主题")).size(theme::fs_px(11.0)).color(p.muted));
                 let before = k.selected.clone();
                 egui::ComboBox::from_id_salt(format!("kafka-topic-{tab_id}"))
                     .width(240.0)
@@ -107,19 +107,19 @@ pub fn draw_kafka_view(
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(ui_kit::t!("Name", "名称"))
-                            .size(11.0)
+                            .size(theme::fs_px(11.0))
                             .color(p.muted),
                     );
                     theme::field(ui, &format!("kafka-new-name-{tab_id}"), &mut k.new_name, 200.0, false);
                     ui.label(
                         RichText::new(ui_kit::t!("Partitions", "分区"))
-                            .size(11.0)
+                            .size(theme::fs_px(11.0))
                             .color(p.muted),
                     );
                     theme::field(ui, &format!("kafka-new-parts-{tab_id}"), &mut k.new_parts, 50.0, false);
                     ui.label(
                         RichText::new(ui_kit::t!("Replication", "副本"))
-                            .size(11.0)
+                            .size(theme::fs_px(11.0))
                             .color(p.muted),
                     );
                     theme::field(ui, &format!("kafka-new-repl-{tab_id}"), &mut k.new_repl, 50.0, false);
@@ -173,7 +173,7 @@ pub fn draw_kafka_view(
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if let Some(err) = &k.error {
-                    ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
+                    ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(11.5)).color(p.red));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let can = !k.sending && !target.is_empty() && !k.send_payload.is_empty();
@@ -210,7 +210,7 @@ pub fn draw_kafka_view(
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(ui_kit::t!("Consumer Groups", "消费组"))
-                            .size(11.5)
+                            .size(theme::fs_px(11.5))
                             .color(p.text2),
                     );
                     if theme::button(ui, ui_kit::t!("Hide", "收起"), theme::BtnKind::Secondary)
@@ -224,14 +224,14 @@ pub fn draw_kafka_view(
                     None => {
                         ui.label(
                             RichText::new(ui_kit::t!("Loading…", "加载中…"))
-                                .size(11.5)
+                                .size(theme::fs_px(11.5))
                                 .color(p.muted),
                         );
                     }
                     Some(g) if g.is_empty() => {
                         ui.label(
                             RichText::new(ui_kit::t!("No consumer groups", "暂无消费组"))
-                                .size(11.5)
+                                .size(theme::fs_px(11.5))
                                 .color(p.muted),
                         );
                     }
@@ -245,14 +245,14 @@ pub fn draw_kafka_view(
                                     .num_columns(3)
                                     .spacing([12.0, 4.0])
                                     .show(ui, |ui| {
-                                        ui.label(RichText::new(ui_kit::t!("Group", "组名")).size(10.5).color(p.muted));
-                                        ui.label(RichText::new(ui_kit::t!("State", "状态")).size(10.5).color(p.muted));
-                                        ui.label(RichText::new(ui_kit::t!("Members", "成员")).size(10.5).color(p.muted));
+                                        ui.label(RichText::new(ui_kit::t!("Group", "组名")).size(theme::fs_px(10.5)).color(p.muted));
+                                        ui.label(RichText::new(ui_kit::t!("State", "状态")).size(theme::fs_px(10.5)).color(p.muted));
+                                        ui.label(RichText::new(ui_kit::t!("Members", "成员")).size(theme::fs_px(10.5)).color(p.muted));
                                         ui.end_row();
                                         for gi in g {
-                                            ui.label(RichText::new(icons::clip(&gi.name, 36)).size(11.5).color(p.text));
-                                            ui.label(RichText::new(&gi.state).size(11.5).color(p.text2));
-                                            ui.label(RichText::new(gi.members.to_string()).size(11.5).color(p.text));
+                                            ui.label(RichText::new(icons::clip(&gi.name, 36)).size(theme::fs_px(11.5)).color(p.text));
+                                            ui.label(RichText::new(&gi.state).size(theme::fs_px(11.5)).color(p.text2));
+                                            ui.label(RichText::new(gi.members.to_string()).size(theme::fs_px(11.5)).color(p.text));
                                             ui.end_row();
                                         }
                                     });
@@ -267,7 +267,7 @@ pub fn draw_kafka_view(
             if k.loading && k.msgs.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.add_space(30.0);
-                    ui.add(egui::Spinner::new().size(16.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(16.0)).color(p.muted));
                 });
                 return;
             }
@@ -279,7 +279,7 @@ pub fn draw_kafka_view(
                         k.msgs.len(),
                         ui_kit::t!("messages loaded", "条已加载")
                     ))
-                    .size(11.0)
+                    .size(theme::fs_px(11.0))
                     .color(p.muted),
                 );
             }
@@ -290,7 +290,7 @@ pub fn draw_kafka_view(
                         "No messages loaded — click \"Read Earliest 200\"",
                         "尚未读取消息——点「从头读取 200 条」"
                     ))
-                    .size(12.0)
+                    .size(theme::fs_px(12.0))
                     .color(p.muted),
                 );
                 return;

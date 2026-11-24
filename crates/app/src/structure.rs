@@ -48,7 +48,7 @@ pub fn draw_structure_view(
                     120.0,
                 );
                 if s.loading {
-                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(11.0)).color(p.muted));
                 }
                 if let Some(err) = &s.error {
                     icons::label_at_baseline(
@@ -117,7 +117,7 @@ pub fn draw_structure_view(
                             .as_deref()
                             .unwrap_or(ui_kit::t!("No data", "无数据"))
                     };
-                    ui.label(RichText::new(msg).size(12.0).color(p.muted));
+                    ui.label(RichText::new(msg).size(theme::fs_px(12.0)).color(p.muted));
                 });
                 return;
             };
@@ -145,17 +145,17 @@ pub fn draw_structure_view(
                             .show(ui, |ui| {
                                 ui.label(
                                     RichText::new(ui_kit::t!("Column", "列"))
-                                        .size(11.0)
+                                        .size(theme::fs_px(11.0))
                                         .color(theme::c().muted),
                                 );
                                 ui.label(
                                     RichText::new(ui_kit::t!("Ref Table", "引用表"))
-                                        .size(11.0)
+                                        .size(theme::fs_px(11.0))
                                         .color(theme::c().muted),
                                 );
                                 ui.label(
                                     RichText::new(ui_kit::t!("Ref Column", "引用列"))
-                                        .size(11.0)
+                                        .size(theme::fs_px(11.0))
                                         .color(theme::c().muted),
                                 );
                                 ui.end_row();
@@ -195,7 +195,7 @@ pub fn draw_structure_view(
                     );
                     if hresp.hovered() {
                         ui.painter()
-                            .rect_filled(hrect, egui::CornerRadius::same(6), p.row_hover);
+                            .rect_filled(hrect, egui::CornerRadius::same(theme::radius_ctrl() as u8), p.row_hover);
                     }
                     icons::paint_triangle(
                         ui.painter(),
@@ -212,7 +212,7 @@ pub fn draw_structure_view(
                         egui::pos2(hrect.left() + 30.0, hrect.center().y),
                         egui::Align2::LEFT_CENTER,
                         ddl_label.as_str(),
-                        egui::FontId::proportional(11.5),
+                        egui::FontId::proportional(theme::fs_px(11.5)),
                         p.muted,
                     );
                     if hresp.clicked() {
@@ -229,7 +229,7 @@ pub fn draw_structure_view(
                         egui::Frame::new()
                             .fill(p.bg)
                             .stroke(egui::Stroke::new(1.0, p.border))
-                            .corner_radius(egui::CornerRadius::same(8))
+                            .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                             .inner_margin(egui::Margin::same(12))
                             .show(ui, |ui| {
                                 // 卡片必须铺满内容区;否则长 DDL 会按最长行收缩成一条窄卡片
@@ -266,7 +266,7 @@ fn section_title(ui: &mut egui::Ui, title: &str, count: usize) {
             icons::label_at_baseline(
                 ui,
                 format!("{count}"),
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(theme::fs_px(11.0)),
                 p.muted,
                 baseline,
                 48.0,
@@ -401,7 +401,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                     ui.painter(),
                     rect,
                     if c.nullable { "YES" } else { "NO" },
-                    egui::FontId::proportional(11.5),
+                    egui::FontId::proportional(theme::fs_px(11.5)),
                     if c.nullable { p.muted } else { p.text2 },
                     12.0,
                     rect.width() - 24.0,
@@ -422,7 +422,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                         ui.painter(),
                         rect,
                         &c.key,
-                        egui::FontId::proportional(11.5),
+                        egui::FontId::proportional(theme::fs_px(11.5)),
                         p.muted,
                         12.0,
                         rect.width() - 24.0,
@@ -464,7 +464,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                     ui.painter(),
                     rect,
                     &c.extra,
-                    egui::FontId::proportional(11.0),
+                    egui::FontId::proportional(theme::fs_px(11.0)),
                     p.muted,
                     12.0,
                     rect.width() - 24.0,
@@ -482,7 +482,7 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                     ui.painter(),
                     rect,
                     &c.comment,
-                    egui::FontId::proportional(12.0),
+                    egui::FontId::proportional(theme::fs_px(12.0)),
                     p.text2,
                     12.0,
                     rect.width() - 24.0,
@@ -499,7 +499,7 @@ fn draw_indexes(ui: &mut egui::Ui, data: &shujing_core::TableStructure) {
     egui::Frame::new()
         .fill(p.panel)
         .stroke(egui::Stroke::new(1.0, p.border))
-        .corner_radius(egui::CornerRadius::same(8))
+        .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
         .inner_margin(egui::Margin::symmetric(14, 4))
         .show(ui, |ui| {
             for (i, ix) in data.indexes.iter().enumerate() {
@@ -526,7 +526,7 @@ fn draw_indexes(ui: &mut egui::Ui, data: &shujing_core::TableStructure) {
                 let cg = icons::text_galley(
                     ui.painter(),
                     ix.columns.clone(),
-                    egui::FontId::proportional(11.5),
+                    egui::FontId::proportional(theme::fs_px(11.5)),
                     Color32::PLACEHOLDER,
                     rect.width() * 0.5,
                 );
@@ -619,7 +619,7 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
                     icons::chip_at_baseline(ui, db, p.text2, baseline);
                 }
                 if d.loading {
-                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(11.0)).color(p.muted));
                 }
                 if let Some(err) = &d.error {
                     icons::label_at_baseline(
@@ -671,7 +671,7 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
                             .as_deref()
                             .unwrap_or(ui_kit::t!("No data", "无数据"))
                     };
-                    ui.label(RichText::new(msg).size(12.0).color(p.muted));
+                    ui.label(RichText::new(msg).size(theme::fs_px(12.0)).color(p.muted));
                 });
                 return;
             };

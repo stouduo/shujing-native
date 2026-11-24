@@ -6,8 +6,6 @@ use crate::table_view::TabAction;
 use crate::{icons, theme};
 use egui::{Align, Color32, Layout, RichText, Sense, Vec2};
 
-/// iOS 橙(FK 标记)
-const ORANGE: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
 
 const NODE_W: f32 = 230.0;
 const HEAD_H: f32 = 32.0;
@@ -59,7 +57,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                     140.0,
                 );
                 if e.loading {
-                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(11.0)).color(p.muted));
                 }
                 if let Some(err) = &e.error {
                     icons::label_at_baseline(
@@ -97,7 +95,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                 ui.centered_and_justified(|ui| {
                     ui.label(
                         RichText::new(ui_kit::t!("Loading tables and foreign keys…", "读取表与外键…"))
-                            .size(12.0)
+                            .size(theme::fs_px(12.0))
                             .color(p.muted),
                     );
                 });
@@ -107,7 +105,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                 ui.centered_and_justified(|ui| {
                     ui.label(
                         RichText::new(e.error.as_deref().unwrap_or(ui_kit::t!("No tables", "没有表")))
-                            .size(12.0)
+                            .size(theme::fs_px(12.0))
                             .color(p.muted),
                     );
                 });
@@ -313,7 +311,7 @@ pub fn draw_er_view(ctx: &egui::Context, tab_id: &str, e: &mut ErTab) -> Vec<Tab
                     "Drag nodes · scroll to zoom · drag canvas to pan · click a node to open table",
                     "拖拽节点 · 滚轮缩放 · 空白平移 · 点击节点打开表"
                 ),
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(theme::fs_px(11.0)),
                 p.muted,
             );
         });
@@ -487,7 +485,7 @@ fn draw_node(
                 egui::Align2::RIGHT_CENTER,
                 marks,
                 theme::bold(9.0 * e.zoom.max(0.6)),
-                if is_pk { p.accent } else { ORANGE },
+                if is_pk { p.accent } else { theme::c().orange },
             );
         }
     }

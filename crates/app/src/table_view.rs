@@ -778,7 +778,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 new_query = true;
             }
             controls_ui.menu_button(
-                RichText::new(ui_kit::t!("▾ All tabs", "▾ 全部标签")).size(11.0).color(p.text2),
+                RichText::new(ui_kit::t!("▾ All tabs", "▾ 全部标签")).size(theme::fs_px(11.0)).color(p.text2),
                 |ui| {
                     ui.set_min_width(220.0);
                     for (i, t) in app.tabs.iter().enumerate() {
@@ -786,7 +786,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                         ui.horizontal(|ui| {
                             let lbl = ui.selectable_label(
                                 sel,
-                                RichText::new(&t.title).size(12.0).color(if sel {
+                                RichText::new(&t.title).size(theme::fs_px(12.0)).color(if sel {
                                     p.text
                                 } else {
                                     p.text2
@@ -1077,7 +1077,7 @@ fn order_chip(ui: &mut egui::Ui, tab: &mut TableTab) -> bool {
     ui.menu_button(
         RichText::new(label)
             .monospace()
-            .size(12.0)
+            .size(theme::fs_px(12.0))
             .color(theme::order_color()),
         |ui| {
             ui.set_min_width(200.0);
@@ -1098,7 +1098,7 @@ fn order_chip(ui: &mut egui::Ui, tab: &mut TableTab) -> bool {
                     if ui
                         .selectable_label(
                             cur == Some(true),
-                            RichText::new(format!("{c} ↑")).size(12.0),
+                            RichText::new(format!("{c} ↑")).size(theme::fs_px(12.0)),
                         )
                         .clicked()
                     {
@@ -1108,7 +1108,7 @@ fn order_chip(ui: &mut egui::Ui, tab: &mut TableTab) -> bool {
                     if ui
                         .selectable_label(
                             cur == Some(false),
-                            RichText::new(format!("{c} ↓")).size(12.0),
+                            RichText::new(format!("{c} ↓")).size(theme::fs_px(12.0)),
                         )
                         .clicked()
                     {
@@ -1120,7 +1120,7 @@ fn order_chip(ui: &mut egui::Ui, tab: &mut TableTab) -> bool {
             if tab.sort.is_some() {
                 ui.separator();
                 if ui
-                    .button(RichText::new(ui_kit::t!("Clear Sort", "清除排序")).size(12.0))
+                    .button(RichText::new(ui_kit::t!("Clear Sort", "清除排序")).size(theme::fs_px(12.0)))
                     .clicked()
                 {
                     clear = true;
@@ -1175,13 +1175,13 @@ pub(crate) fn draw_table_view(
                 let compact_head = ui.available_width() < 760.0;
                 if !compact_head {
                     if let Some(cn) = conns.iter().find(|c| c.id == tab.conn_id) {
-                        ui.label(RichText::new(&cn.name).size(12.0).color(p.text2));
-                        ui.label(RichText::new("/").size(12.0).color(p.muted));
+                        ui.label(RichText::new(&cn.name).size(theme::fs_px(12.0)).color(p.text2));
+                        ui.label(RichText::new("/").size(theme::fs_px(12.0)).color(p.muted));
                     }
                 }
                 if let Some(db) = tab.database.as_deref().filter(|d| !d.is_empty()) {
-                    ui.label(RichText::new(db).size(12.0).color(p.text2));
-                    ui.label(RichText::new("›").size(12.0).color(p.muted));
+                    ui.label(RichText::new(db).size(theme::fs_px(12.0)).color(p.text2));
+                    ui.label(RichText::new("›").size(theme::fs_px(12.0)).color(p.muted));
                 }
                 ui.add(
                     egui::Label::new(theme::strong(&tab.table, theme::fs_header()).color(p.text))
@@ -1215,18 +1215,18 @@ pub(crate) fn draw_table_view(
                         fields,
                         ui_kit::t!("fields", "字段")
                     ))
-                    .size(11.5)
+                    .size(theme::fs_px(11.5))
                     .color(p.muted),
                 );
                 if !compact_head {
-                    ui.label(RichText::new(format!("· {state}")).size(11.5).color(p.muted));
+                    ui.label(RichText::new(format!("· {state}")).size(theme::fs_px(11.5)).color(p.muted));
                 }
                 if let Some(err) = &tab.error {
-                    ui.label(RichText::new(icons::clip(err, 60)).size(11.5).color(p.red))
+                    ui.label(RichText::new(icons::clip(err, 60)).size(theme::fs_px(11.5)).color(p.red))
                         .on_hover_text(err);
                 }
                 if tab.loading {
-                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(11.0)).color(p.muted));
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1360,7 +1360,7 @@ pub(crate) fn draw_table_view(
                         .iter()
                         .any(|c| c.id == tab.conn_id && c.db_type == shujing_core::DbType::Sqlite);
                     let more =
-                        ui.menu_button(RichText::new("···").size(15.0).color(p.text2), |ui| {
+                        ui.menu_button(RichText::new("···").size(theme::fs_px(15.0)).color(p.text2), |ui| {
                             ui.set_min_width(180.0);
                             if compact {
                                 if ui.button(ui_kit::t!("＋ Add Row", "＋ 新增行")).clicked() {
@@ -1571,7 +1571,7 @@ pub(crate) fn draw_table_view(
                             ui.separator();
                             ui.label(
                                 RichText::new(ui_kit::t!("Show Columns", "显示列"))
-                                    .size(10.5)
+                                    .size(theme::fs_px(10.5))
                                     .color(p.muted),
                             );
                             for c in tab.columns.clone() {
@@ -1708,7 +1708,7 @@ pub(crate) fn draw_table_view(
                     slot.left_top() + egui::vec2(0.0, slot.height() / 2.0),
                     egui::Align2::LEFT_CENTER,
                     total_text,
-                    egui::FontId::proportional(11.5),
+                    egui::FontId::proportional(theme::fs_px(11.5)),
                     p.text2,
                 );
                 // 列数(DBX 式:行数后紧跟列数与耗时)
@@ -1723,12 +1723,12 @@ pub(crate) fn draw_table_view(
                         shown_cols,
                         ui_kit::t!("cols", "列")
                     ))
-                    .size(11.5)
+                    .size(theme::fs_px(11.5))
                     .color(p.text2),
                 );
                 if let Some(ms) = tab.last_elapsed_ms {
                     theme::vsep(ui);
-                    ui.label(RichText::new(format!("{ms} ms")).size(11.5).color(p.text2));
+                    ui.label(RichText::new(format!("{ms} ms")).size(theme::fs_px(11.5)).color(p.text2));
                 }
                 // SQL 预览(DBX 式):底栏中段显示当前数据对应的 SQL,mono 灰字可截断,
                 // 悬停看全句——用户能随时知道表格当前"凭什么条件/排序"取数
@@ -1755,14 +1755,14 @@ pub(crate) fn draw_table_view(
                         } else {
                             format!("已筛选「{}」", icons::clip(&f, clip))
                         })
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.accent),
                     );
                     let (rect, resp) =
                         ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
                     if resp.hovered() {
                         ui.painter()
-                            .rect_filled(rect, egui::CornerRadius::same(4), p.elevated);
+                            .rect_filled(rect, egui::CornerRadius::same(theme::radius_small() as u8), p.elevated);
                     }
                     icons::paint_close(
                         ui.painter(),
@@ -1783,7 +1783,7 @@ pub(crate) fn draw_table_view(
                         } else {
                             format!("{} 处未保存", tab.changes.len())
                         })
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.green),
                     );
                 }
@@ -1810,7 +1810,7 @@ pub(crate) fn draw_table_view(
                                 c2 - c1 + 1
                             )
                         };
-                        ui.label(RichText::new(msg).size(11.5).color(p.accent))
+                        ui.label(RichText::new(msg).size(theme::fs_px(11.5)).color(p.accent))
                             .on_hover_text(ui_kit::t!(
                                 "Type and press Enter to fill · ⌘C copy · Delete for NULL",
                                 "输入值回车填充 · ⌘C 复制 · Delete 置 NULL"
@@ -1832,7 +1832,7 @@ pub(crate) fn draw_table_view(
                     } else {
                         format!("已选 {} 行 · ⌘C 复制 · 行右键批量删除", tab.multi_sel.len())
                     };
-                    ui.label(RichText::new(msg).size(11.5).color(p.accent))
+                    ui.label(RichText::new(msg).size(theme::fs_px(11.5)).color(p.accent))
                         .on_hover_text(ui_kit::t!(
                             "⌘C copy · right-click a row for batch delete",
                             "⌘C 复制 · 行右键批量删除"
@@ -1843,7 +1843,7 @@ pub(crate) fn draw_table_view(
                     // 导出(DBX 式底栏直达;··· 菜单里仍有同名项)
                     ui.menu_button(
                         RichText::new(format!("{} ▾", ui_kit::t!("Export", "导出")))
-                            .size(11.5)
+                            .size(theme::fs_px(11.5))
                             .color(p.text2),
                         |ui| {
                             ui.set_min_width(150.0);
@@ -1883,7 +1883,7 @@ pub(crate) fn draw_table_view(
                         Some(n) => format!("{} / {n}", tab.page),
                         None => format!("{}", tab.page),
                     };
-                    ui.label(RichText::new(label).size(12.0).color(p.text2));
+                    ui.label(RichText::new(label).size(theme::fs_px(12.0)).color(p.text2));
                     let prev = icons::chevron(ui, true, if at_first { p.muted } else { p.text2 });
                     if !at_first && prev.clicked() {
                         actions.push(TabAction::SetPage {
@@ -1899,7 +1899,7 @@ pub(crate) fn draw_table_view(
                     } else {
                         format!("{} 行/页 ▾", tab.page_size)
                     };
-                    ui.menu_button(RichText::new(size_label).size(11.5).color(p.text2), |ui| {
+                    ui.menu_button(RichText::new(size_label).size(theme::fs_px(11.5)).color(p.text2), |ui| {
                         ui.set_min_width(90.0);
                         for n in size_opts {
                             if ui
@@ -1910,7 +1910,7 @@ pub(crate) fn draw_table_view(
                                     } else {
                                         format!("{n} 行")
                                     })
-                                    .size(12.0),
+                                    .size(theme::fs_px(12.0)),
                                 )
                                 .clicked()
                             {
@@ -1994,7 +1994,7 @@ pub(crate) fn draw_table_view(
                             if sel {
                                 theme::bold(11.0)
                             } else {
-                                egui::FontId::proportional(11.0)
+                                egui::FontId::proportional(theme::fs_px(11.0))
                             },
                             if sel { p.text } else { p.muted },
                         );
@@ -2021,12 +2021,12 @@ pub(crate) fn draw_table_view(
                             });
                         }
                         if let Some(err) = &tab.filter_error {
-                            ui.label(RichText::new(icons::clip(err, 40)).size(11.0).color(p.red));
+                            ui.label(RichText::new(icons::clip(err, 40)).size(theme::fs_px(11.0)).color(p.red));
                         }
                         if tab.applied_where.is_some() {
                             ui.label(
                                 RichText::new(ui_kit::t!("Applied", "已应用"))
-                                    .size(11.0)
+                                    .size(theme::fs_px(11.0))
                                     .color(p.green),
                             );
                         }
@@ -2103,12 +2103,12 @@ pub(crate) fn draw_table_view(
                                             "＋ Add Condition",
                                             "＋ 添加条件"
                                         ))
-                                        .size(11.5)
+                                        .size(theme::fs_px(11.5))
                                         .color(p.text2),
                                     )
                                     .fill(Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::new(1.0, p.border))
-                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .corner_radius(egui::CornerRadius::same(theme::radius_ctrl() as u8))
                                     .min_size(egui::vec2(96.0, 24.0)),
                                 )
                                 .clicked()
@@ -2131,7 +2131,7 @@ pub(crate) fn draw_table_view(
                 } else {
                     // 自由模式:WHERE 表达式
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("WHERE").size(11.5).color(p.muted));
+                        ui.label(RichText::new("WHERE").size(theme::fs_px(11.5)).color(p.muted));
                         let resp = theme::field(
                             ui,
                             "filter-free",
@@ -2783,16 +2783,16 @@ fn centered_state(ui: &mut egui::Ui, loading: bool, msg: Option<&str>) {
     ui.centered_and_justified(|ui| {
         ui.vertical_centered(|ui| {
             if loading {
-                ui.add(egui::Spinner::new().size(18.0).color(p.muted));
+                ui.add(egui::Spinner::new().size(theme::fs_px(18.0)).color(p.muted));
                 ui.add_space(10.0);
                 ui.label(
                     RichText::new(ui_kit::t!("Loading…", "加载中…"))
-                        .size(12.0)
+                        .size(theme::fs_px(12.0))
                         .color(p.muted),
                 );
             } else {
                 let text = msg.unwrap_or(ui_kit::t!("No data", "无数据"));
-                ui.label(RichText::new(text).size(12.0).color(p.muted));
+                ui.label(RichText::new(text).size(theme::fs_px(12.0)).color(p.muted));
             }
         });
     });
@@ -3102,7 +3102,7 @@ fn draw_data_table(
                         egui::pos2(rect.right() - 14.0, rect.center().y),
                         egui::Align2::RIGHT_CENTER,
                         format!("{row_no}"),
-                        egui::FontId::proportional(11.0),
+                        egui::FontId::proportional(theme::fs_px(11.0)),
                         if row_selected { p.accent } else { p.muted },
                     );
                     theme::col_right_line(ui);
@@ -3486,7 +3486,7 @@ fn draw_frozen_overlay(
             egui::pos2(left + rowno_w - 14.0, top + theme::HEAD_PAD_Y + theme::HEAD_LINE1 / 2.0),
             egui::Align2::RIGHT_CENTER,
             "#",
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(theme::fs_px(11.0)),
             p.muted,
         );
         painter.line_segment(
@@ -3581,7 +3581,7 @@ fn draw_frozen_overlay(
                 egui::pos2(left + rowno_w - 14.0, y + theme::row_h() / 2.0),
                 egui::Align2::RIGHT_CENTER,
                 format!("{}", ri + 1),
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(theme::fs_px(11.0)),
                 if row_selected { p.accent } else { p.muted },
             );
             painter.line_segment(
@@ -4061,14 +4061,14 @@ fn draw_data_cell(
         // 快速筛选(把条件写入筛选栏)
         ui.label(
             egui::RichText::new(ui_kit::t!("Quick Filter", "快速筛选"))
-                .size(10.5)
+                .size(theme::fs_px(10.5))
                 .color(p.muted),
         );
         if ui
             .add_enabled(
                 v.is_some(),
                 egui::Button::new(
-                    egui::RichText::new(ui_kit::t!("= This Value", "= 此值")).size(12.0),
+                    egui::RichText::new(ui_kit::t!("= This Value", "= 此值")).size(theme::fs_px(12.0)),
                 ),
             )
             .clicked()
@@ -4082,7 +4082,7 @@ fn draw_data_cell(
                 v.is_some(),
                 egui::Button::new(
                     egui::RichText::new(ui_kit::t!("Contains Value (LIKE)", "包含此值 (LIKE)"))
-                        .size(12.0),
+                        .size(theme::fs_px(12.0)),
                 ),
             )
             .clicked()
@@ -4092,14 +4092,14 @@ fn draw_data_cell(
             ui.close_menu();
         }
         if ui
-            .button(egui::RichText::new(ui_kit::t!("IS NULL", "此列为 NULL")).size(12.0))
+            .button(egui::RichText::new(ui_kit::t!("IS NULL", "此列为 NULL")).size(theme::fs_px(12.0)))
             .clicked()
         {
             *col_where_out = Some((col_name.to_string(), "IS NULL".to_string(), String::new()));
             ui.close_menu();
         }
         if ui
-            .button(egui::RichText::new(ui_kit::t!("IS NOT NULL", "此列非空")).size(12.0))
+            .button(egui::RichText::new(ui_kit::t!("IS NOT NULL", "此列非空")).size(theme::fs_px(12.0)))
             .clicked()
         {
             *col_where_out = Some((
@@ -4200,7 +4200,7 @@ fn draw_data_cell(
                 ui_kit::t!("Row", "行"),
                 ri + 1
             ))
-            .size(11.0)
+            .size(theme::fs_px(11.0))
             .color(p.muted),
         );
     });
@@ -5368,7 +5368,7 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                             egui::vec2(12.0, 12.0),
                         );
                         egui::Spinner::new()
-                            .size(12.0)
+                            .size(theme::fs_px(12.0))
                             .color(p.muted)
                             .paint_at(ui, rect);
                     } else if let Some((txt, color)) = m.test_result.as_ref().map(|r| match r {
@@ -5379,7 +5379,7 @@ pub fn draw_conn_modal(ctx: &egui::Context, m: &mut ConnModal) -> Option<ConnAct
                             slot.left_top() + egui::vec2(4.0, slot.height() / 2.0),
                             egui::Align2::LEFT_CENTER,
                             txt,
-                            egui::FontId::proportional(11.5),
+                            egui::FontId::proportional(theme::fs_px(11.5)),
                             color,
                         );
                     }
@@ -5492,7 +5492,7 @@ fn conn_form_basic(ui: &mut egui::Ui, m: &mut ConnModal) {
         };
         if !compat.is_empty() {
             ui.add_space(6.0);
-            ui.label(RichText::new(compat).size(11.0).color(p.muted));
+            ui.label(RichText::new(compat).size(theme::fs_px(11.0)).color(p.muted));
         }
     });
 
@@ -5583,7 +5583,7 @@ fn conn_form_ssh(ui: &mut egui::Ui, m: &mut ConnModal) {
                 "Enable to tunnel the database connection through an SSH jump host",
                 "开启后,数据库连接先经跳板机转发"
             ))
-            .size(11.5)
+            .size(theme::fs_px(11.5))
             .color(p.muted),
         );
         return;
@@ -5617,7 +5617,7 @@ fn conn_form_ssh(ui: &mut egui::Ui, m: &mut ConnModal) {
             "Host and port on the Connection tab are read as the database address reachable from the jump host",
             "「连接信息」里的主机/端口,视为从跳板机可达的数据库地址"
         ))
-        .size(11.5)
+        .size(theme::fs_px(11.5))
         .color(p.muted),
     );
 }
@@ -6296,7 +6296,7 @@ impl eframe::App for ShujingApp {
                     } else {
                         format!("有未保存的单元格修改,继续{desc}将丢弃它们。")
                     };
-                    ui.label(RichText::new(body).size(12.5).color(p.text2));
+                    ui.label(RichText::new(body).size(theme::fs_px(12.5)).color(p.text2));
                     theme::modal_footer(ui, |ui| {
                         if theme::button(
                             ui,
@@ -6373,7 +6373,7 @@ pub(crate) fn draw_empty_state(ui: &mut egui::Ui) {
                 "Select a table on the left to start browsing\nor press ⌘T for a new query tab · ⌘⇧L to toggle appearance",
                 "在左侧选择一个表开始浏览\n或按 ⌘T 新建查询标签 · ⌘⇧L 切换外观"
             ))
-            .size(12.0)
+            .size(theme::fs_px(12.0))
             .color(p.muted),
         );
     });
@@ -6518,7 +6518,7 @@ fn detail_body(
         );
         ui.label(
             RichText::new(ui_kit::t!("Details", "详情"))
-                .size(11.0)
+                .size(theme::fs_px(11.0))
                 .color(p.muted),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

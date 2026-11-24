@@ -2,7 +2,6 @@
 //! 统一使用 egui::Modal(背景压暗 + 居中)+ theme 控件。
 use crate::app::{BgEvent, ShujingApp};
 
-const DIFF_ORANGE: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
 use crate::icons;
 use crate::net;
 use crate::theme;
@@ -131,7 +130,7 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
                 if any_online {
                     ui.label(
                         RichText::new(ui_kit::t!("No matching tables", "无匹配表"))
-                            .size(12.0)
+                            .size(theme::fs_px(12.0))
                             .color(p.muted),
                     );
                 } else {
@@ -140,7 +139,7 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
                             "No online connections, connect to a database first",
                             "暂无在线连接,先连接一个数据库"
                         ))
-                        .size(12.0)
+                        .size(theme::fs_px(12.0))
                         .color(p.muted),
                     );
                     ui.add_space(8.0);
@@ -168,13 +167,13 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
                             if is_sel {
                                 ui.painter().rect_filled(
                                     rect,
-                                    egui::CornerRadius::same(6),
+                                    egui::CornerRadius::same(theme::radius_ctrl() as u8),
                                     theme::tint(p.accent, 48),
                                 );
                             } else if row_resp.hovered() {
                                 ui.painter().rect_filled(
                                     rect,
-                                    egui::CornerRadius::same(6),
+                                    egui::CornerRadius::same(theme::radius_ctrl() as u8),
                                     p.row_hover,
                                 );
                             }
@@ -190,13 +189,13 @@ pub fn draw_quick_open(app: &mut ShujingApp, ctx: &egui::Context) {
                                 egui::pos2(rect.left() + 32.0, rect.center().y),
                                 egui::Align2::LEFT_CENTER,
                                 name,
-                                egui::FontId::proportional(13.0),
+                                egui::FontId::proportional(theme::fs_px(13.0)),
                                 if is_sel { p.text } else { p.cell_text },
                             );
                             let loc = format!("{conn_name} / {}", db.clone().unwrap_or_default());
                             let g = ui.painter().layout_no_wrap(
                                 loc,
-                                egui::FontId::proportional(11.0),
+                                egui::FontId::proportional(theme::fs_px(11.0)),
                                 Color32::PLACEHOLDER,
                             );
                             ui.painter().galley(
@@ -309,7 +308,7 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         ui_kit::t!("File", "文件"),
                         icons::clip(&im.path, 62)
                     ))
-                    .size(11.0)
+                    .size(theme::fs_px(11.0))
                     .color(p.muted),
                 );
                 ui.add_space(12.0);
@@ -319,7 +318,7 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             "Read the file, then map each CSV column to a target table column",
                             "读取文件后,把每个 CSV 列映射到目标表列"
                         ))
-                        .size(12.0)
+                        .size(theme::fs_px(12.0))
                         .color(p.text2),
                     );
                     ui.add_space(10.0);
@@ -334,7 +333,7 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             "Column mapping (source CSV column → target table column; leave blank to skip)",
                             "列映射(源 CSV 列 → 目标表列;留空跳过该列)"
                         ))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.muted),
                     );
                     ui.add_space(8.0);
@@ -352,13 +351,13 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .show(ui, |ui| {
                                     ui.label(
                                         RichText::new(ui_kit::t!("CSV Column", "CSV 列"))
-                                            .size(11.0)
+                                            .size(theme::fs_px(11.0))
                                             .color(p.muted),
                                     );
-                                    ui.label(RichText::new("→").size(11.0).color(p.muted));
+                                    ui.label(RichText::new("→").size(theme::fs_px(11.0)).color(p.muted));
                                     ui.label(
                                         RichText::new(ui_kit::t!("Target Column", "目标表列"))
-                                            .size(11.0)
+                                            .size(theme::fs_px(11.0))
                                             .color(p.muted),
                                     );
                                     ui.end_row();
@@ -366,7 +365,7 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                         ui.label(
                                             RichText::new(h).font(theme::mono(12.0)).color(p.text2),
                                         );
-                                        ui.label(RichText::new("→").size(11.0).color(p.muted));
+                                        ui.label(RichText::new("→").size(theme::fs_px(11.0)).color(p.muted));
                                         let cur = im.col_map.get(i).cloned().flatten();
                                         let mut opts: Vec<(String, String)> = vec![(
                                             "-1".to_string(),
@@ -402,13 +401,13 @@ pub fn draw_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             "Parsing… (large files may take a few seconds)",
                             "解析中…(大文件可能需要数秒)"
                         ))
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.muted),
                     );
                 }
                 if let Some(err) = &im.batch_errors {
                     ui.add_space(8.0);
-                    ui.label(RichText::new(icons::clip(err, 80)).size(11.5).color(p.red));
+                    ui.label(RichText::new(icons::clip(err, 80)).size(theme::fs_px(11.5)).color(p.red));
                 }
                 theme::modal_footer(ui, |ui| {
                     let can_import = !im.headers.is_empty() && !im.running && !im.parsing;
@@ -499,14 +498,14 @@ pub fn draw_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         });
                 }
                 (None, Some(e)) => {
-                    ui.label(RichText::new(e).size(12.0).color(p.red));
+                    ui.label(RichText::new(e).size(theme::fs_px(12.0)).color(p.red));
                 }
                 (None, None) => {
                     ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new().size(13.0).color(p.muted));
+                        ui.add(egui::Spinner::new().size(theme::fs_px(13.0)).color(p.muted));
                         ui.label(
                             RichText::new(ui_kit::t!("Computing…", "统计中…"))
-                                .size(12.0)
+                                .size(theme::fs_px(12.0))
                                 .color(p.muted),
                         );
                     });
@@ -528,7 +527,7 @@ pub fn draw_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     }
 }
 fn stat_row(ui: &mut egui::Ui, k: &str, v: &str) {
-    ui.label(RichText::new(k).size(12.0).color(theme::c().muted));
+    ui.label(RichText::new(k).size(theme::fs_px(12.0)).color(theme::c().muted));
     ui.label(
         RichText::new(v)
             .font(theme::mono(13.0))
@@ -601,14 +600,14 @@ pub fn draw_new_table_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         "Column definitions (CREATE TABLE body, without the table name)",
                         "列定义(CREATE TABLE 内容,不含表名)"
                     ))
-                    .size(11.0)
+                    .size(theme::fs_px(11.0))
                     .color(p.muted),
                 );
                 ui.add_space(4.0);
                 egui::Frame::new()
                     .fill(p.bg)
                     .stroke(egui::Stroke::new(1.0, p.border))
-                    .corner_radius(egui::CornerRadius::same(8))
+                    .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                     .inner_margin(egui::Margin::same(10))
                     .show(ui, |ui| {
                         ui.add(
@@ -786,10 +785,10 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                                 "Keyword, press Enter to search all tables…",
                                 "关键词,回车搜索所有表…"
                             ))
-                                .size(12.0)
+                                .size(theme::fs_px(12.0))
                                 .color(p.muted),
                         )
-                        .font(egui::FontId::proportional(12.5)),
+                        .font(egui::FontId::proportional(theme::fs_px(12.5))),
                 );
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     do_search = true;
@@ -800,7 +799,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     "Search every column of every table in the selected databases (scans table by table, may be slow on large databases)",
                     "在所选库的全部表的所有列中查找(逐表扫描,大库可能较慢)"
                 ))
-                    .size(11.0)
+                    .size(theme::fs_px(11.0))
                     .color(p.muted),
             );
             ui.add_space(2.0);
@@ -808,7 +807,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
             egui::Frame::new()
                 .fill(p.input_bg)
                 .stroke(egui::Stroke::new(1.0, p.border))
-                .corner_radius(egui::CornerRadius::same(8))
+                .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                 .inner_margin(egui::Margin::same(6))
                 .show(ui, |ui| {
                     // 恒定高度(命中再多也不撑高):Modal 居中锚定,结果异步到达
@@ -819,17 +818,17 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                         ui.centered_and_justified(|ui| {
                             ui.vertical(|ui| {
                                 ui.add_space(30.0);
-                                ui.add(egui::Spinner::new().size(16.0).color(p.muted));
+                                ui.add(egui::Spinner::new().size(theme::fs_px(16.0)).color(p.muted));
                             });
                         });
                     } else if let Some(err) = &gs.error {
-                        ui.label(RichText::new(icons::clip(err, 100)).size(12.0).color(p.red));
+                        ui.label(RichText::new(icons::clip(err, 100)).size(theme::fs_px(12.0)).color(p.red));
                     } else if gs.searched {
                         if gs.hits.is_empty() {
                             ui.centered_and_justified(|ui| {
                                 ui.label(
                                     RichText::new(ui_kit::t!("No matches", "没有命中"))
-                                        .size(12.5)
+                                        .size(theme::fs_px(12.5))
                                         .color(p.muted),
                                 );
                             });
@@ -839,7 +838,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                             } else {
                                 format!("命中 {} 处", gs.hits.len())
                             };
-                            ui.label(RichText::new(hits_label).size(11.5).color(p.muted));
+                            ui.label(RichText::new(hits_label).size(theme::fs_px(11.5)).color(p.muted));
                             let hits = gs.hits.clone();
                             let kw = gs.keyword.trim().to_string();
                             egui::ScrollArea::vertical()
@@ -854,7 +853,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                                         if resp.hovered() {
                                             ui.painter().rect_filled(
                                                 rect,
-                                                egui::CornerRadius::same(6),
+                                                egui::CornerRadius::same(theme::radius_ctrl() as u8),
                                                 p.row_hover,
                                             );
                                         }
@@ -926,7 +925,7 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                                     "Type a keyword and press Enter; click a match to open its table with the filter applied",
                                     "输入关键词后回车;点击命中行打开对应表并自动筛选"
                                 ))
-                                    .size(12.0)
+                                    .size(theme::fs_px(12.0))
                                     .color(p.muted),
                             );
                         });
@@ -1013,7 +1012,7 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             let c = app.confirm.as_ref().unwrap();
             theme::modal_title(ui, &c.title);
             ui.spacing_mut().item_spacing.y = 10.0;
-            ui.label(RichText::new(&c.message).size(12.5).color(p.text));
+            ui.label(RichText::new(&c.message).size(theme::fs_px(12.5)).color(p.text));
             // 输入框渲染条件:expect 匹配确认(删表)或 {v} 占位需替换(重命名/复制表)。
             // 此前只看 expect,重命名/复制表的输入框根本不渲染 → 确认按钮永久禁用死锁
             let need_input = c.expect.is_some() || c.sql.contains("{v}");
@@ -1025,7 +1024,7 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     egui::TextEdit::singleline(&mut c.input)
                         .hint_text(
                             RichText::new(ui_kit::t!("Type the name to confirm", "输入名称以确认"))
-                                .size(12.0)
+                                .size(theme::fs_px(12.0))
                                 .color(p.muted),
                         )
                         .font(theme::mono(12.5)),
@@ -1043,7 +1042,7 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     } else {
                         format!("输入与名称「{exp}」不一致")
                     };
-                    ui.label(RichText::new(mismatch).size(11.0).color(p.red));
+                    ui.label(RichText::new(mismatch).size(theme::fs_px(11.0)).color(p.red));
                 }
             }
             theme::modal_footer(ui, |ui| {
@@ -1193,13 +1192,13 @@ pub fn draw_col_stats_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.spacing_mut().item_spacing.y = 6.0;
             ui.label(
                 RichText::new(ui_kit::t!("Based on current page data", "基于当前页数据"))
-                    .size(11.0)
+                    .size(theme::fs_px(11.0))
                     .color(p.muted),
             );
             ui.add_space(4.0);
             for (k, v) in &rows {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(k).size(12.0).color(p.muted));
+                    ui.label(RichText::new(k).size(theme::fs_px(12.0)).color(p.muted));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(RichText::new(v).font(theme::mono(12.5)).color(p.text));
                     });
@@ -1256,13 +1255,13 @@ pub fn draw_mongo_doc_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "BSON document as JSON; write ObjectId as {\"$oid\": \"hex\"}",
                     "BSON 文档 JSON;ObjectId 写作 {\"$oid\": \"hex\"}"
                 ))
-                .size(10.5)
+                .size(theme::fs_px(10.5))
                 .color(p.muted),
             );
             ui.add_space(4.0);
             theme::form_field_multiline(ui, "", "mongo-doc-json", &mut st.json, 620.0, 14);
             if let Some(err) = &st.error {
-                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 110)).size(theme::fs_px(11.5)).color(p.red));
             }
             theme::modal_footer(ui, |ui| {
                 if theme::button(
@@ -1322,25 +1321,25 @@ pub fn draw_mongo_indexes_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "TTL indexes delete documents after expireAfterSeconds; the _id index cannot be dropped",
                     "TTL 索引按过期秒数自动删除文档;_id 索引不可删除"
                 ))
-                .size(10.5)
+                .size(theme::fs_px(10.5))
                 .color(p.muted),
             );
             ui.add_space(6.0);
             if st.running {
                 ui.label(
                     RichText::new(ui_kit::t!("Loading…", "加载中…"))
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.text2),
                 );
             } else if st.items.is_empty() && st.error.is_none() {
                 ui.label(
                     RichText::new(ui_kit::t!("No indexes", "暂无索引"))
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.muted),
                 );
             }
             if let Some(err) = &st.error {
-                ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(11.5)).color(p.red));
             }
             if !st.items.is_empty() {
                 egui::Grid::new("mongo-idx-grid")
@@ -1349,20 +1348,20 @@ pub fn draw_mongo_indexes_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     .show(ui, |ui| {
                         ui.label(
                             RichText::new(ui_kit::t!("Keys", "键"))
-                                .size(10.5)
+                                .size(theme::fs_px(10.5))
                                 .color(p.muted),
                         );
                         ui.label(
                             RichText::new(ui_kit::t!("Unique", "唯一"))
-                                .size(10.5)
+                                .size(theme::fs_px(10.5))
                                 .color(p.muted),
                         );
                         ui.label(
                             RichText::new(ui_kit::t!("TTL (s)", "TTL(秒)"))
-                                .size(10.5)
+                                .size(theme::fs_px(10.5))
                                 .color(p.muted),
                         );
-                        ui.label(RichText::new("").size(10.5));
+                        ui.label(RichText::new("").size(theme::fs_px(10.5)));
                         ui.end_row();
                         for it in st.items.clone() {
                             ui.label(
@@ -1380,8 +1379,8 @@ pub fn draw_mongo_indexes_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 } else {
                                     "—"
                                 })
-                                .size(11.5)
-                                .color(if it.unique { DIFF_ORANGE } else { p.muted }),
+                                .size(theme::fs_px(11.5))
+                                .color(if it.unique { theme::c().orange } else { p.muted }),
                             );
                             ui.label(
                                 RichText::new(
@@ -1393,7 +1392,7 @@ pub fn draw_mongo_indexes_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .color(p.text),
                             );
                             if it.name == "_id_" {
-                                ui.label(RichText::new("").size(11.5));
+                                ui.label(RichText::new("").size(theme::fs_px(11.5)));
                             } else {
                                 let armed = st.drop_arm.as_deref() == Some(it.name.as_str());
                                 let label = if armed {
@@ -1419,7 +1418,7 @@ pub fn draw_mongo_indexes_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.separator();
             ui.label(
                 RichText::new(ui_kit::t!("Create Index", "创建索引"))
-                    .size(11.5)
+                    .size(theme::fs_px(11.5))
                     .color(p.text2),
             );
             ui.add_space(4.0);
@@ -1448,20 +1447,20 @@ pub fn draw_mongo_indexes_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new(ui_kit::t!("TTL (s, empty = none)", "TTL(秒,空=不设)"))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.muted),
                 );
                 theme::field(ui, "mongo-idx-ttl", &mut st.ttl, 90.0, false);
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new(ui_kit::t!("Name (empty = auto)", "索引名(空=自动)"))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.muted),
                 );
                 theme::field(ui, "mongo-idx-name", &mut st.name, 160.0, false);
             });
             if let Some(err) = &st.error {
-                ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(11.5)).color(p.red));
             }
             theme::modal_footer(ui, |ui| {
                 let label = if st.busy || st.running {
@@ -1520,7 +1519,7 @@ pub fn draw_save_result_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "Creates the table with inferred column types and inserts all rows",
                     "按推断的列类型建表并写入全部数据行"
                 ))
-                .size(10.5)
+                .size(theme::fs_px(10.5))
                 .color(p.muted),
             );
             ui.add_space(6.0);
@@ -1537,7 +1536,7 @@ pub fn draw_save_result_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "Letters/digits/underscore only, must not start with a digit",
                     "仅限字母/数字/下划线,不能以数字开头"
                 ))
-                .size(10.5)
+                .size(theme::fs_px(10.5))
                 .color(p.muted),
             );
             theme::modal_footer(ui, |ui| {
@@ -1581,16 +1580,16 @@ pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             theme::modal_title(ui, ui_kit::t!("Redis Server Info", "Redis 服务器信息"));
             if st.loading {
                 ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(14.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(14.0)).color(p.muted));
                     ui.label(
                         RichText::new(ui_kit::t!("Loading…", "加载中…"))
-                            .size(11.5)
+                            .size(theme::fs_px(11.5))
                             .color(p.muted),
                     );
                 });
             }
             if let Some(err) = &st.error {
-                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 110)).size(theme::fs_px(11.5)).color(p.red));
             }
             // INFO 区块(键空间/内存/客户端优先可读展示;其余紧凑两列)
             if !st.sections.is_empty() {
@@ -1622,7 +1621,7 @@ pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .spacing([14.0, 3.0])
                                 .show(ui, |ui| {
                                     for (k, v) in sec.items.iter().take(60) {
-                                        ui.label(RichText::new(k).size(11.0).color(p.muted));
+                                        ui.label(RichText::new(k).size(theme::fs_px(11.0)).color(p.muted));
                                         ui.label(
                                             RichText::new(icons::clip(v, 48))
                                                 .font(theme::mono(11.0))
@@ -1661,7 +1660,7 @@ pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             if st.slowlog.is_empty() {
                                 ui.label(
                                     RichText::new(ui_kit::t!("No slow queries", "没有慢查询"))
-                                        .size(11.5)
+                                        .size(theme::fs_px(11.5))
                                         .color(p.muted),
                                 );
                             }
@@ -1671,17 +1670,17 @@ pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .show(ui, |ui| {
                                     ui.label(
                                         RichText::new(ui_kit::t!("Time", "耗时"))
-                                            .size(10.5)
+                                            .size(theme::fs_px(10.5))
                                             .color(p.muted),
                                     );
                                     ui.label(
                                         RichText::new(ui_kit::t!("Command", "命令"))
-                                            .size(10.5)
+                                            .size(theme::fs_px(10.5))
                                             .color(p.muted),
                                     );
                                     ui.label(
                                         RichText::new(ui_kit::t!("Args", "参数"))
-                                            .size(10.5)
+                                            .size(theme::fs_px(10.5))
                                             .color(p.muted),
                                     );
                                     ui.end_row();
@@ -1690,13 +1689,13 @@ pub fn draw_redis_info_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                             RichText::new(format!("{} ms", e.duration_us / 1000))
                                                 .font(theme::mono(11.0))
                                                 .color(if e.duration_us > 100_000 {
-                                                    DIFF_ORANGE
+                                                    theme::c().orange
                                                 } else {
                                                     p.text
                                                 }),
                                         );
                                         ui.label(
-                                            RichText::new(&e.command).size(11.5).color(p.text),
+                                            RichText::new(&e.command).size(theme::fs_px(11.5)).color(p.text),
                                         );
                                         ui.label(
                                             RichText::new(icons::clip(&e.args, 40))
@@ -1758,7 +1757,7 @@ pub fn draw_mongo_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         "顶层 JSON 数组,每项一个文档;_id 重复会在该批次中断"
                     )
                 })
-                .size(10.5)
+                .size(theme::fs_px(10.5))
                 .color(p.muted),
             );
             ui.add_space(4.0);
@@ -1779,7 +1778,7 @@ pub fn draw_mongo_import_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 }
             }
             if let Some(err) = &st.error {
-                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 110)).size(theme::fs_px(11.5)).color(p.red));
             }
             theme::modal_footer(ui, |ui| {
                 let label = if st.running {
@@ -1850,7 +1849,7 @@ pub fn draw_conn_crypto_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     )
                     .to_string()
                 })
-                .size(11.0)
+                .size(theme::fs_px(11.0))
                 .color(p.muted),
             );
             ui.add_space(6.0);
@@ -1874,7 +1873,7 @@ pub fn draw_conn_crypto_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             }
             if let Some(err) = &st.error {
                 ui.add_space(4.0);
-                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 110)).size(theme::fs_px(11.5)).color(p.red));
             }
             theme::modal_footer(ui, |ui| {
                 if theme::button(
@@ -1934,14 +1933,14 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             } else {
                 format!("pattern: {}(SCAN 全量游标,上限 1 万)", st.pattern)
             };
-            ui.label(RichText::new(pattern_line).size(11.5).color(p.muted));
+            ui.label(RichText::new(pattern_line).size(theme::fs_px(11.5)).color(p.muted));
             ui.add_space(4.0);
             if st.deleting {
                 ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(12.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(12.0)).color(p.muted));
                     ui.label(
                         RichText::new(ui_kit::t!("Deleting…", "删除中…"))
-                            .size(12.0)
+                            .size(theme::fs_px(12.0))
                             .color(p.muted),
                     );
                 });
@@ -1953,7 +1952,7 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 } else {
                     format!("将删除 {n} 个 key,不可恢复!输入 pattern 确认:")
                 };
-                ui.label(RichText::new(confirm_line).size(12.0).color(DIFF_ORANGE));
+                ui.label(RichText::new(confirm_line).size(theme::fs_px(12.0)).color(theme::c().orange));
                 let mut v = n.to_string();
                 let resp = ui.add_sized(
                     [200.0, 26.0],
@@ -1976,7 +1975,7 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             "Type the matching count to enable delete",
                             "输入匹配数量后才能删除"
                         ))
-                        .size(10.5)
+                        .size(theme::fs_px(10.5))
                         .color(p.muted),
                     );
                 }
@@ -1995,13 +1994,13 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         "See how many keys would be deleted before deciding",
                         "先看会删掉多少再决定"
                     ))
-                    .size(10.5)
+                    .size(theme::fs_px(10.5))
                     .color(p.muted),
                 );
             }
             if let Some(err) = &st.error {
                 ui.add_space(4.0);
-                ui.label(RichText::new(icons::clip(err, 110)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 110)).size(theme::fs_px(11.5)).color(p.red));
             }
             theme::modal_footer(ui, |ui| {
                 if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
@@ -2054,14 +2053,14 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             "Writes a single SQL file (DDL + data INSERTs) to ~/Documents/数镜备份",
                             "生成单文件 SQL 备份(DDL + 数据 INSERT),保存到 ~/Documents/数镜备份"
                         ))
-                        .size(10.5)
+                        .size(theme::fs_px(10.5))
                         .color(p.muted),
                     );
                     // 连接是只读信息:此前画成可编辑输入框,改了名字也不会换连接(误导)
                     theme::form_row(ui, ui_kit::t!("Connection", "连接"), |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.label(RichText::new(st.conn_name.clone()).size(13.0).color(p.text));
+                            ui.label(RichText::new(st.conn_name.clone()).size(theme::fs_px(13.0)).color(p.text));
                             let host = app
                                 .conns
                                 .iter()
@@ -2069,7 +2068,7 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .and_then(|c| c.host.clone())
                                 .filter(|h| !h.is_empty());
                             if let Some(h) = host {
-                                ui.label(RichText::new(h).size(12.0).color(p.muted));
+                                ui.label(RichText::new(h).size(theme::fs_px(12.0)).color(p.muted));
                             }
                         });
                     });
@@ -2091,7 +2090,7 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     if st.running {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            ui.add(egui::Spinner::new().size(14.0).color(p.accent));
+                            ui.add(egui::Spinner::new().size(theme::fs_px(14.0)).color(p.accent));
                             ui.label(
                                 RichText::new(format!(
                                     "{} {}/{} · {}",
@@ -2100,7 +2099,7 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                     st.total,
                                     st.cur_table
                                 ))
-                                .size(11.5)
+                                .size(theme::fs_px(11.5))
                                 .color(p.text2),
                             );
                         });
@@ -2117,18 +2116,18 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                         ui_kit::t!("rows", "行"),
                                         crate::app::fmt_bytes(*bytes)
                                     ))
-                                    .size(12.0)
+                                    .size(theme::fs_px(12.0))
                                     .color(p.green),
                                 );
                                 ui.label(
                                     RichText::new(icons::clip(path, 60))
-                                        .size(10.5)
+                                        .size(theme::fs_px(10.5))
                                         .color(p.text2),
                                 );
                             }
                             Err(e) => {
                                 ui.label(
-                                    RichText::new(icons::clip(e, 110)).size(11.5).color(p.red),
+                                    RichText::new(icons::clip(e, 110)).size(theme::fs_px(11.5)).color(p.red),
                                 );
                             }
                         }
@@ -2139,7 +2138,7 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new(ui_kit::t!("Recent Backups", "最近备份"))
-                                .size(11.0)
+                                .size(theme::fs_px(11.0))
                                 .color(p.muted),
                         );
                         egui::ScrollArea::vertical()
@@ -2153,7 +2152,7 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                     );
                                     ui.painter().rect_filled(
                                         rect,
-                                        egui::CornerRadius::same(4),
+                                        egui::CornerRadius::same(theme::radius_small() as u8),
                                         if resp.hovered() {
                                             p.hover
                                         } else {
@@ -2164,14 +2163,14 @@ pub fn draw_backup_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                         egui::pos2(rect.left() + 8.0, rect.center().y),
                                         egui::Align2::LEFT_CENTER,
                                         f.name.clone(),
-                                        egui::FontId::monospace(10.5),
+                                        theme::mono(10.5),
                                         p.text2,
                                     );
                                     ui.painter().text(
                                         egui::pos2(rect.right() - 8.0, rect.center().y),
                                         egui::Align2::RIGHT_CENTER,
                                         crate::app::fmt_bytes(f.bytes),
-                                        egui::FontId::proportional(10.0),
+                                        egui::FontId::proportional(theme::fs_px(10.0)),
                                         p.muted,
                                     );
                                     if resp.clicked() {
@@ -2258,7 +2257,7 @@ pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "Runs a WASM sandbox plugin (fuel-limited, no I/O) over the current result set as JSON",
                     "对当前结果集 JSON 运行 WASM 沙箱插件(燃料限额,无任何 IO 权限)"
                 ))
-                    .size(10.5)
+                    .size(theme::fs_px(10.5))
                     .color(p.muted),
             );
             ui.add_space(6.0);
@@ -2266,7 +2265,7 @@ pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 .filter(|i| pr.plugins[*i].ok)
                 .collect();
             ui.horizontal(|ui| {
-                ui.label(RichText::new(ui_kit::t!("Plugin", "插件")).size(11.5).color(p.text2));
+                ui.label(RichText::new(ui_kit::t!("Plugin", "插件")).size(theme::fs_px(11.5)).color(p.text2));
                 egui::ComboBox::from_id_salt("plugin-sel")
                     .width(360.0)
                     .selected_text(if ok_plugins.is_empty() {
@@ -2288,7 +2287,7 @@ pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     if !pr.plugins[i].description.is_empty() {
                         ui.label(
                             RichText::new(icons::clip(&pr.plugins[i].description, 30))
-                                .size(10.5)
+                                .size(theme::fs_px(10.5))
                                 .color(p.muted),
                         );
                     }
@@ -2300,19 +2299,19 @@ pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     ui_kit::t!("Input (result set JSON)", "输入(结果集 JSON)"),
                     icons::clip(&pr.input, 90)
                 ))
-                    .size(10.5)
+                    .size(theme::fs_px(10.5))
                     .color(p.muted),
             );
             ui.add_space(6.0);
             if pr.running {
                 ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(14.0).color(p.accent));
-                    ui.label(RichText::new(ui_kit::t!("Running…", "运行中…")).size(11.5).color(p.text2));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(14.0)).color(p.accent));
+                    ui.label(RichText::new(ui_kit::t!("Running…", "运行中…")).size(theme::fs_px(11.5)).color(p.text2));
                 });
             } else if let Some(e) = &pr.error {
-                ui.label(RichText::new(icons::clip(e, 110)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(e, 110)).size(theme::fs_px(11.5)).color(p.red));
             } else if let Some(out) = &pr.output {
-                ui.label(RichText::new(ui_kit::t!("Output", "输出")).size(11.0).color(p.muted));
+                ui.label(RichText::new(ui_kit::t!("Output", "输出")).size(theme::fs_px(11.0)).color(p.muted));
                 egui::ScrollArea::vertical()
                     .id_salt("plugin-output")
                     .max_height(220.0)
@@ -2393,7 +2392,7 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "Persisted locally (~/.shujing-native/query_history.jsonl, latest 500); click a row to fill the editor",
                     "本地持久化(~/.shujing-native/query_history.jsonl,保留 500 条);点击行回填编辑器"
                 ))
-                    .size(10.5)
+                    .size(theme::fs_px(10.5))
                     .color(p.muted),
             );
             ui.add_space(6.0);
@@ -2430,7 +2429,7 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     if shown.is_empty() {
                         ui.label(
                             RichText::new(ui_kit::t!("No history yet", "暂无历史"))
-                                .size(12.0)
+                                .size(theme::fs_px(12.0))
                                 .color(p.muted),
                         );
                     }
@@ -2460,21 +2459,21 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         );
                         ui.painter().rect_filled(
                             rect,
-                            egui::CornerRadius::same(6),
+                            egui::CornerRadius::same(theme::radius_ctrl() as u8),
                             if resp.hovered() { p.hover } else { egui::Color32::TRANSPARENT },
                         );
                         ui.painter().text(
                             egui::pos2(rect.left() + 10.0, rect.top() + 11.0),
                             egui::Align2::LEFT_CENTER,
                             format!("{} {}", status_icon, head),
-                            egui::FontId::proportional(10.5),
+                            egui::FontId::proportional(theme::fs_px(10.5)),
                             status_color,
                         );
                         ui.painter().text(
                             egui::pos2(rect.left() + 10.0, rect.bottom() - 11.0),
                             egui::Align2::LEFT_CENTER,
                             format!("{} {}", first_line, if it.ok { format!("({} rows)", it.rows) } else { format!("({})", it.err) }),
-                            egui::FontId::monospace(10.5),
+                            theme::mono(10.5),
                             p.text2,
                         );
                         if resp.clicked() {
@@ -2565,11 +2564,11 @@ fn src_target_form(
     theme::form_row(ui, ui_kit::t!("Source", "源"), |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
-            ui.label(RichText::new(name).size(13.0).color(p.text2));
-            ui.label(RichText::new("/").size(13.0).color(p.muted));
-            ui.label(RichText::new(db).size(13.0).color(p.text2));
-            ui.label(RichText::new("›").size(13.0).color(p.muted));
-            ui.label(RichText::new(table).size(13.0).strong().color(p.text));
+            ui.label(RichText::new(name).size(theme::fs_px(13.0)).color(p.text2));
+            ui.label(RichText::new("/").size(theme::fs_px(13.0)).color(p.muted));
+            ui.label(RichText::new(db).size(theme::fs_px(13.0)).color(p.text2));
+            ui.label(RichText::new("›").size(theme::fs_px(13.0)).color(p.muted));
+            ui.label(RichText::new(table).size(theme::fs_px(13.0)).strong().color(p.text));
         });
     });
     let mut picked = None;
@@ -2577,7 +2576,7 @@ fn src_target_form(
         if conn_opts.is_empty() {
             if let Some(msg) = notice {
                 ui.add_space(5.0);
-                ui.label(RichText::new(msg).size(12.0).color(DIFF_ORANGE));
+                ui.label(RichText::new(msg).size(theme::fs_px(12.0)).color(theme::c().orange));
             }
         } else if let Some(v) =
             theme::select(ui, sel_id, dst_conn, conn_opts, ui.available_width())
@@ -2586,7 +2585,7 @@ fn src_target_form(
         }
         if !caption.is_empty() {
             ui.add_space(6.0);
-            ui.label(RichText::new(caption).size(11.0).color(p.muted));
+            ui.label(RichText::new(caption).size(theme::fs_px(11.0)).color(p.muted));
         }
     });
     theme::form_row(ui, ui_kit::t!("Target Database", "目标库"), |ui| {
@@ -2625,7 +2624,7 @@ pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "Transform plugins (WASM sandbox) and driver plugins (sidecar agent) share the plugins/ directory",
                     "transform 插件(WASM 沙箱)与 driver 插件(sidecar agent)共用 plugins/ 目录"
                 ))
-                    .size(10.5)
+                    .size(theme::fs_px(10.5))
                     .color(p.muted),
             );
             ui.add_space(8.0);
@@ -2634,7 +2633,7 @@ pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.add_space(2.0);
             if app.plugins.plugins.is_empty() {
                 ui.label(
-                    RichText::new(ui_kit::t!("(none installed)", "(未安装)")).size(11.5).color(p.muted),
+                    RichText::new(ui_kit::t!("(none installed)", "(未安装)")).size(theme::fs_px(11.5)).color(p.muted),
                 );
             }
             for it in &app.plugins.plugins {
@@ -2644,7 +2643,7 @@ pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 );
                 ui.painter().rect_filled(
                     rect,
-                    egui::CornerRadius::same(6),
+                    egui::CornerRadius::same(theme::radius_ctrl() as u8),
                     if resp.hovered() { p.hover } else { egui::Color32::TRANSPARENT },
                 );
                 let dot = if it.ok { p.green } else { p.red };
@@ -2653,7 +2652,7 @@ pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     egui::pos2(rect.left() + 22.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     format!("{} v{}  ·  {}", it.name, it.version, it.description),
-                    egui::FontId::proportional(11.5),
+                    egui::FontId::proportional(theme::fs_px(11.5)),
                     p.text,
                 );
                 if let Some(e) = &it.err {
@@ -2661,7 +2660,7 @@ pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         egui::pos2(rect.right() - 8.0, rect.center().y),
                         egui::Align2::RIGHT_CENTER,
                         icons::clip(e, 40),
-                        egui::FontId::proportional(10.0),
+                        egui::FontId::proportional(theme::fs_px(10.0)),
                         p.red,
                     );
                 }
@@ -2680,7 +2679,7 @@ pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.add_space(2.0);
             if drivers.is_empty() {
                 ui.label(
-                    RichText::new(ui_kit::t!("(none installed)", "(未安装)")).size(11.5).color(p.muted),
+                    RichText::new(ui_kit::t!("(none installed)", "(未安装)")).size(theme::fs_px(11.5)).color(p.muted),
                 );
             }
             for d in &drivers {
@@ -2690,7 +2689,7 @@ pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 );
                 ui.painter().rect_filled(
                     rect,
-                    egui::CornerRadius::same(6),
+                    egui::CornerRadius::same(theme::radius_ctrl() as u8),
                     if resp.hovered() { p.hover } else { egui::Color32::TRANSPARENT },
                 );
                 ui.painter().circle_filled(egui::pos2(rect.left() + 10.0, rect.center().y), 4.0, p.accent);
@@ -2705,7 +2704,7 @@ pub fn draw_plugin_manager_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         ui_kit::t!("provides", "提供类型"),
                         types
                     ),
-                    egui::FontId::proportional(11.5),
+                    egui::FontId::proportional(theme::fs_px(11.5)),
                     p.text,
                 );
                 resp.on_hover_text(format!("{}\n{}", d.description, d.dir.display()));
@@ -2829,7 +2828,7 @@ pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 "Target table must already exist; empty target column = skip",
                                 "映射模式不自动建表(目标表须已存在);目标列留空=跳过该源列"
                             ))
-                            .size(11.0)
+                            .size(theme::fs_px(11.0))
                             .color(p.muted),
                         );
                     }
@@ -2863,12 +2862,12 @@ pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .show(ui, |ui| {
                                     ui.label(
                                         RichText::new(ui_kit::t!("Source", "源列"))
-                                            .size(11.0)
+                                            .size(theme::fs_px(11.0))
                                             .color(p.muted),
                                     );
                                     ui.label(
                                         RichText::new(ui_kit::t!("→ Target", "→ 目标列"))
-                                            .size(11.0)
+                                            .size(theme::fs_px(11.0))
                                             .color(p.muted),
                                     );
                                     ui.end_row();
@@ -2904,7 +2903,7 @@ pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             st.drop_first = df;
             if let Some(err) = &st.error {
                 theme::form_row(ui, "", |ui| {
-                    ui.label(RichText::new(icons::clip(err, 110)).size(12.0).color(p.red));
+                    ui.label(RichText::new(icons::clip(err, 110)).size(theme::fs_px(12.0)).color(p.red));
                 });
             }
             theme::modal_footer_lr(
@@ -2915,7 +2914,7 @@ pub fn draw_transfer_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             "Idempotent and rerunnable: after a failure, tick the drop option and retry",
                             "传输幂等可重跑:失败后先勾选删除目标表再重试"
                         ))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.muted),
                     );
                 },
@@ -2998,7 +2997,7 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             }
             if let Some(err) = &st.error {
                 ui.add_space(6.0);
-                ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(12.0)).color(p.red));
             }
             if let Some(d) = &st.result {
                 ui.add_space(6.0);
@@ -3021,7 +3020,7 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         d.changed.len()
                     )
                 };
-                ui.label(RichText::new(summary).size(11.5).color(p.text2));
+                ui.label(RichText::new(summary).size(theme::fs_px(11.5)).color(p.text2));
                 if d.truncated {
                     let limit_line = if ui_kit::i18n::is_english() {
                         format!(
@@ -3031,7 +3030,7 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     } else {
                         format!("已达对比上限({} 行),结果可能不完整", d.only_src.len().max(d.dst_rows))
                     };
-                    ui.label(RichText::new(limit_line).size(10.5).color(DIFF_ORANGE));
+                    ui.label(RichText::new(limit_line).size(theme::fs_px(10.5)).color(theme::c().orange));
                 }
                 if !d.changed.is_empty() {
                     ui.add_space(4.0);
@@ -3050,7 +3049,7 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                                 ui.label(
                                                     RichText::new(format!("pk {}", r.pk))
                                                         .font(theme::mono(11.5))
-                                                        .color(DIFF_ORANGE),
+                                                        .color(theme::c().orange),
                                                 );
                                             }
                                             ui.label(RichText::new(col).font(theme::mono(11.5)).color(p.text));
@@ -3069,11 +3068,11 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     } else {
                         format!("目标侧同步 SQL({} 条)", d.sync_sql.len())
                     };
-                    ui.label(RichText::new(sync_label).size(11.0).color(p.muted));
+                    ui.label(RichText::new(sync_label).size(theme::fs_px(11.0)).color(p.muted));
                     let sql_text = d.sync_sql.join("\n");
                     egui::Frame::new()
                         .fill(p.input_bg)
-                        .corner_radius(egui::CornerRadius::same(8))
+                        .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                         .inner_margin(egui::Margin::same(10))
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical()
@@ -3098,7 +3097,7 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 "SQL is displayed only, not executed; review and run it manually in the query tab",
                                 "SQL 只展示不执行;在查询页人工审阅后运行"
                             ))
-                                .size(10.5)
+                                .size(theme::fs_px(10.5))
                                 .color(p.muted),
                         );
                     });
@@ -3201,13 +3200,13 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 "API Key not configured (Settings → AI)",
                                 "未配置 API Key(设置 → AI)"
                             ))
-                            .size(10.5)
-                            .color(DIFF_ORANGE),
+                            .size(theme::fs_px(10.5))
+                            .color(theme::c().orange),
                         );
                     } else {
                         ui.label(
                             RichText::new(&app.ai_config.model)
-                                .size(10.5)
+                                .size(theme::fs_px(10.5))
                                 .color(p.muted),
                         );
                     }
@@ -3250,16 +3249,16 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     run = true;
                 }
                 if let Some(err) = &st.error {
-                    ui.label(RichText::new(icons::clip(err, 80)).size(11.0).color(p.red));
+                    ui.label(RichText::new(icons::clip(err, 80)).size(theme::fs_px(11.0)).color(p.red));
                 }
             });
             // 历史结果(最新在前)
             for (i, (title, content)) in st.history.iter().enumerate().rev() {
                 ui.add_space(6.0);
-                ui.label(RichText::new(title).size(11.0).color(p.muted));
+                ui.label(RichText::new(title).size(theme::fs_px(11.0)).color(p.muted));
                 egui::Frame::new()
                     .fill(p.input_bg)
-                    .corner_radius(egui::CornerRadius::same(8))
+                    .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                     .inner_margin(egui::Margin::same(10))
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical()
@@ -3282,7 +3281,7 @@ pub fn draw_ai_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                         &text,
                                         0.0,
                                         egui::TextFormat::simple(
-                                            egui::FontId::proportional(12.0),
+                                            egui::FontId::proportional(theme::fs_px(12.0)),
                                             p.text2,
                                         ),
                                     );
@@ -3389,14 +3388,14 @@ pub fn draw_schema_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             }
             if let Some(err) = &st.error {
                 ui.add_space(6.0);
-                ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(12.0)).color(p.red));
             }
             if let Some(diff) = &st.result {
                 ui.add_space(6.0);
                 if diff.is_empty() {
                     ui.label(
                         RichText::new(ui_kit::t!("Schemas are identical, no differences", "结构一致,无差异"))
-                            .size(12.5)
+                            .size(theme::fs_px(12.5))
                             .color(p.green),
                     );
                 } else {
@@ -3415,7 +3414,7 @@ pub fn draw_schema_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             diff.changed.len()
                         )
                     };
-                    ui.label(RichText::new(diff_summary).size(11.5).color(p.text2));
+                    ui.label(RichText::new(diff_summary).size(theme::fs_px(11.5)).color(p.text2));
                     egui::ScrollArea::vertical()
                         .id_salt("diff-findings")
                         .max_height(ui.ctx().screen_rect().height() * 0.32)
@@ -3426,21 +3425,21 @@ pub fn draw_schema_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 .spacing([10.0, 4.0])
                                 .show(ui, |ui| {
                                     for c in &diff.added {
-                                        ui.label(RichText::new(ui_kit::t!("Added", "新增")).size(11.0).color(p.green));
+                                        ui.label(RichText::new(ui_kit::t!("Added", "新增")).size(theme::fs_px(11.0)).color(p.green));
                                         ui.label(RichText::new(&c.name).font(theme::mono(12.0)).color(p.text));
                                         ui.label(RichText::new(&c.data_type).font(theme::mono(12.0)).color(p.text2));
-                                        ui.label(RichText::new("").size(11.0));
+                                        ui.label(RichText::new("").size(theme::fs_px(11.0)));
                                         ui.end_row();
                                     }
                                     for c in &diff.removed {
-                                        ui.label(RichText::new(ui_kit::t!("Extra in Target", "目标多余")).size(11.0).color(p.red));
+                                        ui.label(RichText::new(ui_kit::t!("Extra in Target", "目标多余")).size(theme::fs_px(11.0)).color(p.red));
                                         ui.label(RichText::new(&c.name).font(theme::mono(12.0)).color(p.text));
                                         ui.label(RichText::new(&c.data_type).font(theme::mono(12.0)).color(p.text2));
-                                        ui.label(RichText::new("").size(11.0));
+                                        ui.label(RichText::new("").size(theme::fs_px(11.0)));
                                         ui.end_row();
                                     }
                                     for ch in &diff.changed {
-                                        ui.label(RichText::new(ui_kit::t!("Changed", "差异")).size(11.0).color(DIFF_ORANGE));
+                                        ui.label(RichText::new(ui_kit::t!("Changed", "差异")).size(theme::fs_px(11.0)).color(theme::c().orange));
                                         ui.label(
                                             RichText::new(format!("{} · {}", ch.name, ch.field))
                                                 .font(theme::mono(12.0))
@@ -3467,11 +3466,11 @@ pub fn draw_schema_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         } else {
                             format!("对齐 ALTER(目标方言,{} 条)", diff.alter_sql.len())
                         };
-                        ui.label(RichText::new(alter_label).size(11.0).color(p.muted));
+                        ui.label(RichText::new(alter_label).size(theme::fs_px(11.0)).color(p.muted));
                         let sql_text = diff.alter_sql.join(";\n") + ";";
                         egui::Frame::new()
                             .fill(p.input_bg)
-                            .corner_radius(egui::CornerRadius::same(8))
+                            .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                             .inner_margin(egui::Margin::same(10))
                             .show(ui, |ui| {
                                 egui::ScrollArea::vertical()
@@ -3492,7 +3491,7 @@ pub fn draw_schema_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                 ui.ctx().copy_text(sql_text.clone());
                             }
                             for w in &diff.warnings {
-                                ui.label(RichText::new(icons::clip(w, 60)).size(11.0).color(DIFF_ORANGE));
+                                ui.label(RichText::new(icons::clip(w, 60)).size(theme::fs_px(11.0)).color(theme::c().orange));
                             }
                         });
                     }
@@ -3573,7 +3572,7 @@ pub fn draw_parquet_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     preview.rows.len()
                 )
             };
-            ui.label(RichText::new(stats_line).size(11.5).color(p.muted));
+            ui.label(RichText::new(stats_line).size(theme::fs_px(11.5)).color(p.muted));
             ui.add_space(6.0);
             egui::ScrollArea::vertical()
                 .id_salt("parquet-grid")
@@ -3604,7 +3603,7 @@ pub fn draw_parquet_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         preview.rows.len()
                     )
                 };
-                ui.label(RichText::new(total_line).size(11.0).color(p.muted));
+                ui.label(RichText::new(total_line).size(theme::fs_px(11.0)).color(p.muted));
             }
             theme::modal_footer(ui, |ui| {
                 if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
@@ -3641,7 +3640,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.spacing_mut().item_spacing.y = 10.0;
             // 分区标题统一一种样式:外观 / 插件 / AI 助手 / 通用
             ui.label(theme::strong(ui_kit::t!("Appearance", "外观"), 12.5).color(p.text2));
-            ui.label(RichText::new(ui_kit::t!("Accent Color", "强调色")).size(11.0).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Accent Color", "强调色")).size(theme::fs_px(11.0)).color(p.muted));
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 for (i, name) in theme::ACCENTS.iter().enumerate() {
@@ -3674,7 +3673,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 }
             });
             ui.add_space(6.0);
-            ui.label(RichText::new(ui_kit::t!("Theme Preset", "主题预设")).size(11.0).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Theme Preset", "主题预设")).size(theme::fs_px(11.0)).color(p.muted));
             ui.add_space(4.0);
             // 3×3 预设色卡:整卡=背景色,上条=面板色,圆点=当前强调色在该基调下的样子。
             // 卡宽随弹窗宽度三等分(弹窗加宽后右侧不再空出一条),最窄 104
@@ -3686,12 +3685,12 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     for (i, pr) in theme::PRESETS.iter().enumerate() {
                         let (rect, resp) =
                             ui.allocate_exact_size(egui::vec2(card_w, 56.0), egui::Sense::click());
-                        ui.painter().rect_filled(rect, egui::CornerRadius::same(6), pr.palette.bg);
+                        ui.painter().rect_filled(rect, egui::CornerRadius::same(theme::radius_ctrl() as u8), pr.palette.bg);
                         let bar = egui::Rect::from_min_size(
                             rect.left_top() + egui::vec2(6.0, 6.0),
                             egui::vec2(rect.width() - 12.0, 16.0),
                         );
-                        ui.painter().rect_filled(bar, egui::CornerRadius::same(4), pr.palette.panel);
+                        ui.painter().rect_filled(bar, egui::CornerRadius::same(theme::radius_small() as u8), pr.palette.panel);
                         let dot_c = if pr.dark {
                             theme::accent_color_dark(theme::accent_idx())
                         } else {
@@ -3706,7 +3705,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             egui::pos2(rect.right() - 8.0, rect.bottom() - 13.0),
                             egui::Align2::RIGHT_CENTER,
                             ui_kit::t!(pr.name_en, pr.name_zh),
-                            egui::FontId::proportional(10.0),
+                            egui::FontId::proportional(theme::fs_px(10.0)),
                             if pr.dark { theme::DARK.text2 } else { theme::LIGHT.text2 },
                         );
                         if theme::preset_idx() == i {
@@ -3728,7 +3727,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     }
                 });
             ui.add_space(6.0);
-            ui.label(RichText::new(ui_kit::t!("Theme", "主题")).size(11.0).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Theme", "主题")).size(theme::fs_px(11.0)).color(p.muted));
             ui.horizontal(|ui| {
                 // 跟随系统开关(手动点 ☀/☾ 会自动解除跟随)
                 let on = app.follow_system_theme;
@@ -3764,7 +3763,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     } else {
                         ui_kit::t!("Manual (toggle with sidebar ☀/☾)", "手动(侧栏 ☀/☾ 切换)")
                     })
-                    .size(12.0)
+                    .size(theme::fs_px(12.0))
                     .color(p.text2),
                 );
             });
@@ -3776,7 +3775,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "Periodically dump all online MySQL/PostgreSQL/SQLite connections to ~/Documents/数镜备份",
                     "按周期对在线的 MySQL/PostgreSQL/SQLite 连接执行备份,写入 ~/Documents/数镜备份"
                 ))
-                    .size(10.5)
+                    .size(theme::fs_px(10.5))
                     .color(p.muted),
             );
             ui.horizontal(|ui| {
@@ -3799,11 +3798,11 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     } else {
                         ui_kit::t!("Off", "已关闭")
                     })
-                        .size(12.0)
+                        .size(theme::fs_px(12.0))
                         .color(p.text2),
                 );
                 ui.separator();
-                ui.label(RichText::new(ui_kit::t!("Every", "间隔")).size(11.5).color(p.text2));
+                ui.label(RichText::new(ui_kit::t!("Every", "间隔")).size(theme::fs_px(11.5)).color(p.text2));
                 let hours = app.auto_backup.interval_hours.max(1);
                 egui::ComboBox::from_id_salt("auto-backup-interval")
                     .width(90.0)
@@ -3820,7 +3819,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             ui_kit::t!("Last run", "上次"),
                             shujing_core::history::format_ts_local(app.auto_backup.last_run_ms)
                         ))
-                            .size(10.5)
+                            .size(theme::fs_px(10.5))
                             .color(p.muted),
                     );
                 }
@@ -3834,7 +3833,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "Drop plugin folders (plugin.toml + plugin.wasm) into ~/.shujing-native/plugins",
                     "把插件目录(plugin.toml + plugin.wasm)放入 ~/.shujing-native/plugins"
                 ))
-                    .size(10.5)
+                    .size(theme::fs_px(10.5))
                     .color(p.muted),
             );
             ui.horizontal(|ui| {
@@ -3845,7 +3844,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         app.plugins.ok_count(),
                         app.plugins.plugins.len()
                     ))
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.text2),
                 );
                 if theme::button(ui, ui_kit::t!("Plugin Manager…", "插件管理…"), theme::BtnKind::Secondary).clicked() {
@@ -3870,7 +3869,7 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     "OpenAI-compatible endpoint; the key is stored only in local settings.json",
                     "OpenAI 兼容端点;Key 只存本机 settings.json"
                 ))
-                    .size(10.5)
+                    .size(theme::fs_px(10.5))
                     .color(p.muted),
             );
             ui.add_space(4.0);
@@ -3972,12 +3971,12 @@ pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     all_count
                 )
             };
-            ui.label(RichText::new(filter_line).size(11.0).color(p.muted));
+            ui.label(RichText::new(filter_line).size(theme::fs_px(11.0)).color(p.muted));
             // 复选列表
             egui::Frame::new()
                 .fill(p.input_bg)
                 .stroke(egui::Stroke::new(1.0, p.border))
-                .corner_radius(egui::CornerRadius::same(8))
+                .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                 .inner_margin(egui::Margin::same(6))
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
@@ -4012,7 +4011,7 @@ pub fn draw_db_filter_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                                             "No matching databases",
                                             "无匹配库"
                                         ))
-                                        .size(12.0)
+                                        .size(theme::fs_px(12.0))
                                         .color(p.muted),
                                     );
                                 });

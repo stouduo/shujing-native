@@ -2,6 +2,7 @@
 //! 全部按原型的 1px 线性风格绘制,并与 PingFang/Helvetica 文字基线对齐。
 
 use crate::theme;
+use crate::theme::{fs_px, radius_ctrl};
 use egui::{Color32, Pos2, Sense, Shape, Stroke, Ui, Vec2};
 
 /// 展开/收起三角(自绘;位置由调用方给定)
@@ -300,11 +301,11 @@ pub fn chip(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
     let p = theme::c();
     let g = ui.painter().layout_no_wrap(
         text.to_string(),
-        egui::FontId::proportional(10.0),
+        egui::FontId::proportional(fs_px(10.0)),
         Color32::PLACEHOLDER,
     );
     let w = g.size().x + 14.0;
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 18.0), Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, theme::mini_h()), Sense::hover());
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(5), theme::tint(p.panel, 90));
     ui.painter().galley(
@@ -496,7 +497,7 @@ pub fn label_at_baseline(
 /// 与主标题共基线的 chip(药丸底仍按文字视觉位置定,不随行高居中)
 pub fn chip_at_baseline(ui: &mut Ui, text: &str, color: Color32, baseline: f32) -> egui::Response {
     let p = theme::c();
-    let font = egui::FontId::proportional(11.5);
+    let font = egui::FontId::proportional(fs_px(11.5));
     let g = ui
         .painter()
         .layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
@@ -508,7 +509,7 @@ pub fn chip_at_baseline(ui: &mut Ui, text: &str, color: Color32, baseline: f32) 
         egui::vec2(size.x, g.size().y + 8.0),
     );
     ui.painter()
-        .rect_filled(pill, egui::CornerRadius::same(6), p.elevated);
+        .rect_filled(pill, egui::CornerRadius::same(radius_ctrl() as u8), p.elevated);
     ui.painter()
         .galley(egui::pos2(pill.left() + 8.0, text_top), g, color);
     resp

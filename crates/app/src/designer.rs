@@ -53,7 +53,7 @@ pub fn draw_designer_view(
                 );
                 ui.allocate_rect(badge_rect, Sense::hover());
                 ui.painter()
-                    .rect_filled(badge_rect, egui::CornerRadius::same(6), bg);
+                    .rect_filled(badge_rect, egui::CornerRadius::same(theme::radius_ctrl() as u8), bg);
                 ui.painter().galley(
                     egui::pos2(
                         badge_rect.center().x - badge_g.size().x / 2.0,
@@ -85,7 +85,7 @@ pub fn draw_designer_view(
                     icons::chip(ui, db, p.muted);
                 }
                 if d.saving {
-                    ui.add(egui::Spinner::new().size(11.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(11.0)).color(p.muted));
                 }
                 if let Some(err) = &d.error {
                     ui.label(
@@ -136,7 +136,7 @@ pub fn draw_designer_view(
             if d.loading && d.columns.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.label(RichText::new(ui_kit::t!("Loading structure…", "读取结构中…"))
-                        .size(12.0)
+                        .size(theme::fs_px(12.0))
                         .color(p.muted));
                 });
                 return;
@@ -176,7 +176,7 @@ pub fn draw_designer_view(
                     if add_resp.hovered() {
                         ui.painter().rect_filled(
                             add_rect,
-                            egui::CornerRadius::same(6),
+                            egui::CornerRadius::same(theme::radius_ctrl() as u8),
                             theme::tint(p.text, 16),
                         );
                     }
@@ -184,7 +184,7 @@ pub fn draw_designer_view(
                         add_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         ui_kit::t!("+ Add Field", "＋ 添加字段"),
-                        egui::FontId::proportional(12.0),
+                        egui::FontId::proportional(theme::fs_px(12.0)),
                         if add_resp.hovered() { p.text } else { p.text2 },
                     );
                     if add_resp.clicked() {
@@ -210,7 +210,7 @@ pub fn draw_designer_view(
             egui::Frame::new()
                 .fill(p.bg)
                 .stroke(egui::Stroke::new(1.0, p.border))
-                .corner_radius(egui::CornerRadius::same(8))
+                .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                 .inner_margin(egui::Margin::same(10))
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
@@ -263,7 +263,7 @@ fn draw_grid_header(ui: &mut egui::Ui, _is_edit: bool) {
             egui::pos2(col_rect.left(), rect.center().y),
             egui::Align2::LEFT_CENTER,
             h,
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(theme::fs_px(11.0)),
             p.muted,
         );
     }
@@ -292,15 +292,15 @@ fn draw_column_row(
         // 已有列轻微压暗,提示不可删/不可改名
         ui.painter().rect_filled(
             row_rect,
-            egui::CornerRadius::same(6),
+            egui::CornerRadius::same(theme::radius_ctrl() as u8),
             theme::tint(p.panel, 60),
         );
     } else if ui.rect_contains_pointer(row_rect) {
         ui.painter()
-            .rect_filled(row_rect, egui::CornerRadius::same(6), p.row_hover);
+            .rect_filled(row_rect, egui::CornerRadius::same(theme::radius_ctrl() as u8), p.row_hover);
     } else if i % 2 == 1 {
         ui.painter()
-            .rect_filled(row_rect, egui::CornerRadius::same(6), p.stripe);
+            .rect_filled(row_rect, egui::CornerRadius::same(theme::radius_ctrl() as u8), p.stripe);
     }
     let top = row_rect.top();
     let mut remove = false;

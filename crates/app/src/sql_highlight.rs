@@ -117,7 +117,7 @@ pub fn highlight_cached(
 /// 生成 SQL 高亮 LayoutJob(供 TextEdit::layouter 使用)
 pub fn highlight(sql: &str) -> LayoutJob {
     let mut job = LayoutJob::default();
-    let font = egui::FontId::monospace(12.0);
+    let font = theme::mono(12.0);
     let mut rest = sql;
 
     while !rest.is_empty() {

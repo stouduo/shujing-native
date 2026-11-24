@@ -2,6 +2,7 @@
 //! 结果网格的表头-行底色-单元格-行号绘制族、列宽启发式。
 //! 全部是纯参数(&Painter/&Ui + Rect/Color32/String),app 经 theme 转发层使用。
 
+use crate::theme::{chip_h, fs_px, radius_ctrl, radius_card, radius_small, mini_h};
 use egui::{Color32, RichText, Sense};
 
 
@@ -10,16 +11,16 @@ pub fn ghost_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Respon
     let p = crate::theme::c();
     let g = ui
         .painter()
-        .layout_no_wrap(label.into(), egui::FontId::proportional(12.0), p.text);
+        .layout_no_wrap(label.into(), egui::FontId::proportional(fs_px(12.0)), p.text);
     // 左右各 6pt 内边距(DBX 的工具栏按钮):相邻按钮之间才留得出缝
     // (egui Button 关掉 frame 后内边距也没了,英文态两个按钮会贴成一团)
     let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(g.size().x + 12.0, 22.0),
+        egui::vec2(g.size().x + 12.0, chip_h()),
         egui::Sense::click(),
     );
     if resp.hovered() {
         ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(6), crate::theme::tint(p.text, 16));
+            .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), crate::theme::tint(p.text, 16));
     }
     ui.painter().galley(
         egui::pos2(rect.left() + 6.0, rect.center().y - g.size().y / 2.0),
@@ -35,7 +36,7 @@ pub fn where_chip(ui: &mut egui::Ui, active: bool, open: bool) -> egui::Response
     if open || resp.hovered() {
         ui.painter().rect_filled(
             rect,
-            egui::CornerRadius::same(6),
+            egui::CornerRadius::same(radius_ctrl() as u8),
             if open {
                 crate::theme::tint(crate::theme::where_color(), 34)
             } else {
@@ -130,7 +131,7 @@ pub fn paint_rowno_head(painter: &egui::Painter, rect: egui::Rect) {
         egui::pos2(rect.right() - 14.0, rect.top() + HEAD_PAD_Y + HEAD_LINE1 / 2.0),
         egui::Align2::RIGHT_CENTER,
         "#",
-        egui::FontId::proportional(11.0),
+        egui::FontId::proportional(fs_px(11.0)),
         p.muted,
     );
     let st = egui::Stroke::new(1.0, p.border);
@@ -232,7 +233,7 @@ pub fn paint_badge(p: &egui::Painter, x: f32, cy: f32, label: &str, on: bool) {
     let g = p.layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
     let w = (g.size().x + 9.0).max(16.0);
     let rect = egui::Rect::from_min_size(egui::pos2(x, cy - 8.0), egui::vec2(w, 16.0));
-    p.rect_filled(rect, egui::CornerRadius::same(4), bg);
+    p.rect_filled(rect, egui::CornerRadius::same(radius_small() as u8), bg);
     p.galley(
         egui::pos2(
             rect.center().x - g.size().x / 2.0,
@@ -469,7 +470,7 @@ pub fn paint_grid_rowno(painter: &egui::Painter, rect: egui::Rect, rowno: usize)
         egui::pos2(rect.right() - 14.0, rect.center().y),
         egui::Align2::RIGHT_CENTER,
         format!("{rowno}"),
-        egui::FontId::proportional(11.0),
+        egui::FontId::proportional(fs_px(11.0)),
         crate::theme::c().muted,
     );
     vline(painter, rect, crate::theme::c().row_line);
@@ -543,14 +544,14 @@ pub fn bar_button(ui: &mut egui::Ui, icon: IconFn, label: &str, tip: &str) -> bo
     } else {
         Some(
             ui.painter()
-                .layout_no_wrap(label.to_owned(), egui::FontId::proportional(12.0), p.text),
+                .layout_no_wrap(label.to_owned(), egui::FontId::proportional(fs_px(12.0)), p.text),
         )
     };
     let w = 8.0 + 14.0 + g.as_ref().map_or(0.0, |g| 6.0 + g.size().x) + 8.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::click());
     if resp.hovered() {
         ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(6), crate::theme::tint(p.text, 16));
+            .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), crate::theme::tint(p.text, 16));
     }
     let cy = rect.center().y;
     icon(ui.painter(), egui::pos2(rect.left() + 15.0, cy), p.text);
@@ -574,13 +575,13 @@ pub fn icon_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
     if resp.hovered() {
         ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(6), crate::theme::tint(p.text, 16));
+            .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), crate::theme::tint(p.text, 16));
     }
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         glyph,
-        egui::FontId::proportional(14.0),
+        egui::FontId::proportional(fs_px(14.0)),
         if resp.hovered() { p.text } else { p.text2 },
     );
     let clicked = resp.clicked();

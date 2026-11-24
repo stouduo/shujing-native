@@ -41,12 +41,12 @@ pub fn draw_mqtt_view(
                         m.topics.len(),
                         ui_kit::t!("topics", "个主题")
                     ))
-                    .size(10.5)
+                    .size(theme::fs_px(10.5))
                     .color(p.muted),
                 );
             });
             if let Some(err) = &m.error {
-                ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(11.5)).color(p.red));
             }
         });
 
@@ -124,7 +124,7 @@ pub fn draw_mqtt_view(
             if m.loading {
                 ui.centered_and_justified(|ui| {
                     ui.add_space(30.0);
-                    ui.add(egui::Spinner::new().size(16.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(16.0)).color(p.muted));
                 });
                 return;
             }
@@ -136,7 +136,7 @@ pub fn draw_mqtt_view(
                             "No topics seen — click \"Browse Topics\"",
                             "尚未发现主题——点「浏览主题」采样"
                         ))
-                        .size(12.0)
+                        .size(theme::fs_px(12.0))
                         .color(p.muted),
                     );
                 });
@@ -161,11 +161,11 @@ pub fn draw_mqtt_view(
                                     icons::chip(ui, ui_kit::t!("retained", "保留"), p.accent);
                                 }
                                 if t.binary {
-                                    icons::chip(ui, "hex", DIFF_ORANGE);
+                                    icons::chip(ui, "hex", theme::c().orange);
                                 }
                                 ui.label(
                                     RichText::new(format!("{} B", t.bytes))
-                                        .size(10.5)
+                                        .size(theme::fs_px(10.5))
                                         .color(p.muted),
                                 );
                             });
@@ -189,4 +189,3 @@ pub fn draw_mqtt_view(
     actions
 }
 
-const DIFF_ORANGE: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x8A, 0x00);

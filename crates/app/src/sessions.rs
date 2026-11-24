@@ -30,7 +30,7 @@ pub fn draw_sessions_view(
                     } else {
                         ui_kit::t!("pg_stat_activity", "pg_stat_activity")
                     })
-                    .size(11.0)
+                    .size(theme::fs_px(11.0))
                     .color(p.muted),
                 );
                 let refresh = theme::button(
@@ -49,12 +49,12 @@ pub fn draw_sessions_view(
                 }
                 ui.label(
                     RichText::new(format!("{} {}", s.rows.len(), ui_kit::t!("sessions", "个会话")))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.muted),
                 );
             });
             if let Some(err) = &s.error {
-                ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(11.5)).color(p.red));
             }
         });
 
@@ -68,7 +68,7 @@ pub fn draw_sessions_view(
             if s.loading && s.rows.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.add_space(30.0);
-                    ui.add(egui::Spinner::new().size(16.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(16.0)).color(p.muted));
                 });
                 return;
             }
@@ -80,7 +80,7 @@ pub fn draw_sessions_view(
                             "No other sessions",
                             "没有其他活动会话"
                         ))
-                        .size(12.0)
+                        .size(theme::fs_px(12.0))
                         .color(p.muted),
                     );
                 });
@@ -105,16 +105,16 @@ pub fn draw_sessions_view(
                                     ui_kit::t!("Query", "SQL"),
                                     "",
                                 ] {
-                                    ui.label(RichText::new(h).size(10.5).color(p.muted));
+                                    ui.label(RichText::new(h).size(theme::fs_px(10.5)).color(p.muted));
                                 }
                                 ui.end_row();
                                 for row in s.rows.clone() {
-                                    ui.label(RichText::new(&row.id).size(11.5).color(p.text));
-                                    ui.label(RichText::new(icons::clip(&row.user, 16)).size(11.5).color(p.text));
+                                    ui.label(RichText::new(&row.id).size(theme::fs_px(11.5)).color(p.text));
+                                    ui.label(RichText::new(icons::clip(&row.user, 16)).size(theme::fs_px(11.5)).color(p.text));
                                     ui.label(RichText::new(icons::clip(&row.host, 22)).font(theme::mono(11.0)).color(p.text2));
                                     ui.label(
                                         RichText::new(row.db.as_deref().unwrap_or("—"))
-                                            .size(11.5)
+                                            .size(theme::fs_px(11.5))
                                             .color(p.text2),
                                     );
                                     ui.label(
@@ -122,13 +122,13 @@ pub fn draw_sessions_view(
                                             &if row.command.is_empty() { row.state.clone() } else { row.command },
                                             14,
                                         ))
-                                        .size(11.5)
+                                        .size(theme::fs_px(11.5))
                                         .color(p.text2),
                                     );
                                     ui.label(
                                         RichText::new(row.time_secs.to_string())
-                                            .size(11.5)
-                                            .color(if row.time_secs > 60 { DIFF_ORANGE } else { p.text }),
+                                            .size(theme::fs_px(11.5))
+                                            .color(if row.time_secs > 60 { theme::c().orange } else { p.text }),
                                     );
                                     ui.label(
                                         RichText::new(icons::clip(&row.query, 44))
@@ -168,11 +168,10 @@ pub fn draw_sessions_view(
                     "Kill Query interrupts the running statement only; the connection stays alive. Full terminate is not exposed here to avoid accidental drops",
                     "终止查询仅中断当前执行的语句,连接保留;为避免误杀,整机断连不在此面板提供"
                 ))
-                .size(10.5)
+                .size(theme::fs_px(10.5))
                 .color(p.muted),
             );
         });
     actions
 }
 
-const DIFF_ORANGE: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x8A, 0x00);

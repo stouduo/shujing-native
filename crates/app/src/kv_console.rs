@@ -44,7 +44,7 @@ pub fn draw_kv_view(
                     });
                 }
                 if let Some(err) = &k.error {
-                    ui.label(RichText::new(icons::clip(err, 80)).size(11.5).color(p.red));
+                    ui.label(RichText::new(icons::clip(err, 80)).size(theme::fs_px(11.5)).color(p.red));
                 }
             });
         });
@@ -59,7 +59,7 @@ pub fn draw_kv_view(
             if k.loading && k.entries.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.add_space(30.0);
-                    ui.add(egui::Spinner::new().size(16.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(16.0)).color(p.muted));
                 });
                 return;
             }
@@ -75,7 +75,7 @@ pub fn draw_kv_view(
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(ui_kit::t!("Key", "键"))
-                            .size(11.0)
+                            .size(theme::fs_px(11.0))
                             .color(p.muted),
                     );
                     ui.label(
@@ -187,7 +187,7 @@ pub fn draw_kv_view(
                     shown.len(),
                     ui_kit::t!("keys", "个键")
                 ))
-                .size(11.0)
+                .size(theme::fs_px(11.0))
                 .color(p.muted),
             );
             ui.add_space(2.0);
@@ -211,13 +211,13 @@ pub fn draw_kv_view(
                         if e.binary {
                             ui.label(
                                 RichText::new("hex")
-                                    .size(10.0)
-                                    .color(DIFF_ORANGE),
+                                    .size(theme::fs_px(10.0))
+                                    .color(theme::c().orange),
                             );
                         } else {
                             ui.label(
                                 RichText::new(format!("{} B", e.value.len()))
-                                    .size(10.5)
+                                    .size(theme::fs_px(10.5))
                                     .color(p.muted),
                             );
                         }
@@ -228,4 +228,3 @@ pub fn draw_kv_view(
     actions
 }
 
-const DIFF_ORANGE: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x8A, 0x00);

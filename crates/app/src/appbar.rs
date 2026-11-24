@@ -77,7 +77,7 @@ impl ShujingApp {
                             "{} ▾",
                             ui_kit::t!("More", "更多")
                         ))
-                        .size(12.0)
+                        .size(theme::fs_px(12.0))
                         .color(p.text),
                         |ui| {
                             ui.set_min_width(250.0);

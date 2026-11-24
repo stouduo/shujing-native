@@ -7,8 +7,6 @@ use crate::net;
 use crate::{icons, theme};
 use egui::{Align, Color32, Layout, RichText, Sense, Vec2};
 
-/// iOS 橙(只读角标)
-const AMBER: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
 
 impl ShujingApp {
     pub fn draw_sidebar_panel(&mut self, ctx: &egui::Context) {
@@ -80,12 +78,12 @@ impl ShujingApp {
                 egui::Frame::new()
                     .fill(p.elevated)
                     .stroke(egui::Stroke::new(1.0, p.border))
-                    .corner_radius(egui::CornerRadius::same(8))
+                    .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                     .inner_margin(egui::Margin::symmetric(14, 8))
                     .show(ui, |ui| {
                         ui.label(
                             RichText::new(icons::clip(msg, 160))
-                                .size(12.0)
+                                .size(theme::fs_px(12.0))
                                 .color(p.text),
                         );
                     });
@@ -105,7 +103,7 @@ impl ShujingApp {
             Layout::left_to_right(Align::Center),
             |ui| {
                 let imp_exp = format!("{} ▾", ui_kit::t!("Import / Export", "导入/导出"));
-                ui.menu_button(RichText::new(imp_exp).size(12.0).color(p.text2), |ui| {
+                ui.menu_button(RichText::new(imp_exp).size(theme::fs_px(12.0)).color(p.text2), |ui| {
                     ui.set_min_width(240.0);
                     for (label, key) in [
                         (
@@ -281,7 +279,7 @@ impl ShujingApp {
                                 g,
                                 list.len()
                             ),
-                            egui::FontId::proportional(10.5),
+                            egui::FontId::proportional(theme::fs_px(10.5)),
                             p.muted,
                         );
                         if resp.hovered() {
@@ -320,7 +318,7 @@ impl ShujingApp {
                             "No connections yet\nClick ＋ at the top right to add a database",
                             "还没有连接\n点击右上角 ＋ 添加数据库"
                         ))
-                            .size(12.0)
+                            .size(theme::fs_px(12.0))
                             .color(p.muted),
                     );
                 }
@@ -332,7 +330,7 @@ impl ShujingApp {
             // 版本号;有新版时变为可点链接(打开 Release 页)
             let upd = self.update_available.clone();
             if let Some((tag, url)) = upd {
-                let btn = ui.button(RichText::new(format!("⬆ {tag}")).size(10.5));
+                let btn = ui.button(RichText::new(format!("⬆ {tag}")).size(theme::fs_px(10.5)));
                 let clicked = btn.clicked();
                 btn.on_hover_text(ui_kit::t!(
                     "New version available, click to open the download page",
@@ -344,7 +342,7 @@ impl ShujingApp {
             } else {
                 ui.label(
                     RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                        .size(10.5)
+                        .size(theme::fs_px(10.5))
                         .color(p.muted),
                 );
             }
@@ -355,7 +353,7 @@ impl ShujingApp {
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     glyph,
-                    egui::FontId::proportional(15.0),
+                    egui::FontId::proportional(theme::fs_px(15.0)),
                     if resp.hovered() { p.text } else { p.text2 },
                 );
                 resp.clone().on_hover_text(ui_kit::t!(
@@ -421,20 +419,20 @@ impl ShujingApp {
                 egui::pos2(badge_x + 17.0, rect.center().y),
                 egui::vec2(width, 15.0),
             );
-            painter.rect_filled(chip, egui::CornerRadius::same(4), theme::tint(AMBER, 40));
+            painter.rect_filled(chip, egui::CornerRadius::same(theme::radius_small() as u8), theme::tint(theme::c().orange, 40));
             painter.text(
                 chip.center(),
                 egui::Align2::CENTER_CENTER,
                 label,
                 theme::bold(9.0),
-                AMBER,
+                theme::c().orange,
             );
             badge_x = chip.right() + 6.0;
         }
         if c.db_type == shujing_core::DbType::Sqlite {
             let sg = painter.layout_no_wrap(
                 "SQLite".to_owned(),
-                egui::FontId::proportional(11.5),
+                egui::FontId::proportional(theme::fs_px(11.5)),
                 Color32::PLACEHOLDER,
             );
             painter.galley(
@@ -734,7 +732,7 @@ impl ShujingApp {
                 } else {
                     ui_kit::t!("No matching tables", "无匹配表")
                 };
-                ui.label(RichText::new(hint).size(12.0).color(theme::c().muted));
+                ui.label(RichText::new(hint).size(theme::fs_px(12.0)).color(theme::c().muted));
             }
             return;
         }
@@ -834,7 +832,7 @@ impl ShujingApp {
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), Sense::click());
         if resp.hovered() {
             ui.painter()
-                .rect_filled(rect, egui::CornerRadius::same(6), p.row_hover);
+                .rect_filled(rect, egui::CornerRadius::same(theme::radius_ctrl() as u8), p.row_hover);
         }
         icons::paint_triangle(
             ui.painter(),
@@ -844,7 +842,7 @@ impl ShujingApp {
         );
         let g = ui.painter().layout_no_wrap(
             format!("{label} {count}"),
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(theme::fs_px(11.0)),
             Color32::PLACEHOLDER,
         );
         ui.painter().galley(
@@ -867,7 +865,7 @@ impl ShujingApp {
                         .layout(Layout::left_to_right(Align::Center)),
                     |ui| {
                         ui.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
-                        ui.menu_button(RichText::new("＋").size(13.0).color(p.muted), |ui| {
+                        ui.menu_button(RichText::new("＋").size(theme::fs_px(13.0)).color(p.muted), |ui| {
                             for (kind, label) in [
                                 ("trigger", ui_kit::t!("Triggers", "触发器")),
                                 ("procedure", ui_kit::t!("Stored Procedures", "存储过程")),
@@ -930,10 +928,10 @@ impl ShujingApp {
         );
         if active {
             ui.painter()
-                .rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                .rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.active_row);
         } else if resp.hovered() {
             ui.painter()
-                .rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                .rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.row_hover);
         }
         let g = icons::text_galley(
             ui.painter(),
@@ -1099,12 +1097,12 @@ impl ShujingApp {
                 egui::pos2(rect.right() - 12.0, rect.center().y),
                 Vec2::splat(12.0),
             );
-            ui.put(sp, egui::Spinner::new().size(11.0));
+            ui.put(sp, egui::Spinner::new().size(theme::fs_px(11.0)));
         } else {
             let t = format!("{count}");
             let g = ui.painter().layout_no_wrap(
                 t,
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(theme::fs_px(11.0)),
                 Color32::PLACEHOLDER,
             );
             ui.painter().galley(
@@ -1213,7 +1211,7 @@ impl ShujingApp {
                 egui::pos2(rect.right() + 2.0, rect.bottom() - 2.0),
             );
             ui.painter()
-                .rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                .rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.row_hover);
         }
         icons::paint_triangle(
             ui.painter(),
@@ -1252,7 +1250,7 @@ impl ShujingApp {
             .unwrap_or(0);
         let g = ui.painter().layout_no_wrap(
             format!("{count}"),
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(theme::fs_px(11.0)),
             Color32::PLACEHOLDER,
         );
         ui.painter().galley(
@@ -1363,9 +1361,9 @@ impl ShujingApp {
                     .iter()
                     .any(|t| matches!(&t.kind, TabKind::Rabbit(r) if r.conn_id == conn_id));
                 if active {
-                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.active_row);
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.row_hover);
                 }
                 icons::paint_table(
                     ui.painter(),
@@ -1404,9 +1402,9 @@ impl ShujingApp {
                     .iter()
                     .any(|t| matches!(&t.kind, TabKind::Mqtt(m) if m.conn_id == conn_id));
                 if active {
-                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.active_row);
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.row_hover);
                 }
                 icons::paint_table(
                     ui.painter(),
@@ -1445,9 +1443,9 @@ impl ShujingApp {
                     .iter()
                     .any(|t| matches!(&t.kind, TabKind::Kv(k) if k.conn_id == conn_id));
                 if active {
-                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.active_row);
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.row_hover);
                 }
                 icons::paint_table(
                     ui.painter(),
@@ -1487,9 +1485,9 @@ impl ShujingApp {
                     .iter()
                     .any(|t| matches!(&t.kind, TabKind::Kafka(k) if k.conn_id == conn_id));
                 if active {
-                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.active_row);
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                    ui.painter().rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.row_hover);
                 }
                 icons::paint_table(
                     ui.painter(),
@@ -1537,10 +1535,10 @@ impl ShujingApp {
         );
         if active {
             ui.painter()
-                .rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                .rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.active_row);
         } else if resp.hovered() {
             ui.painter()
-                .rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                .rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.row_hover);
         }
         // 轨道线:表行左侧 1px 竖线,归属感由"缩进+轨道"双信号承担
         ui.painter().line_segment(
@@ -1860,10 +1858,10 @@ impl ShujingApp {
         );
         if active {
             ui.painter()
-                .rect_filled(hl, egui::CornerRadius::same(8), p.active_row);
+                .rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.active_row);
         } else if resp.hovered() {
             ui.painter()
-                .rect_filled(hl, egui::CornerRadius::same(8), p.row_hover);
+                .rect_filled(hl, egui::CornerRadius::same(theme::radius_card() as u8), p.row_hover);
         }
         let c = egui::pos2(rect.left() + 34.0, rect.center().y);
         let s4 = 4.5;
@@ -1899,7 +1897,7 @@ impl ShujingApp {
         );
         let kg = ui.painter().layout_no_wrap(
             format!("{keys} keys"),
-            egui::FontId::proportional(10.0),
+            egui::FontId::proportional(theme::fs_px(10.0)),
             Color32::PLACEHOLDER,
         );
         ui.painter().galley(

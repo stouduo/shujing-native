@@ -8,8 +8,6 @@ use egui::{Align, Color32, Layout, RichText, Sense};
 
 use shujing_core::redis_ops::RedisDetail;
 
-/// iOS 橙(TTL 提示色)
-const ORANGE: Color32 = Color32::from_rgb(0xE0, 0x8A, 0x00);
 
 pub fn draw_redis_view(
     ctx: &egui::Context,
@@ -44,7 +42,7 @@ pub fn draw_redis_view(
                 icons::label_at_baseline(
                     ui,
                     "REDIS",
-                    egui::FontId::proportional(9.5),
+                    egui::FontId::proportional(theme::fs_px(9.5)),
                     p.muted,
                     baseline,
                     60.0,
@@ -79,7 +77,7 @@ pub fn draw_redis_view(
                 let (spin_r, _) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::hover());
                 if rt.scanning {
                     let rect = egui::Rect::from_center_size(spin_r.center(), egui::vec2(11.0, 11.0));
-                    egui::Spinner::new().size(11.0).color(p.muted).paint_at(ui, rect);
+                    egui::Spinner::new().size(theme::fs_px(11.0)).color(p.muted).paint_at(ui, rect);
                 }
                 // 「继续扫描」常驻(不可用时不响应),宽度恒定
                 let more_enabled = rt.cursor != 0 && !rt.scanning;
@@ -164,7 +162,7 @@ pub fn draw_redis_view(
                     egui::Frame::new()
                         .fill(p.panel)
                         .stroke(egui::Stroke::new(1.0, p.border))
-                        .corner_radius(egui::CornerRadius::same(8))
+                        .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                         .inner_margin(egui::Margin::same(5)),
                 )
                 .show_inside(ui, |ui| {
@@ -197,7 +195,7 @@ pub fn draw_redis_view(
                             }
                             if shown.is_empty() && !rt.scanning {
                                 ui.centered_and_justified(|ui| {
-                                    ui.label(RichText::new(ui_kit::t!("No matching keys", "无匹配 key")).size(12.0).color(p.muted));
+                                    ui.label(RichText::new(ui_kit::t!("No matching keys", "无匹配 key")).size(theme::fs_px(12.0)).color(p.muted));
                                 });
                                 return;
                             }
@@ -211,7 +209,7 @@ pub fn draw_redis_view(
                     egui::Frame::new()
                         .fill(p.panel)
                         .stroke(egui::Stroke::new(1.0, p.border))
-                        .corner_radius(egui::CornerRadius::same(8))
+                        .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                         .inner_margin(egui::Margin::same(10)),
                 )
                 .show_inside(ui, |ui| {
@@ -344,7 +342,7 @@ fn draw_key_row(
         );
         let color = theme::kind_color(&ktype);
         ui.painter()
-            .rect_filled(br, egui::CornerRadius::same(4), theme::tint(color, 42));
+            .rect_filled(br, egui::CornerRadius::same(theme::radius_small() as u8), theme::tint(color, 42));
         ui.painter().galley(
             egui::pos2(br.center().x - g.size().x / 2.0, br.center().y - g.size().y / 2.0),
             g,
@@ -357,7 +355,7 @@ fn draw_key_row(
         let expiring = ttl > 0 && ttl < 300;
         let g = ui
             .painter()
-            .layout_no_wrap(ts.clone(), egui::FontId::proportional(9.0), Color32::PLACEHOLDER);
+            .layout_no_wrap(ts.clone(), egui::FontId::proportional(theme::fs_px(9.0)), Color32::PLACEHOLDER);
         let w = g.size().x + 8.0;
         let br = egui::Rect::from_min_size(
             egui::pos2(right - w, rect.center().y - 8.0),
@@ -365,7 +363,7 @@ fn draw_key_row(
         );
         ui.painter().rect_stroke(
             br,
-            egui::CornerRadius::same(4),
+            egui::CornerRadius::same(theme::radius_small() as u8),
             egui::Stroke::new(1.0, if expiring { p.red } else { p.border }),
             egui::StrokeKind::Inside,
         );
@@ -423,7 +421,7 @@ fn draw_detail(
         ui.centered_and_justified(|ui| {
             ui.vertical(|ui| {
                 ui.add_space(40.0);
-                ui.add(egui::Spinner::new().size(16.0).color(p.muted));
+                ui.add(egui::Spinner::new().size(theme::fs_px(16.0)).color(p.muted));
             });
         });
         return;
@@ -431,7 +429,7 @@ fn draw_detail(
     let Some(key) = rt.selected_key.clone() else {
         ui.centered_and_justified(|ui| {
             ui.add_space(40.0);
-            ui.label(RichText::new(ui_kit::t!("Select a key on the left to view its content", "点击左侧 key 查看内容")).size(12.5).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Select a key on the left to view its content", "点击左侧 key 查看内容")).size(theme::fs_px(12.5)).color(p.muted));
         });
         return;
     };
@@ -441,7 +439,7 @@ fn draw_detail(
             ui.add_space(20.0);
             ui.label(
                 RichText::new(ui_kit::t!("Failed to load details, click ↻ at top right to retry", "详情加载失败,点右上 ↻ 重试"))
-                    .size(12.5)
+                    .size(theme::fs_px(12.5))
                     .color(p.red),
             );
         });
@@ -454,7 +452,7 @@ fn draw_detail(
     );
     ui.allocate_space(egui::vec2(ui.available_width(), 40.0));
     ui.painter()
-        .rect_filled(hrect, egui::CornerRadius::same(6), theme::tint(p.panel, 40));
+        .rect_filled(hrect, egui::CornerRadius::same(theme::radius_ctrl() as u8), theme::tint(p.panel, 40));
     {
         // 遮蔽外层 ui,头部内容都画进条带
         let ui = &mut ui.new_child(
@@ -485,12 +483,12 @@ fn draw_detail(
                 } else if d.ttl < 300 {
                     p.red
                 } else {
-                    ORANGE
+                    theme::c().orange
                 };
-                ui.label(RichText::new(ttl_text(d.ttl)).size(11.0).color(ttl_color));
+                ui.label(RichText::new(ttl_text(d.ttl)).size(theme::fs_px(11.0)).color(ttl_color));
                 ui.label(
                     RichText::new(format!("len {}", icons::thousands(d.len)))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.muted),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -620,7 +618,7 @@ fn draw_detail(
             if let Some((idx, draft)) = rt.list_edit.clone() {
                 ui.horizontal(|ui| {
                     ui.add_space(10.0);
-                    ui.label(RichText::new(format!("#{idx}")).size(11.5).color(p.muted));
+                    ui.label(RichText::new(format!("#{idx}")).size(theme::fs_px(11.5)).color(p.muted));
                     let mut v = draft;
                     let resp = ui.add_sized(
                         [280.0, 24.0],
@@ -673,7 +671,7 @@ fn draw_detail(
                             d.pairs.len(),
                             d.len
                         ))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.muted),
                     );
                 });
@@ -688,11 +686,11 @@ fn draw_detail(
                             "Publish message (one field=value per line)",
                             "发送消息(每行一条 field=value)"
                         ))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.muted),
                     );
                     if ui_kit::i18n::is_english() {
-                        ui.label(RichText::new("").size(11.0));
+                        ui.label(RichText::new("").size(theme::fs_px(11.0)));
                     }
                 });
                 theme::form_field_multiline(
@@ -741,7 +739,7 @@ fn draw_detail(
                                 "No consumer groups (XGROUP CREATE to consume)",
                                 "暂无消费者组(消费端 XGROUP CREATE 后出现)"
                             ))
-                            .size(11.0)
+                            .size(theme::fs_px(11.0))
                             .color(p.muted),
                         );
                     } else {
@@ -749,17 +747,17 @@ fn draw_detail(
                             .num_columns(4)
                             .spacing([12.0, 4.0])
                             .show(ui, |ui| {
-                                ui.label(RichText::new(ui_kit::t!("Group", "组名")).size(10.5).color(p.muted));
-                                ui.label(RichText::new(ui_kit::t!("Consumers", "消费者")).size(10.5).color(p.muted));
-                                ui.label(RichText::new(ui_kit::t!("Pending", "待确认")).size(10.5).color(p.muted));
-                                ui.label(RichText::new(ui_kit::t!("Last Delivered", "最后投递")).size(10.5).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("Group", "组名")).size(theme::fs_px(10.5)).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("Consumers", "消费者")).size(theme::fs_px(10.5)).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("Pending", "待确认")).size(theme::fs_px(10.5)).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("Last Delivered", "最后投递")).size(theme::fs_px(10.5)).color(p.muted));
                                 ui.end_row();
                                 for g in groups {
-                                    ui.label(RichText::new(icons::clip(&g.name, 30)).size(11.5).color(p.text));
-                                    ui.label(RichText::new(g.consumers.to_string()).size(11.5).color(p.text));
+                                    ui.label(RichText::new(icons::clip(&g.name, 30)).size(theme::fs_px(11.5)).color(p.text));
+                                    ui.label(RichText::new(g.consumers.to_string()).size(theme::fs_px(11.5)).color(p.text));
                                     ui.label(
                                         RichText::new(g.pending.to_string())
-                                            .size(11.5)
+                                            .size(theme::fs_px(11.5))
                                             .color(if g.pending > 0 { p.red } else { p.muted }),
                                     );
                                     ui.label(RichText::new(icons::clip(&g.last_delivered, 30)).font(theme::mono(11.0)).color(p.text2));
@@ -842,7 +840,7 @@ fn draw_detail(
                 );
                 ui.painter().rect_stroke(
                     r2,
-                    egui::CornerRadius::same(6),
+                    egui::CornerRadius::same(theme::radius_ctrl() as u8),
                     egui::Stroke::new(1.0, if resp.hovered() { p.accent } else { p.border }),
                     egui::StrokeKind::Inside,
                 );
@@ -850,7 +848,7 @@ fn draw_detail(
                     r2.center(),
                     egui::Align2::CENTER_CENTER,
                     label,
-                    egui::FontId::proportional(11.5),
+                    egui::FontId::proportional(theme::fs_px(11.5)),
                     if resp.hovered() { p.accent } else { p.muted },
                 );
                 if resp.clicked() {
@@ -992,7 +990,7 @@ fn draw_pair_row(
             er.center(),
             egui::Align2::CENTER_CENTER,
             ui_kit::t!("Edit", "编辑"),
-            egui::FontId::proportional(10.5),
+            egui::FontId::proportional(theme::fs_px(10.5)),
             ecol,
         );
         if eres.clicked() {
@@ -1053,7 +1051,7 @@ fn draw_new_key_modal(
             let st = rt.new_key.as_mut().unwrap();
             theme::form_field(ui, ui_kit::t!("Key Name", "key 名称"), "rk-name", &mut st.name, 500.0, false);
             // 类型分段
-            ui.label(RichText::new(ui_kit::t!("Type", "类型")).size(11.0).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Type", "类型")).size(theme::fs_px(11.0)).color(p.muted));
             ui.add_space(2.0);
             segmented_key_type(ui, &mut st.kind, 500.0);
             if st.kind == 0 {
@@ -1065,13 +1063,13 @@ fn draw_new_key_modal(
                     3 => ui_kit::t!("One member per line", "每行一个成员"),
                     _ => ui_kit::t!("One per line: member score (e.g. Alice 98)", "每行一条:member score(如 张三 98)"),
                 };
-                ui.label(RichText::new(hint).size(11.0).color(p.muted));
+                ui.label(RichText::new(hint).size(theme::fs_px(11.0)).color(p.muted));
                 ui.add_space(2.0);
                 theme::form_field_multiline(ui, "", "rk-lines", &mut st.lines, 500.0, 6);
                 let n = parse_pairs(st.kind, &st.lines).len();
                 ui.label(
                     RichText::new(format!("{} {}", n, ui_kit::t!("records", "条记录")))
-                        .size(11.5)
+                        .size(theme::fs_px(11.5))
                         .color(p.accent),
                 );
             }
@@ -1111,10 +1109,10 @@ fn segmented_key_type(ui: &mut egui::Ui, value: &mut u8, width: f32) {
     let p = theme::c();
     let h = 30.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), Sense::hover());
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(8), p.bg);
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(theme::radius_card() as u8), p.bg);
     ui.painter().rect_stroke(
         rect,
-        egui::CornerRadius::same(8),
+        egui::CornerRadius::same(theme::radius_card() as u8),
         egui::Stroke::new(1.0, p.border),
         egui::StrokeKind::Inside,
     );
@@ -1128,13 +1126,13 @@ fn segmented_key_type(ui: &mut egui::Ui, value: &mut u8, width: f32) {
         let sel = *value as usize == i;
         if sel {
             ui.painter()
-                .rect_filled(seg.shrink(2.0), egui::CornerRadius::same(6), p.elevated);
+                .rect_filled(seg.shrink(2.0), egui::CornerRadius::same(theme::radius_ctrl() as u8), p.elevated);
         }
         ui.painter().text(
             seg.center(),
             egui::Align2::CENTER_CENTER,
             *label,
-            if sel { theme::bold(11.5) } else { egui::FontId::proportional(11.5) },
+            if sel { theme::bold(11.5) } else { egui::FontId::proportional(theme::fs_px(11.5)) },
             if sel { p.text } else { p.text2 },
         );
         let resp = ui.interact(seg, egui::Id::new(("rk-type", i)), Sense::click());
@@ -1225,7 +1223,7 @@ fn draw_analyze_modal(
                     run = true;
                 }
                 if a.running {
-                    ui.add(egui::Spinner::new().size(12.0).color(p.muted));
+                    ui.add(egui::Spinner::new().size(theme::fs_px(12.0)).color(p.muted));
                 }
             });
             ui.label(
@@ -1240,12 +1238,12 @@ fn draw_analyze_modal(
                         "SCAN 采样 + MEMORY USAGE 批量统计,按内存降序;>64KB 黄色、>1MB 红色高亮"
                     )
                 })
-                .size(11.0)
+                .size(theme::fs_px(11.0))
                 .color(p.muted),
             );
             ui.add_space(4.0);
             if let Some(err) = &a.error {
-                ui.label(RichText::new(icons::clip(err, 120)).size(12.0).color(p.red));
+                ui.label(RichText::new(icons::clip(err, 120)).size(theme::fs_px(12.0)).color(p.red));
                 ui.add_space(4.0);
             }
             if a.ran && !a.running {
@@ -1256,7 +1254,7 @@ fn draw_analyze_modal(
                     .show(ui, |ui| {
                         if a.stats.is_empty() {
                             ui.centered_and_justified(|ui| {
-                                ui.label(RichText::new(ui_kit::t!("No keys found", "没有扫描到 key")).size(12.0).color(p.muted));
+                                ui.label(RichText::new(ui_kit::t!("No keys found", "没有扫描到 key")).size(theme::fs_px(12.0)).color(p.muted));
                             });
                             return;
                         }
@@ -1269,16 +1267,16 @@ fn draw_analyze_modal(
                             .max(1) as f32;
                         // 表头
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("#").size(10.5).color(p.muted));
-                            ui.add_sized([300.0, 16.0], egui::Label::new(RichText::new("key").size(10.5).color(p.muted)));
-                            ui.add_sized([60.0, 16.0], egui::Label::new(RichText::new(ui_kit::t!("Type", "类型")).size(10.5).color(p.muted)));
+                            ui.label(RichText::new("#").size(theme::fs_px(10.5)).color(p.muted));
+                            ui.add_sized([300.0, 16.0], egui::Label::new(RichText::new("key").size(theme::fs_px(10.5)).color(p.muted)));
+                            ui.add_sized([60.0, 16.0], egui::Label::new(RichText::new(ui_kit::t!("Type", "类型")).size(theme::fs_px(10.5)).color(p.muted)));
                             ui.add_sized([90.0, 16.0], egui::Label::new(
                                 RichText::new(if a.mode == 1 {
                                     ui_kit::t!("Freq", "频率")
                                 } else {
                                     ui_kit::t!("Memory", "内存")
                                 })
-                                .size(10.5)
+                                .size(theme::fs_px(10.5))
                                 .color(p.muted),
                             ));
                         });
@@ -1295,7 +1293,7 @@ fn draw_analyze_modal(
                                 egui::pos2(rect.left() + 8.0, rect.center().y),
                                 egui::Align2::LEFT_CENTER,
                                 format!("{}", i + 1),
-                                egui::FontId::proportional(10.5),
+                                egui::FontId::proportional(theme::fs_px(10.5)),
                                 p.muted,
                             );
                             let g = icons::text_galley(ui.painter(), s.key.clone(), theme::mono(11.5), Color32::PLACEHOLDER, 290.0);
@@ -1308,7 +1306,7 @@ fn draw_analyze_modal(
                                 egui::pos2(rect.left() + 332.0, rect.center().y),
                                 egui::Align2::LEFT_CENTER,
                                 type_label(&s.key_type).to_string(),
-                                egui::FontId::proportional(10.0),
+                                egui::FontId::proportional(theme::fs_px(10.0)),
                                 p.red,
                             );
                             let val_txt = if a.mode == 1 {
@@ -1332,7 +1330,7 @@ fn draw_analyze_modal(
                             } else if s.mem > 1024 * 1024 {
                                 p.red
                             } else if s.mem > 64 * 1024 {
-                                ORANGE
+                                theme::c().orange
                             } else {
                                 theme::tint(p.accent, 120)
                             };
@@ -1356,7 +1354,7 @@ fn draw_analyze_modal(
             theme::modal_footer(ui, |ui| {
                 ui.label(
                     RichText::new(ui_kit::t!("Click a row to jump to the key", "点击行跳到对应 key"))
-                        .size(11.0)
+                        .size(theme::fs_px(11.0))
                         .color(p.muted),
                 );
             });
@@ -1410,7 +1408,7 @@ fn seg_one(ui: &mut egui::Ui, label: &str, selected: bool, w: f32) -> bool {
         rect.center(),
         egui::Align2::CENTER_CENTER,
         label,
-        if selected { theme::bold(11.5) } else { egui::FontId::proportional(11.5) },
+        if selected { theme::bold(11.5) } else { egui::FontId::proportional(theme::fs_px(11.5)) },
         if selected { p.text } else { p.text2 },
     );
     resp.clicked()
@@ -1452,7 +1450,7 @@ fn draw_edit_string_modal(
             theme::modal_title(ui, &format!("{}:{key}", ui_kit::t!("Edit", "编辑")));
             ui.spacing_mut().item_spacing.y = 10.0;
             let v = rt.edit_value.as_mut().unwrap();
-            ui.label(RichText::new(ui_kit::t!("Content", "内容")).size(11.0).color(p.muted));
+            ui.label(RichText::new(ui_kit::t!("Content", "内容")).size(theme::fs_px(11.0)).color(p.muted));
             ui.add_space(4.0);
             ui.add(
                 egui::TextEdit::multiline(v)
