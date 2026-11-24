@@ -550,6 +550,7 @@ mod tests {
             affected: 0,
             truncated: false,
             elapsed_ms: 0,
+            column_types: vec![],
         }
     }
 

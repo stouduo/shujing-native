@@ -63,17 +63,21 @@ pub fn cell_text(v: &Value) -> Option<String> {
     }
 }
 
-/// JSONCompact 响应 → (列名, 行);meta.name / data[[...]]
-pub fn parse_json_compact(body: &str, max: usize) -> Result<(Vec<String>, Vec<Vec<Option<String>>>, bool), String> {
+/// JSONCompact 响应 → (列名, 列类型, 行, 是否超出 max);meta.name / meta.type / data[[...]]
+pub fn parse_json_compact(
+    body: &str,
+    max: usize,
+) -> Result<(Vec<String>, Vec<String>, Vec<Vec<Option<String>>>, bool), String> {
     let v: Value = serde_json::from_str(body).map_err(|e| format!("ClickHouse 响应解析失败: {e}"))?;
-    let columns: Vec<String> = v["meta"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .map(|m| m["name"].as_str().unwrap_or("").to_string())
-                .collect()
-        })
-        .unwrap_or_default();
+    let meta: Vec<&Value> = v["meta"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
+    let columns: Vec<String> = meta
+        .iter()
+        .map(|m| m["name"].as_str().unwrap_or("").to_string())
+        .collect();
+    let column_types: Vec<String> = meta
+        .iter()
+        .map(|m| m["type"].as_str().unwrap_or("").to_string())
+        .collect();
     let all = v["data"].as_array().cloned().unwrap_or_default();
     let truncated = all.len() > max;
     let rows = all
@@ -85,7 +89,7 @@ pub fn parse_json_compact(body: &str, max: usize) -> Result<(Vec<String>, Vec<Ve
                 .unwrap_or_default()
         })
         .collect();
-    Ok((columns, rows, truncated))
+    Ok((columns, column_types, rows, truncated))
 }
 
 async fn exec_text(
@@ -144,13 +148,14 @@ pub async fn query(
     let kw = first_keyword(sql);
     if is_select_kw(&kw) {
         let body = exec_text(st, &format!("{sql}\nFORMAT JSONCompact"), database).await?;
-        let (columns, rows, truncated) = parse_json_compact(&body, max)?;
+        let (columns, column_types, rows, truncated) = parse_json_compact(&body, max)?;
         Ok(crate::model::ExecResult {
             columns,
             rows,
             affected: 0,
             truncated,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            column_types,
         })
     } else {
         exec_text(st, sql, database).await?;
@@ -160,6 +165,7 @@ pub async fn query(
             affected: 0,
             truncated: false,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            column_types: vec![],
         })
     }
 }
@@ -173,7 +179,7 @@ pub async fn list_databases(
         None,
     )
     .await?;
-    let (_, rows, _) = parse_json_compact(&body, 10_000)?;
+    let (_, _, rows, _) = parse_json_compact(&body, 10_000)?;
     Ok(rows.into_iter().flatten().flatten().collect())
 }
 
@@ -190,7 +196,7 @@ pub async fn list_tables(
         None,
     )
     .await?;
-    let (_, rows, _) = parse_json_compact(&body, 10_000)?;
+    let (_, _, rows, _) = parse_json_compact(&body, 10_000)?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -225,7 +231,7 @@ pub async fn structure(
         ch_quote(table)
     );
     let body = exec_text(st, &sql, None).await?;
-    let (_, rows, _) = parse_json_compact(&body, 5_000)?;
+    let (_, _, rows, _) = parse_json_compact(&body, 5_000)?;
     let mut columns = Vec::with_capacity(rows.len());
     for r in rows {
         let get = |i: usize| -> Option<String> { r.get(i).cloned().flatten() };
@@ -274,7 +280,7 @@ pub async fn count(
         None,
     )
     .await?;
-    let (_, rows, _) = parse_json_compact(&body, 10)?;
+    let (_, _, rows, _) = parse_json_compact(&body, 10)?;
     Ok(rows
         .first()
         .and_then(|r| r.first())
@@ -319,8 +325,9 @@ mod ch_tests {
     fn parse_compact_response() {
         let body = r#"{"meta":[{"name":"id","type":"UInt32"},{"name":"name","type":"String"}],
             "data":[[1,"张三"],[2,null],[3,"李四"],[4,"王五"]],"rows":4,"statistics":{}}"#;
-        let (cols, rows, truncated) = parse_json_compact(body, 3).unwrap();
+        let (cols, types, rows, truncated) = parse_json_compact(body, 3).unwrap();
         assert_eq!(cols, vec!["id".to_string(), "name".to_string()]);
+        assert_eq!(types, vec!["UInt32".to_string(), "String".to_string()]);
         assert_eq!(rows.len(), 3);
         assert!(truncated);
         assert_eq!(rows[1][1], None);

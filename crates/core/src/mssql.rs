@@ -51,8 +51,9 @@ pub async fn query(
         .simple_query(sql)
         .await
         .map_err(|e| format!("SQL Server: {e}"))?;
-    // 行名来自首行;行前拿列名的 api 是 async(Option<&[Column]>),用首行列数兜底
+    // 行名/列类型来自首行;行前拿列名的 api 是 async(Option<&[Column]>),用首行兜底
     let mut columns: Vec<String> = Vec::new();
+    let mut column_types: Vec<String> = Vec::new();
     let mut rows: Vec<Vec<Option<String>>> = Vec::new();
     let batch = rs
         .into_first_result()
@@ -69,6 +70,15 @@ pub async fn query(
                     .unwrap_or_else(|| format!("col{i}"))
             })
             .collect();
+        column_types = (0..first.len())
+            .map(|i| {
+                first
+                    .columns()
+                    .get(i)
+                    .map(|c| mssql_type_name(c.column_type()).to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
     }
     for row in &batch {
         if rows.len() >= max_rows {
@@ -82,7 +92,46 @@ pub async fn query(
         affected: 0,
         truncated: false,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        column_types,
     })
+}
+
+/// SQL Server 列类型(TDS 类型码)→ 类型名。变长类型码(Intn/Floatn 等)的实际
+/// 宽度只在 TypeInfo 里,按最常见的宽度给名。
+pub(crate) fn mssql_type_name(ct: tiberius::ColumnType) -> &'static str {
+    use tiberius::ColumnType as CT;
+    match ct {
+        CT::Null => "",
+        CT::Bit | CT::Bitn => "bit",
+        CT::Int1 => "tinyint",
+        CT::Int2 => "smallint",
+        CT::Int4 | CT::Intn => "int",
+        CT::Int8 => "bigint",
+        CT::Datetime4 => "smalldatetime",
+        CT::Datetime | CT::Datetimen => "datetime",
+        CT::Datetime2 => "datetime2",
+        CT::DatetimeOffsetn => "datetimeoffset",
+        CT::Daten => "date",
+        CT::Timen => "time",
+        CT::Float4 => "real",
+        CT::Float8 | CT::Floatn => "float",
+        CT::Money => "money",
+        CT::Money4 => "smallmoney",
+        CT::Decimaln | CT::Numericn => "decimal",
+        CT::Guid => "uniqueidentifier",
+        CT::BigVarBin => "varbinary",
+        CT::BigBinary => "binary",
+        CT::BigVarChar => "varchar",
+        CT::BigChar => "char",
+        CT::NVarchar => "nvarchar",
+        CT::NChar => "nchar",
+        CT::Xml => "xml",
+        CT::Udt => "udt",
+        CT::Text => "text",
+        CT::Image => "image",
+        CT::NText => "ntext",
+        CT::SSVariant => "sql_variant",
+    }
 }
 
 /// 表结构(sys.columns;类型含长度)

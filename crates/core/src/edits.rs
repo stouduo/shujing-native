@@ -211,6 +211,7 @@ pub async fn apply_changes(
                     affected: 0,
                     truncated: false,
                     elapsed_ms: started.elapsed().as_millis() as u64,
+                    column_types: vec![],
                 });
             }
             let params = serde_json::json!({
@@ -225,6 +226,7 @@ pub async fn apply_changes(
                 affected,
                 truncated: false,
                 elapsed_ms: started.elapsed().as_millis() as u64,
+                column_types: vec![],
             });
         }
         #[cfg(feature = "heavy-mw")]
@@ -286,6 +288,7 @@ pub async fn apply_changes(
         affected,
         truncated: false,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        column_types: vec![],
     })
 }
 

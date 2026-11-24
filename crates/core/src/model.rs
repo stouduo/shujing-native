@@ -542,6 +542,19 @@ pub struct ExecResult {
     pub affected: u64,
     pub truncated: bool,
     pub elapsed_ms: u64,
+    /// 各列的类型名,与 `columns` 等长;来源是服务端自报(MySQL 列类型码 /
+    /// PG 类型 OID / SQL Server TDS 类型 / ClickHouse meta.type / 插件可选
+    /// `columnTypes`)。SQLite 只有表列有声明类型,表达式列按实际值推断;
+    /// 驱动给不出类型的列为空串。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub column_types: Vec<String>,
+}
+
+impl ExecResult {
+    /// 第 `i` 列的类型名;越界或驱动没给出时为空串
+    pub fn column_type(&self, i: usize) -> &str {
+        self.column_types.get(i).map(String::as_str).unwrap_or("")
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

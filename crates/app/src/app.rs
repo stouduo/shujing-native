@@ -2728,6 +2728,7 @@ impl ShujingApp {
                     affected: 0,
                     truncated: false,
                     elapsed_ms: 0,
+                    column_types: vec![],
                 });
             let _ = tx.send(BgEvent::RowsLoaded {
                 tab_id: tab_id.clone(),
@@ -2941,6 +2942,7 @@ impl ShujingApp {
                     affected: 0,
                     elapsed_ms: 0,
                     truncated: false,
+                    column_types: vec![],
                 }]
             });
             let _ = tx.send(BgEvent::QueryDone { tab_id, result, meta });

@@ -219,6 +219,7 @@ async fn cmd_query(service: &Service, conns: &[ConnInfo], rest: &[String]) -> i3
                     .map(|r| {
                         serde_json::json!({
                             "columns": r.columns,
+                            "columnTypes": r.column_types,
                             "rows": r.rows,
                             "affected": r.affected,
                             "truncated": r.truncated,

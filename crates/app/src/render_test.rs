@@ -793,6 +793,14 @@ fn render_query_view() {
             "status".into(),
             "created".into(),
         ],
+        // 驱动自报的类型(MySQL 文本协议写法):表头第二行的小字
+        column_types: vec![
+            "int unsigned".into(),
+            "varchar".into(),
+            "varchar".into(),
+            "tinyint".into(),
+            "datetime".into(),
+        ],
         rows,
         affected: 0,
         truncated: false,
@@ -1427,6 +1435,7 @@ fn render_modals_visual_sweep() {
         affected: 0,
         truncated: false,
         elapsed_ms: 42,
+        column_types: vec![],
     };
     let mut q = test_query_tab();
     q.sql = "SELECT * FROM big_table_0 WHERE a = 1 ORDER BY b".into();
@@ -2618,6 +2627,7 @@ fn query_grid_frozen_columns_pin() {
         affected: 0,
         truncated: false,
         elapsed_ms: 12,
+        column_types: vec![],
     }];
     let conns = vec![shujing_core::ConnInfo {
         id: "c1".into(),

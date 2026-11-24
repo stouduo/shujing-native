@@ -35,14 +35,48 @@ pub fn fmt_mysql_value(value: &mysql_async::Value) -> Option<String> {
     })
 }
 
-fn one(columns: Vec<String>, rows: Vec<Vec<Option<String>>>, truncated: bool, affected: u64, started: Instant) -> Vec<ExecResult> {
+fn one(
+    columns: Vec<String>,
+    column_types: Vec<String>,
+    rows: Vec<Vec<Option<String>>>,
+    truncated: bool,
+    affected: u64,
+    started: Instant,
+) -> Vec<ExecResult> {
     vec![ExecResult {
         columns,
         rows,
         affected,
         truncated,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        column_types,
     }]
+}
+
+/// SQLite 表达式列没有声明类型,按实际值推断:位次 NULL < INTEGER < REAL < TEXT < BLOB,
+/// 同列出现多种值类型时取最宽的(整数列里混了小数 → REAL)。
+fn widen_sqlite(ty: &mut Option<&'static str>, v: rusqlite::types::ValueRef<'_>) {
+    use rusqlite::types::ValueRef;
+    let (rank, name) = match v {
+        ValueRef::Null => return,
+        ValueRef::Integer(_) => (1, "INTEGER"),
+        ValueRef::Real(_) => (2, "REAL"),
+        ValueRef::Text(_) => (3, "TEXT"),
+        ValueRef::Blob(_) => (4, "BLOB"),
+    };
+    if ty.map_or(0, |t| sqlite_rank(t)) < rank {
+        *ty = Some(name);
+    }
+}
+
+fn sqlite_rank(ty: &str) -> u8 {
+    match ty {
+        "INTEGER" => 1,
+        "REAL" => 2,
+        "TEXT" => 3,
+        "BLOB" => 4,
+        _ => 0,
+    }
 }
 
 /// 按分号拆分多语句,正确跳过字符串/标识符引号、注释,以及
@@ -203,6 +237,13 @@ fn run_sqlite(conn: &rusqlite::Connection, sql: &str, max: usize) -> Result<Vec<
                 let columns: Vec<String> = (0..n)
                     .map(|i| stmt.column_name(i).map(str::to_string).unwrap_or_else(|_| "?".into()))
                     .collect();
+                // 类型:表列用声明类型;表达式列声明为空,读行时按值推断
+                let decl: Vec<Option<String>> = stmt
+                    .columns()
+                    .iter()
+                    .map(|c| c.decl_type().map(str::to_owned).filter(|t| !t.is_empty()))
+                    .collect();
+                let mut inferred = vec![None::<&'static str>; n];
                 let mut out: Vec<Vec<Option<String>>> = Vec::new();
                 let mut truncated = false;
                 let mut rows = stmt.query([]).map_err(es)?;
@@ -210,7 +251,9 @@ fn run_sqlite(conn: &rusqlite::Connection, sql: &str, max: usize) -> Result<Vec<
                     if out.len() >= max { truncated = true; break; }
                     let mut vals = Vec::with_capacity(n);
                     for i in 0..n {
-                        vals.push(match row.get_ref(i).map_err(es)? {
+                        let vr = row.get_ref(i).map_err(es)?;
+                        widen_sqlite(&mut inferred[i], vr);
+                        vals.push(match vr {
                             rusqlite::types::ValueRef::Null => None,
                             rusqlite::types::ValueRef::Integer(v) => Some(v.to_string()),
                             rusqlite::types::ValueRef::Real(v) => Some(fmt_f64(v)),
@@ -223,20 +266,116 @@ fn run_sqlite(conn: &rusqlite::Connection, sql: &str, max: usize) -> Result<Vec<
                     out.push(vals);
                 }
                 let affected = out.len() as u64;
-                Ok(one(columns, out, truncated, affected, started))
+                let types = (0..n)
+                    .map(|i| {
+                        decl[i]
+                            .clone()
+                            .or_else(|| inferred[i].map(str::to_owned))
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                Ok(one(columns, types, out, truncated, affected, started))
             } else {
                 let affected = stmt.execute([]).map_err(es)? as u64;
-                Ok(one(vec![], vec![], false, affected, started))
+                Ok(one(vec![], vec![], vec![], false, affected, started))
             }
         }
         Err(e) => {
             if sql.contains(';') {
                 conn.execute_batch(sql).map_err(|e2| format!("{e2}"))?;
-                Ok(one(vec![], vec![], false, 0, started))
+                Ok(one(vec![], vec![], vec![], false, 0, started))
             } else {
                 Err(es(e))
             }
         }
+    }
+}
+
+/// MySQL 列类型码 → 类型名(小写,写法同 information_schema.COLUMNS.DATA_TYPE)。
+///
+/// 文本协议回包的类型码比 information_schema 粗,三处得靠别的字段区分
+/// (规则取自 MySQL 8.4 实测,见 live_mysql_reports_server_column_types):
+/// - 是不是二进制数据看字符集编号 63(binary),不看 BINARY_FLAG——时间、JSON、
+///   utf8mb4_bin 排序规则的 VARCHAR 都带 BINARY_FLAG;
+/// - ENUM / SET 与 CHAR 共用 MYSQL_TYPE_STRING,靠 ENUM_FLAG / SET_FLAG;
+/// - TEXT / BLOB 各四档,表列多数只回裸 MYSQL_TYPE_BLOB,靠 column_length 分档。
+/// 变体逐条列全:驱动新增类型时编译报错,而不是静默变空串。
+fn mysql_type_name(c: &mysql_async::Column) -> String {
+    use mysql_async::consts::ColumnFlags as F;
+    use mysql_async::consts::ColumnType as CT;
+    /// binary 字符集的编号
+    const BINARY_CHARSET: u16 = 63;
+    let ct = c.column_type();
+    let flags = c.flags();
+    let binary = c.character_set() == BINARY_CHARSET;
+    let len = u64::from(c.column_length());
+    // 大对象四档:类型码自带档位的以码为准(GROUP_CONCAT 回 LONG_BLOB);
+    // 文本档的上限按服务器给的显示宽度(已含 utf8mb4 的 4 倍)
+    let (lobs, limits): ([&str; 4], [u64; 3]) = if binary {
+        (["tinyblob", "blob", "mediumblob", "longblob"], [255, 65_535, 16_777_215])
+    } else {
+        (["tinytext", "text", "mediumtext", "longtext"], [1020, 262_140, 67_108_860])
+    };
+    let lobs_by_len = || lobs[limits.iter().position(|l| len <= *l).unwrap_or(3)];
+    let name: &str = match ct {
+        CT::MYSQL_TYPE_DECIMAL | CT::MYSQL_TYPE_NEWDECIMAL => "decimal",
+        CT::MYSQL_TYPE_TINY => "tinyint",
+        CT::MYSQL_TYPE_SHORT => "smallint",
+        CT::MYSQL_TYPE_LONG => "int",
+        CT::MYSQL_TYPE_INT24 => "mediumint",
+        CT::MYSQL_TYPE_LONGLONG => "bigint",
+        CT::MYSQL_TYPE_FLOAT => "float",
+        CT::MYSQL_TYPE_DOUBLE => "double",
+        CT::MYSQL_TYPE_BIT => "bit",
+        CT::MYSQL_TYPE_YEAR => "year",
+        CT::MYSQL_TYPE_TIMESTAMP | CT::MYSQL_TYPE_TIMESTAMP2 => "timestamp",
+        CT::MYSQL_TYPE_DATETIME | CT::MYSQL_TYPE_DATETIME2 => "datetime",
+        CT::MYSQL_TYPE_DATE | CT::MYSQL_TYPE_NEWDATE => "date",
+        CT::MYSQL_TYPE_TIME | CT::MYSQL_TYPE_TIME2 => "time",
+        CT::MYSQL_TYPE_JSON => "json",
+        CT::MYSQL_TYPE_ENUM => "enum",
+        CT::MYSQL_TYPE_SET => "set",
+        CT::MYSQL_TYPE_GEOMETRY => "geometry",
+        CT::MYSQL_TYPE_VECTOR => "vector",
+        CT::MYSQL_TYPE_STRING => {
+            if flags.contains(F::ENUM_FLAG) {
+                "enum"
+            } else if flags.contains(F::SET_FLAG) {
+                "set"
+            } else if binary {
+                "binary"
+            } else {
+                "char"
+            }
+        }
+        CT::MYSQL_TYPE_VARCHAR | CT::MYSQL_TYPE_VAR_STRING => {
+            if binary { "varbinary" } else { "varchar" }
+        }
+        CT::MYSQL_TYPE_TINY_BLOB => lobs[0],
+        CT::MYSQL_TYPE_MEDIUM_BLOB => lobs[2],
+        CT::MYSQL_TYPE_LONG_BLOB => lobs[3],
+        CT::MYSQL_TYPE_BLOB => lobs_by_len(),
+        // 字面 NULL / 复制专用 / 未知:没有可报的类型
+        CT::MYSQL_TYPE_NULL | CT::MYSQL_TYPE_TYPED_ARRAY | CT::MYSQL_TYPE_UNKNOWN => "",
+    };
+    let signed = matches!(
+        ct,
+        CT::MYSQL_TYPE_TINY
+            | CT::MYSQL_TYPE_SHORT
+            | CT::MYSQL_TYPE_INT24
+            | CT::MYSQL_TYPE_LONG
+            | CT::MYSQL_TYPE_LONGLONG
+            | CT::MYSQL_TYPE_DECIMAL
+            | CT::MYSQL_TYPE_NEWDECIMAL
+            | CT::MYSQL_TYPE_FLOAT
+            | CT::MYSQL_TYPE_DOUBLE
+    );
+    if name.is_empty() {
+        String::new()
+    } else if signed && flags.contains(F::UNSIGNED_FLAG) {
+        format!("{name} unsigned")
+    } else {
+        name.to_owned()
     }
 }
 
@@ -250,6 +389,7 @@ async fn run_mysql_single(
     let started = Instant::now();
     let mut result = conn.query_iter(sql).await.map_err(es)?;
     let columns: Vec<String> = result.columns_ref().iter().map(|c| c.name_str().to_string()).collect();
+    let column_types: Vec<String> = result.columns_ref().iter().map(mysql_type_name).collect();
     if columns.is_empty() {
         let affected = result.affected_rows();
         result.drop_result().await.map_err(es)?;
@@ -259,6 +399,7 @@ async fn run_mysql_single(
             affected,
             truncated: false,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            column_types,
         })
     } else {
         let mut out: Vec<Vec<Option<String>>> = Vec::new();
@@ -306,6 +447,7 @@ async fn run_mysql_single(
             affected,
             truncated,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            column_types,
         })
     }
 }
@@ -376,6 +518,8 @@ async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Resul
                         affected,
                         truncated,
                         elapsed_ms: 0,
+                        // PG 驱动的简单查询协议只保留列名(类型 OID 被丢弃),类型留空
+                        column_types: vec![],
                     });
                     truncated = false;
                 }
@@ -390,6 +534,7 @@ async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Resul
                 affected,
                 truncated,
                 elapsed_ms: 0,
+                column_types: vec![],
             });
         }
         let elapsed = started.elapsed().as_millis() as u64;
@@ -403,6 +548,7 @@ async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Resul
                 affected: 0,
                 truncated: false,
                 elapsed_ms: elapsed,
+                column_types: vec![],
             });
         }
         return Ok(results);
@@ -439,6 +585,7 @@ async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Resul
                     affected,
                     truncated: false,
                     elapsed_ms: 0,
+                    column_types: vec![],
                 });
             }
             Some(Err(e)) => return Err(crate::backend::pg_err(e)),
@@ -465,6 +612,7 @@ async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Resul
             affected,
             truncated,
             elapsed_ms: 0,
+            column_types: vec![],
         });
     }
     let elapsed = started.elapsed().as_millis() as u64;
@@ -478,9 +626,23 @@ async fn run_pg(client: &tokio_postgres::Client, sql: &str, max: usize) -> Resul
             affected: 0,
             truncated: false,
             elapsed_ms: elapsed,
+            column_types: vec![],
         });
     }
     Ok(results)
+}
+
+/// 插件响应里的字符串列(如 `columnTypes`):补齐/截断到 `n` 个,缺的为空串。
+/// JSON 输出按列数对齐,界面按下标取值不必再判长短。非字符串项原位留空——
+/// 跳过它会让后面的类型整体错位一格。
+pub fn json_str_column(v: &serde_json::Value, key: &str, n: usize) -> Vec<String> {
+    let mut out: Vec<String> = v
+        .get(key)
+        .and_then(|x| x.as_array())
+        .map(|a| a.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect())
+        .unwrap_or_default();
+    out.resize(n, String::new());
+    out
 }
 
 impl Backend {
@@ -528,12 +690,15 @@ impl Backend {
                     .unwrap_or_default();
                 let affected = r.get("affected").and_then(|v| v.as_u64()).unwrap_or(0);
                 let truncated = r.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false);
+                // 可选字段:插件给不出类型的列留空(契约 v1.2 起)
+                let column_types = json_str_column(&r, "columnTypes", columns.len());
                 return Ok(vec![ExecResult {
                     columns,
                     rows,
                     affected,
                     truncated,
                     elapsed_ms: started2.elapsed().as_millis() as u64,
+                    column_types,
                 }]);
             }
             Backend::MySql(mp) => {
@@ -602,6 +767,7 @@ impl Backend {
                 affected: 0,
                 truncated: false,
                 elapsed_ms: 0,
+                column_types: vec![],
             });
         }
         Ok(results.remove(0))
@@ -655,5 +821,297 @@ mod escape_tests {
     fn delimiter_line_skipped() {
         let stmts = split_statements("DELIMITER ;;\nSELECT 1;\nDELIMITER ;\nSELECT 2;");
         assert_eq!(stmts, vec!["SELECT 1", "SELECT 2"]);
+    }
+}
+
+#[cfg(test)]
+mod column_type_tests {
+    use super::*;
+    use crate::model::Backend;
+
+    async fn sqlite() -> Backend {
+        Backend::Sqlite(rusqlite::Connection::open_in_memory().unwrap())
+    }
+
+    async fn run(b: &mut Backend, sql: &str) -> Vec<ExecResult> {
+        b.run_sql(sql, 100, None, None).await.unwrap()
+    }
+
+    /// 列类型与列名逐位对应:拿不到的列是空串,整列缺失时为空表
+    #[test]
+    fn column_type_accessor_is_bounds_safe() {
+        let mut r = ExecResult::default();
+        assert_eq!(r.column_type(0), "");
+        r.column_types = vec!["int".into()];
+        assert_eq!(r.column_type(0), "int");
+        assert_eq!(r.column_type(7), "");
+    }
+
+    #[tokio::test]
+    async fn sqlite_table_columns_report_declared_type() {
+        let mut b = sqlite().await;
+        run(&mut b, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, price REAL, photo BLOB, note VARCHAR(50))").await;
+        let rs = run(&mut b, "SELECT * FROM t").await;
+        // 空表没有值可推断:全靠声明类型
+        assert_eq!(rs[0].column_types, ["INTEGER", "TEXT", "REAL", "BLOB", "VARCHAR(50)"]);
+        assert_eq!(rs[0].column_types.len(), rs[0].columns.len());
+    }
+
+    #[tokio::test]
+    async fn sqlite_expression_columns_inferred_from_values() {
+        let mut b = sqlite().await;
+        let rs = run(&mut b, "SELECT 1 + 1 AS a, 'x' AS b, 2.5 AS c, x'00ff' AS d, NULL AS e, length('ab') AS n").await;
+        assert_eq!(
+            rs[0].column_types,
+            ["INTEGER", "TEXT", "REAL", "BLOB", "", "INTEGER"]
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_mixed_values_take_the_widest_type() {
+        let mut b = sqlite().await;
+        // 无类型列:声明为空串,只能按值推断;首个值是 NULL 不该定调
+        run(&mut b, "CREATE TABLE t (v)").await;
+        run(&mut b, "INSERT INTO t VALUES (NULL), (1), (2)").await;
+        let rs = run(&mut b, "SELECT v AS n FROM t").await;
+        assert_eq!(rs[0].column_types, ["INTEGER"]);
+        run(&mut b, "INSERT INTO t VALUES (2.5)").await;
+        let rs = run(&mut b, "SELECT v AS n FROM t").await;
+        assert_eq!(rs[0].column_types, ["REAL"]);
+        run(&mut b, "INSERT INTO t VALUES ('text')").await;
+        let rs = run(&mut b, "SELECT v AS n FROM t").await;
+        assert_eq!(rs[0].column_types, ["TEXT"]);
+    }
+
+    #[tokio::test]
+    async fn sqlite_truncated_result_still_has_types() {
+        let mut b = sqlite().await;
+        run(&mut b, "CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1),(2),(3),(4)").await;
+        let rs = b.run_sql("SELECT id FROM t", 2, None, None).await.unwrap();
+        assert!(rs[0].truncated);
+        assert_eq!(rs[0].rows.len(), 2);
+        assert_eq!(rs[0].column_types, ["INTEGER"]);
+    }
+
+    #[tokio::test]
+    async fn sqlite_multi_statement_each_set_carries_its_own_types() {
+        let mut b = sqlite().await;
+        run(&mut b, "CREATE TABLE t (id INTEGER, name TEXT)").await;
+        let rs = run(&mut b, "SELECT id FROM t; SELECT 'a' AS s; INSERT INTO t VALUES (1, 'x'); SELECT name FROM t").await;
+        assert_eq!(rs.len(), 4);
+        assert_eq!(rs[0].column_types, ["INTEGER"]);
+        assert_eq!(rs[1].column_types, ["TEXT"]);
+        // 非查询语句:没有列,也没有类型
+        assert!(rs[2].columns.is_empty() && rs[2].column_types.is_empty());
+        assert_eq!(rs[3].column_types, ["TEXT"]);
+    }
+
+    /// 插件给的列类型按列数对齐:非字符串项置空,多了截断,缺的补空
+    #[test]
+    fn plugin_column_types_are_aligned_to_columns() {
+        let v = serde_json::json!({ "columnTypes": ["int", 7, "text", "extra"] });
+        assert_eq!(json_str_column(&v, "columnTypes", 3), ["int", "", "text"]);
+        assert_eq!(json_str_column(&v, "columnTypes", 5), ["int", "", "text", "extra", ""]);
+        assert_eq!(json_str_column(&v, "missing", 2), ["", ""]);
+        assert_eq!(json_str_column(&serde_json::json!({ "columnTypes": "int" }), "columnTypes", 1), [""]);
+    }
+
+    /// 按 MySQL 回包的四个字段造列定义(类型码 / 标志 / 字符集 / 显示宽度)
+    fn mysql_col(
+        ct: mysql_async::consts::ColumnType,
+        flags: mysql_async::consts::ColumnFlags,
+        charset: u16,
+        len: u32,
+    ) -> String {
+        mysql_type_name(
+            &mysql_async::Column::new(ct)
+                .with_name(b"c")
+                .with_flags(flags)
+                .with_character_set(charset)
+                .with_column_length(len),
+        )
+    }
+
+    /// 文本协议的三个坑:BINARY_FLAG 不等于二进制数据(看字符集 63)、
+    /// ENUM/SET 靠标志位、TEXT/BLOB 四档靠显示宽度
+    #[test]
+    fn mysql_type_names_read_what_the_server_actually_sends() {
+        use mysql_async::consts::ColumnFlags as F;
+        use mysql_async::consts::ColumnType as CT;
+        const UTF8MB4: u16 = 45;
+        const BIN: u16 = 63;
+        let col = |ct: CT| mysql_col(ct, F::empty(), UTF8MB4, 20);
+
+        assert_eq!(col(CT::MYSQL_TYPE_TINY), "tinyint");
+        assert_eq!(col(CT::MYSQL_TYPE_SHORT), "smallint");
+        assert_eq!(col(CT::MYSQL_TYPE_LONG), "int");
+        assert_eq!(col(CT::MYSQL_TYPE_INT24), "mediumint");
+        assert_eq!(col(CT::MYSQL_TYPE_LONGLONG), "bigint");
+        assert_eq!(col(CT::MYSQL_TYPE_NEWDECIMAL), "decimal");
+        assert_eq!(col(CT::MYSQL_TYPE_FLOAT), "float");
+        assert_eq!(col(CT::MYSQL_TYPE_DOUBLE), "double");
+        assert_eq!(col(CT::MYSQL_TYPE_DATETIME), "datetime");
+        assert_eq!(col(CT::MYSQL_TYPE_DATETIME2), "datetime");
+        assert_eq!(col(CT::MYSQL_TYPE_TIMESTAMP), "timestamp");
+        assert_eq!(col(CT::MYSQL_TYPE_DATE), "date");
+        assert_eq!(col(CT::MYSQL_TYPE_TIME), "time");
+        assert_eq!(col(CT::MYSQL_TYPE_JSON), "json");
+        assert_eq!(col(CT::MYSQL_TYPE_GEOMETRY), "geometry");
+        assert_eq!(col(CT::MYSQL_TYPE_VAR_STRING), "varchar");
+        assert_eq!(col(CT::MYSQL_TYPE_VARCHAR), "varchar");
+        assert_eq!(col(CT::MYSQL_TYPE_STRING), "char");
+        assert_eq!(col(CT::MYSQL_TYPE_NULL), "");
+
+        // 数值列带 unsigned
+        assert_eq!(
+            mysql_col(CT::MYSQL_TYPE_LONGLONG, F::UNSIGNED_FLAG, BIN, 20),
+            "bigint unsigned"
+        );
+
+        // BINARY_FLAG 出现在时间 / utf8mb4_bin 的 VARCHAR 上,都不是二进制数据
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_VAR_STRING, F::BINARY_FLAG, UTF8MB4, 40), "varchar");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_TIMESTAMP, F::BINARY_FLAG, BIN, 19), "timestamp");
+        // 字符集 63 才是二进制数据
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_VAR_STRING, F::BINARY_FLAG, BIN, 16), "varbinary");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_VAR_STRING, F::empty(), BIN, 255), "varbinary");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_STRING, F::BINARY_FLAG, BIN, 8), "binary");
+
+        // ENUM / SET 与 CHAR 同码
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_STRING, F::ENUM_FLAG, UTF8MB4, 4), "enum");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_STRING, F::SET_FLAG, UTF8MB4, 12), "set");
+
+        // TEXT 四档:服务器给的显示宽度已含 utf8mb4 的 4 倍
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG, UTF8MB4, 1020), "tinytext");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG, UTF8MB4, 262_140), "text");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG, UTF8MB4, 67_108_860), "mediumtext");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG, UTF8MB4, u32::MAX), "longtext");
+        // 旧服务器按单字节报宽度也能分对档
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG, 8, 255), "tinytext");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG, 8, 65_535), "text");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG, 8, 16_777_215), "mediumtext");
+        // BLOB 四档
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG | F::BINARY_FLAG, BIN, 255), "tinyblob");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG | F::BINARY_FLAG, BIN, 65_535), "blob");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG | F::BINARY_FLAG, BIN, 16_777_215), "mediumblob");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_BLOB, F::BLOB_FLAG | F::BINARY_FLAG, BIN, u32::MAX), "longblob");
+        // 类型码自带档位时以码为准:GROUP_CONCAT 回 LONG_BLOB 而宽度只有 65536
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_LONG_BLOB, F::empty(), UTF8MB4, 65_536), "longtext");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_TINY_BLOB, F::empty(), UTF8MB4, 65_536), "tinytext");
+        assert_eq!(mysql_col(CT::MYSQL_TYPE_MEDIUM_BLOB, F::BINARY_FLAG, BIN, 100), "mediumblob");
+    }
+
+    /// 以下两条要本机测试容器(shujing-mysql:3306 空密码 / shujing-pg:5433 trust),
+    /// 平时忽略:`cargo test -p shujing-core -- --ignored live_`
+    fn live_enabled() -> bool {
+        std::env::var("SHUJING_LIVE_DB").is_ok()
+    }
+
+    async fn mysql_cols_types(conn: &mut mysql_async::Conn, sql: &str) -> (Vec<String>, Vec<String>) {
+        let r = run_mysql(conn, sql, 10, None).await.unwrap().remove(0);
+        (r.columns, r.column_types)
+    }
+
+    /// MySQL 文本协议真实回包:各列类型的类型码由服务器给出,映射对不对只能实连验证
+    #[tokio::test]
+    #[ignore]
+    async fn live_mysql_reports_server_column_types() {
+        if !live_enabled() {
+            return;
+        }
+        use mysql_async::prelude::*;
+        let mut conn = mysql_async::Conn::new(
+            mysql_async::OptsBuilder::default()
+                .ip_or_hostname("127.0.0.1")
+                .tcp_port(3306)
+                .user(Some("root"))
+                .pass(Some("")),
+        )
+        .await
+        .expect("连接本机 MySQL 测试容器");
+        // 临时表只在本连接内存在,连接一断自动消失,不在测试库里留东西
+        run_mysql(&mut conn, "CREATE TEMPORARY TABLE shop.sj_ct (\
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, tiny TINYINT, big BIGINT UNSIGNED, \
+            deci DECIMAL(10,2), f FLOAT, d DOUBLE, bit_c BIT(8), year_c YEAR, \
+            ts TIMESTAMP NULL, dt DATETIME(3), dte DATE, tme TIME(3), js JSON, \
+            en ENUM('a','b'), st SET('x','y'), vc VARCHAR(20), vcb VARCHAR(20) CHARACTER SET binary, \
+            ch CHAR(5), chb BINARY(5), ttx TINYTEXT CHARACTER SET latin1, tx TEXT, mtx MEDIUMTEXT, \
+            ltx LONGTEXT, tbb TINYBLOB, blb BLOB, mbb MEDIUMBLOB, lblb LONGBLOB, vb VARBINARY(16), \
+            vcutf8 VARCHAR(10) COLLATE utf8mb4_bin)", 10, None)
+            .await
+            .unwrap();
+        let (cols, types) = mysql_cols_types(&mut conn, "SELECT * FROM shop.sj_ct").await;
+        assert_eq!(cols.len(), types.len(), "类型须与列名逐位对应");
+        assert_eq!(
+            types,
+            [
+                "int unsigned", "tinyint", "bigint unsigned", "decimal", "float", "double", "bit", "year",
+                "timestamp", "datetime", "date", "time", "json", "enum", "set", "varchar", "varbinary", "char",
+                "binary", "tinytext", "text", "mediumtext", "longtext", "tinyblob", "blob", "mediumblob",
+                "longblob", "varbinary", "varchar",
+            ]
+        );
+        // 表达式列:类型码来自服务器对表达式的推导
+        let (_, types) = mysql_cols_types(&mut conn, "SELECT 1 + 1 AS n, 'x' AS s, NOW() AS t, \
+            NULL AS z, CAST('a' AS BINARY) AS cb, upper(en) AS up, en AS enalias, tx AS txalias, \
+            blb AS blbalias, id * 2 AS doubled, id / 2 AS halved, tiny + 1 AS tinyp, f * 2 AS fp, \
+            en = 'a' AS bl FROM shop.sj_ct").await;
+        assert_eq!(
+            types,
+            [
+                "bigint", "varchar", "datetime", "", "varbinary", "varchar", "enum", "text", "blob",
+                "bigint unsigned", "decimal", "bigint", "double", "bigint",
+            ]
+        );
+        // 聚合:GROUP_CONCAT 回 LONG_BLOB 码,须按码定档而不是按宽度
+        let (_, types) = mysql_cols_types(&mut conn, "SELECT GROUP_CONCAT(id) AS gc, SUM(id) AS sm, \
+            MAX(en) AS men, MAX(vc) AS mvc, MAX(dt) AS mx, COUNT(*) AS c FROM shop.sj_ct").await;
+        assert_eq!(types, ["longtext", "decimal", "char", "varchar", "datetime", "bigint"]);
+    }
+
+    /// PG 简单查询协议拿不到类型:验证降级路径——列照常返回、取类型得空串、不 panic
+    #[tokio::test]
+    #[ignore]
+    async fn live_pg_degrades_to_unknown_types() {
+        if !live_enabled() {
+            return;
+        }
+        let (client, conn) = tokio_postgres::connect(
+            "host=127.0.0.1 port=5433 user=postgres dbname=postgres",
+            tokio_postgres::NoTls,
+        )
+        .await
+        .expect("连接本机 PG 测试容器");
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        let rs = run_pg(&client, "SELECT 1 AS a, 'x' AS b, now() AS c", 10).await.unwrap();
+        assert_eq!(rs[0].columns, ["a", "b", "c"]);
+        assert_eq!(rs[0].rows.len(), 1);
+        assert_eq!(rs[0].column_type(0), "");
+        assert_eq!(rs[0].column_type(9), "");
+        let rs = run_pg(&client, "SELECT 1 AS a; SELECT 'x' AS b", 10).await.unwrap();
+        assert_eq!(rs.len(), 2);
+        assert_eq!(rs[1].columns, ["b"]);
+        assert_eq!(rs[1].column_type(0), "");
+    }
+
+    /// SQL Server TDS 类型码 → 类型名
+    #[test]
+    fn mssql_type_names() {
+        use tiberius::ColumnType as CT;
+        let f = crate::mssql::mssql_type_name;
+        assert_eq!(f(CT::Int1), "tinyint");
+        assert_eq!(f(CT::Int2), "smallint");
+        assert_eq!(f(CT::Int4), "int");
+        assert_eq!(f(CT::Int8), "bigint");
+        assert_eq!(f(CT::Intn), "int");
+        assert_eq!(f(CT::Datetime2), "datetime2");
+        assert_eq!(f(CT::DatetimeOffsetn), "datetimeoffset");
+        assert_eq!(f(CT::Float8), "float");
+        assert_eq!(f(CT::Decimaln), "decimal");
+        assert_eq!(f(CT::Guid), "uniqueidentifier");
+        assert_eq!(f(CT::BigVarBin), "varbinary");
+        assert_eq!(f(CT::NVarchar), "nvarchar");
+        assert_eq!(f(CT::Null), "");
     }
 }
