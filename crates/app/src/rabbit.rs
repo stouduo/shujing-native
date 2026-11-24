@@ -87,39 +87,56 @@ pub fn draw_rabbit_view(
                 .inner_margin(egui::Margin::symmetric(12, 8)),
         )
         .show(ctx, |ui| {
-            ui.label(
-                RichText::new(ui_kit::t!(
-                    "Publish to selected queue (routing_key = queue name via default exchange)",
-                    "发送到选中队列(经默认交换机,路由键=队列名)"
-                ))
-                .size(11.0)
-                .color(p.muted),
-            );
-            ui.horizontal(|ui| {
-                theme::field(
+            let target = r.selected.clone().map(|(_, q)| q).unwrap_or_default();
+            theme::form_row(ui, ui_kit::t!("Queue", "队列"), |ui| {
+                let text = if target.is_empty() {
+                    ui_kit::t!("Select a queue above", "先在上方选队列").to_string()
+                } else {
+                    target.clone()
+                };
+                ui.label(
+                    RichText::new(icons::clip(&text, 40))
+                        .size(12.5)
+                        .color(if target.is_empty() { p.muted } else { p.text }),
+                )
+                .on_hover_text(ui_kit::t!(
+                    "Publish via the default exchange, routing_key = queue name",
+                    "经默认交换机发送,路由键=队列名"
+                ));
+            });
+            ui.add_space(6.0);
+            theme::form_row(ui, ui_kit::t!("Payload", "消息体"), |ui| {
+                theme::field_hint(
                     ui,
                     &format!("rabbit-payload-{tab_id}"),
                     &mut r.send_payload,
-                    ui.available_width() - 110.0,
+                    ui.available_width(),
                     false,
-                );
-                let send = theme::button(
-                    ui,
-                    if r.sending {
-                        ui_kit::t!("Sending…", "发送中…")
-                    } else {
-                        ui_kit::t!("Send", "发送")
-                    },
-                    theme::BtnKind::Primary,
-                );
-                let target = r.selected.clone().map(|(_, q)| q).unwrap_or_default();
-                if send.clicked() && !r.sending && !target.is_empty() && !r.send_payload.is_empty()
-                {
-                    actions.push(TabAction::RabbitSend {
-                        tab_id: tab_id.to_string(),
-                        queue: target,
+                    ui_kit::t!("Message content", "消息内容"),
+                )
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let can = !r.sending && !target.is_empty() && !r.send_payload.is_empty();
+                    let send = ui.add_enabled_ui(can, |ui| {
+                        theme::button(
+                            ui,
+                            if r.sending {
+                                ui_kit::t!("Sending…", "发送中…")
+                            } else {
+                                ui_kit::t!("Send", "发送")
+                            },
+                            theme::BtnKind::Primary,
+                        )
                     });
-                }
+                    if send.inner.clicked() {
+                        actions.push(TabAction::RabbitSend {
+                            tab_id: tab_id.to_string(),
+                            queue: target,
+                        });
+                    }
+                });
             });
         });
 

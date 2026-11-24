@@ -148,14 +148,19 @@ pub fn draw_kv_view(
                 ui.separator();
             }
             // 新建键行
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(ui_kit::t!("New key", "新建键"))
-                        .size(11.0)
-                        .color(p.muted),
-                );
-                theme::field(ui, &format!("kv-new-{tab_id}"), &mut k.new_key, 240.0, false);
-                let cb = theme::button(
+            theme::form_row(ui, ui_kit::t!("New key", "新建键"), |ui| {
+                // form_row 的控件区是竖排布局:字段 + 按钮要自己包一层横向
+                ui.horizontal(|ui| {
+                    theme::field_hint(
+                        ui,
+                        &format!("kv-new-{tab_id}"),
+                        &mut k.new_key,
+                        280.0,
+                        false,
+                        ui_kit::t!("Key name", "键名"),
+                    );
+                    ui.add_space(10.0);
+                    let cb = theme::button(
                     ui,
                     if k.busy {
                         ui_kit::t!("…", "…")
@@ -164,14 +169,15 @@ pub fn draw_kv_view(
                     },
                     theme::BtnKind::Secondary,
                 );
-                if cb.clicked() && !k.busy && !k.new_key.trim().is_empty() {
-                    actions.push(TabAction::KvSave {
-                        tab_id: tab_id.to_string(),
-                        key: k.new_key.trim().to_string(),
-                        value: String::new(),
-                    });
-                    k.new_key.clear();
-                }
+                    if cb.clicked() && !k.busy && !k.new_key.trim().is_empty() {
+                        actions.push(TabAction::KvSave {
+                            tab_id: tab_id.to_string(),
+                            key: k.new_key.trim().to_string(),
+                            value: String::new(),
+                        });
+                        k.new_key.clear();
+                    }
+                });
             });
             ui.add_space(6.0);
             // 键列表

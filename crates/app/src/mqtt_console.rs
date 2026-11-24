@@ -57,46 +57,60 @@ pub fn draw_mqtt_view(
                 .inner_margin(egui::Margin::symmetric(12, 8)),
         )
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(ui_kit::t!("Publish", "发布消息"))
-                        .size(11.0)
-                        .color(p.muted),
-                );
-                theme::field(ui, &format!("mqtt-topic-{tab_id}"), &mut m.pub_topic, 220.0, false);
-                let mut retain = m.pub_retain;
-                if theme::checkbox(ui, &mut retain, &ui_kit::t!("retain", "保留")).changed() {
-                    m.pub_retain = retain;
-                }
+            theme::form_row(ui, ui_kit::t!("Topic", "主题"), |ui| {
+                // form_row 的控件区是竖排布局:多控件要自己包一层横向
+                ui.horizontal(|ui| {
+                    theme::field_hint(
+                        ui,
+                        &format!("mqtt-topic-{tab_id}"),
+                        &mut m.pub_topic,
+                        320.0,
+                        false,
+                        ui_kit::t!("e.g. sensor/temperature", "如 sensor/temperature"),
+                    );
+                    ui.add_space(10.0);
+                    let mut retain = m.pub_retain;
+                    if theme::checkbox(ui, &mut retain, &ui_kit::t!("retain", "保留")).changed() {
+                        m.pub_retain = retain;
+                    }
+                });
             });
-            ui.horizontal(|ui| {
-                theme::field(
+            ui.add_space(6.0);
+            theme::form_row(ui, ui_kit::t!("Payload", "消息体"), |ui| {
+                theme::field_hint(
                     ui,
                     &format!("mqtt-payload-{tab_id}"),
                     &mut m.pub_payload,
-                    ui.available_width() - 120.0,
+                    ui.available_width(),
                     false,
-                );
-                let send = theme::button(
-                    ui,
-                    if m.sending {
-                        ui_kit::t!("Sending…", "发送中…")
-                    } else {
-                        ui_kit::t!("Publish", "发布")
-                    },
-                    theme::BtnKind::Primary,
-                );
-                if send.clicked()
-                    && !m.sending
-                    && !m.pub_topic.trim().is_empty()
-                    && !m.pub_payload.is_empty()
-                {
-                    actions.push(TabAction::MqttPublish {
-                        tab_id: tab_id.to_string(),
-                        topic: m.pub_topic.trim().to_string(),
-                        retain: m.pub_retain,
+                    ui_kit::t!("Message content", "消息内容"),
+                )
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let can = !m.sending
+                        && !m.pub_topic.trim().is_empty()
+                        && !m.pub_payload.is_empty();
+                    let send = ui.add_enabled_ui(can, |ui| {
+                        theme::button(
+                            ui,
+                            if m.sending {
+                                ui_kit::t!("Sending…", "发送中…")
+                            } else {
+                                ui_kit::t!("Publish", "发布")
+                            },
+                            theme::BtnKind::Primary,
+                        )
                     });
-                }
+                    if send.inner.clicked() {
+                        actions.push(TabAction::MqttPublish {
+                            tab_id: tab_id.to_string(),
+                            topic: m.pub_topic.trim().to_string(),
+                            retain: m.pub_retain,
+                        });
+                    }
+                });
             });
         });
 

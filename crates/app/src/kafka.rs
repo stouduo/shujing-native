@@ -148,44 +148,54 @@ pub fn draw_kafka_view(
                 .inner_margin(egui::Margin::symmetric(12, 8)),
         )
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(ui_kit::t!("Publish", "发送消息"))
-                        .size(11.0)
-                        .color(p.muted),
-                );
-                ui.label(RichText::new(ui_kit::t!("key", "key")).size(10.5).color(p.muted));
-                theme::field(ui, &format!("kafka-key-{tab_id}"), &mut k.send_key, 180.0, false);
+            let target = k.selected.clone().unwrap_or_default();
+            theme::form_row(ui, ui_kit::t!("Key", "键"), |ui| {
+                theme::field_hint(
+                    ui,
+                    &format!("kafka-key-{tab_id}"),
+                    &mut k.send_key,
+                    ui.available_width(),
+                    false,
+                    ui_kit::t!("Optional — used for partitioning / compaction", "可选,用于分区 / 压缩"),
+                )
             });
-            ui.horizontal(|ui| {
-                theme::field(
+            ui.add_space(6.0);
+            theme::form_row(ui, ui_kit::t!("Payload", "消息体"), |ui| {
+                theme::field_hint(
                     ui,
                     &format!("kafka-payload-{tab_id}"),
                     &mut k.send_payload,
-                    ui.available_width() - 110.0,
+                    ui.available_width(),
                     false,
-                );
-                let send = theme::button(
-                    ui,
-                    if k.sending {
-                        ui_kit::t!("Sending…", "发送中…")
-                    } else {
-                        ui_kit::t!("Send", "发送")
-                    },
-                    theme::BtnKind::Primary,
-                );
-                let target = k.selected.clone().unwrap_or_default();
-                if send.clicked() && !k.sending && !target.is_empty() && !k.send_payload.is_empty()
-                {
-                    actions.push(TabAction::KafkaSend {
-                        tab_id: tab_id.to_string(),
-                        topic: target,
-                    });
-                }
+                    ui_kit::t!("Message content", "消息内容"),
+                )
             });
-            if let Some(err) = &k.error {
-                ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
-            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if let Some(err) = &k.error {
+                    ui.label(RichText::new(icons::clip(err, 120)).size(11.5).color(p.red));
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let can = !k.sending && !target.is_empty() && !k.send_payload.is_empty();
+                    let send = ui.add_enabled_ui(can, |ui| {
+                        theme::button(
+                            ui,
+                            if k.sending {
+                                ui_kit::t!("Sending…", "发送中…")
+                            } else {
+                                ui_kit::t!("Send", "发送")
+                            },
+                            theme::BtnKind::Primary,
+                        )
+                    });
+                    if send.inner.clicked() {
+                        actions.push(TabAction::KafkaSend {
+                            tab_id: tab_id.to_string(),
+                            topic: target,
+                        });
+                    }
+                });
+            });
         });
 
     egui::CentralPanel::default()

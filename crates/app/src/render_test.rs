@@ -684,6 +684,89 @@ fn render_mongo_v2_modals() {
     });
 }
 
+/// MQTT 控制台:采样列表 + 底部发布表单(与 Kafka 发送区同一套表单语言)
+#[test]
+fn render_mqtt_console() {
+    let mut app = test_app(vec![], 0);
+    let mqtt_tab = crate::app::MqttTab {
+        conn_id: "c1".into(),
+        topics: vec![shujing_core::mqtt::MqttMsg {
+            topic: "sensor/temperature".into(),
+            payload: "{\"c\": 23.5}".into(),
+            bytes: 12,
+            retained: false,
+            binary: false,
+        }],
+        selected: Some("sensor/temperature".into()),
+        loading: false,
+        error: None,
+        pub_topic: String::new(),
+        pub_payload: String::new(),
+        pub_retain: false,
+        sending: false,
+    };
+    let tabs = vec![Tab {
+        id: "m1".into(),
+        title: "MQTT 控制台".into(),
+        kind: TabKind::Mqtt(mqtt_tab),
+    }];
+    let app = test_app(tabs, 0);
+    let app = std::cell::RefCell::new(app);
+    render("mqtt_console", 1100.0, 640.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
+/// RabbitMQ 控制台:队列列表(选中一行)+ 底部发送表单
+#[test]
+fn render_rabbit_console() {
+    let mut app = test_app(vec![], 0);
+    let rabbit_tab = crate::app::RabbitTab {
+        conn_id: "c1".into(),
+        queues: vec![
+            shujing_core::rabbit::RabbitQueue {
+                name: "orders".into(),
+                vhost: "/".into(),
+                messages: 3,
+                messages_ready: 3,
+                messages_unacked: 0,
+                consumers: 1,
+                queue_type: "classic".into(),
+            },
+            shujing_core::rabbit::RabbitQueue {
+                name: "payments".into(),
+                vhost: "/".into(),
+                messages: 0,
+                messages_ready: 0,
+                messages_unacked: 0,
+                consumers: 2,
+                queue_type: "quorum".into(),
+            },
+        ],
+        selected: Some(("/".into(), "orders".into())),
+        msgs: vec![],
+        overview: None,
+        loading: false,
+        error: None,
+        send_key: String::new(),
+        send_payload: String::new(),
+        sending: false,
+        drop_arm: false,
+    };
+    let tabs = vec![Tab {
+        id: "r1".into(),
+        title: "RabbitMQ 控制台".into(),
+        kind: TabKind::Rabbit(rabbit_tab),
+    }];
+    let app = test_app(tabs, 0);
+    let app = std::cell::RefCell::new(app);
+    render("rabbit_console", 1100.0, 640.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
 /// Kafka 控制台读过消息之后:消息网格(两行列头 + 类型小字)与底部发送区
 #[test]
 fn render_kafka_console_msgs() {

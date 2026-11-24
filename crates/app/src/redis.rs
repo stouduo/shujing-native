@@ -797,12 +797,7 @@ fn draw_detail(
                         "zset" => ui_kit::t!("Member", "成员"),
                         _ => ui_kit::t!("Value", "值"),
                     };
-                    let resp_m = ui.add_sized(
-                        [160.0, 24.0],
-                        egui::TextEdit::singleline(&mut mv)
-                            .hint_text(RichText::new(ph).size(11.0).color(p.muted))
-                            .font(theme::mono(12.0)),
-                    );
+                    let resp_m = theme::field_hint(ui, "redis-add-member", &mut mv, 170.0, false, ph);
                     let mut resp_v: Option<egui::Response> = None;
                     if matches!(d.key_type.as_str(), "hash" | "zset") {
                         let ph2 = if d.key_type == "hash" {
@@ -810,12 +805,7 @@ fn draw_detail(
                         } else {
                             ui_kit::t!("Score", "分数")
                         };
-                        resp_v = Some(ui.add_sized(
-                            [140.0, 24.0],
-                            egui::TextEdit::singleline(&mut ev)
-                                .hint_text(RichText::new(ph2).size(11.0).color(p.muted))
-                                .font(theme::mono(12.0)),
-                        ));
+                        resp_v = Some(theme::field_hint(ui, "redis-add-extra", &mut ev, 150.0, false, ph2));
                     }
                     // 任一输入框失焦+回车才提交(全局 Enter 会和模式框等串扰)
                     let entered = (resp_m.lost_focus()
