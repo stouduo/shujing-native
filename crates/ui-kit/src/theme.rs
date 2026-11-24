@@ -808,6 +808,11 @@ pub fn button_ex(
         w = w.max(mw);
     }
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, height), egui::Sense::click());
+    // 手绘按钮没有 egui 原生按钮自带的控件信息:补上无障碍标签,
+    // 读屏器读得出按钮名,kittest 渲染测试也能按标签找按钮点按钮
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
     let painter = ui.painter();
     let hovered = resp.hovered();
     let pressed = resp.is_pointer_button_down_on();

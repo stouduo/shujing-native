@@ -2454,6 +2454,147 @@ fn appbar_buttons_open_modals() {
     );
 }
 
+/// 71 批重排过的弹窗底栏按钮:此前只看过渲染图,没点过。
+/// 按无障碍标签找按钮(theme::button 已补 widget_info),指针模拟点击,
+/// 断言各自的状态变化。设置弹窗的语言开关会改全局 i18n、"打开文件夹"会真开
+/// Finder,不能点;传输的"开始传输"/对比的"运行对比"要走异步任务,也不点。
+#[test]
+fn modal_footer_buttons_work() {
+    use egui_kittest::kittest::Queryable as _;
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let harness_with = |app: ShujingApp,
+                        draw_modal: fn(&mut ShujingApp, &egui::Context),
+                        height: f32|
+     -> egui_kittest::Harness<std::cell::RefCell<ShujingApp>> {
+        let cell = std::cell::RefCell::new(app);
+        let setup_done = std::cell::Cell::new(false);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1100.0, height))
+            .with_pixels_per_point(2.0)
+            .build_state(
+                move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                    if !setup_done.get() {
+                        setup_done.set(true);
+                        ShujingApp::apply_fonts(ctx);
+                        crate::theme::set_dark(true);
+                        crate::theme::apply(ctx);
+                        return;
+                    }
+                    let mut b = app.borrow_mut();
+                    draw_app(&mut b, ctx);
+                    draw_modal(&mut b, ctx);
+                },
+                cell,
+            );
+        harness.run_steps(6);
+        harness
+    };
+    let click = |h: &mut egui_kittest::Harness<std::cell::RefCell<ShujingApp>>, label: &str| {
+        {
+            let node = h.get_by_label(label);
+            node.simulate_click();
+        }
+        h.run_steps(3);
+    };
+
+    // 新增行:取消 → 表单关
+    {
+        let mut app = full_app("role");
+        if let TabKind::Table(t) = &mut app.tabs[2].kind {
+            t.pk_cols = vec!["id".into()];
+            t.pk_loaded = true;
+            t.insert_form = Some(vec![
+                ("id".to_string(), String::new()),
+                ("role".to_string(), String::new()),
+            ]);
+        }
+        // 表单由 draw_table_view 自己画,不用额外叠弹窗
+        let mut h = harness_with(app, |_, _| {}, 720.0);
+        click(&mut h, "取消");
+        assert!(
+            matches!(&h.state().borrow().tabs[2].kind, TabKind::Table(t) if t.insert_form.is_none()),
+            "点「取消」应关闭新增行表单"
+        );
+    }
+    // 新增行:插入(有值) → 表单关并提交(draw_app 丢弃动作,不触发异步写库)
+    {
+        let mut app = full_app("role");
+        if let TabKind::Table(t) = &mut app.tabs[2].kind {
+            t.pk_cols = vec!["id".into()];
+            t.pk_loaded = true;
+            t.insert_form = Some(vec![
+                ("id".to_string(), String::new()),
+                ("role".to_string(), "admin".to_string()),
+            ]);
+        }
+        let mut h = harness_with(app, |_, _| {}, 720.0);
+        click(&mut h, "插入");
+        assert!(
+            matches!(&h.state().borrow().tabs[2].kind, TabKind::Table(t) if t.insert_form.is_none()),
+            "点「插入」应提交并关闭新增行表单"
+        );
+    }
+    // 设置:插件管理按钮 + 完成
+    {
+        let mut app = full_app("role");
+        app.settings_open = true;
+        // 高视口让整份设置内容可见:插件区在 720 下已滚出 ScrollArea,模拟点不到
+        let mut h = harness_with(app, crate::modals::draw_settings_modal, 1400.0);
+        click(&mut h, "插件管理…");
+        assert!(
+            h.state().borrow().plugin_manager_open,
+            "点「插件管理…」应打开插件管理"
+        );
+        // 插件管理浮层本 harness 没画,直接收掉它再点设置的完成
+        h.state().borrow_mut().plugin_manager_open = false;
+        click(&mut h, "完成");
+        assert!(!h.state().borrow().settings_open, "点「完成」应关闭设置弹窗");
+    }
+    // 数据传输:取消
+    {
+        let mut app = full_app("role");
+        let cid = app
+            .conns
+            .iter()
+            .find(|c| c.db_type == shujing_core::DbType::MySql)
+            .map(|c| c.id.clone())
+            .unwrap_or_default();
+        app.open_transfer(&cid, Some("dramato"), "backend_role_privilege");
+        assert!(app.transfer.is_some());
+        let mut h = harness_with(app, crate::modals::draw_transfer_modal, 720.0);
+        click(&mut h, "取消");
+        assert!(h.state().borrow().transfer.is_none(), "点「取消」应关闭数据传输弹窗");
+    }
+    // 数据对比 / 结构对比:关闭
+    {
+        let mut app = full_app("role");
+        let cid = app
+            .conns
+            .iter()
+            .find(|c| c.db_type == shujing_core::DbType::MySql)
+            .map(|c| c.id.clone())
+            .unwrap_or_default();
+        app.open_data_diff(&cid, Some("dramato"), "backend_role_privilege");
+        let mut h = harness_with(app, crate::modals::draw_data_diff_modal, 720.0);
+        click(&mut h, "关闭");
+        assert!(h.state().borrow().data_diff.is_none(), "点「关闭」应关闭数据对比弹窗");
+    }
+    {
+        let mut app = full_app("role");
+        let cid = app
+            .conns
+            .iter()
+            .find(|c| c.db_type == shujing_core::DbType::MySql)
+            .map(|c| c.id.clone())
+            .unwrap_or_default();
+        app.open_schema_diff(&cid, Some("dramato"), "backend_role_privilege");
+        let mut h = harness_with(app, crate::modals::draw_schema_diff_modal, 720.0);
+        click(&mut h, "关闭");
+        assert!(h.state().borrow().schema_diff.is_none(), "点「关闭」应关闭结构对比弹窗");
+    }
+}
+
 #[test]
 fn render_query_autocomplete() {
     let mut q = QueryTab {
