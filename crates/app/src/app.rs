@@ -583,6 +583,12 @@ impl ShujingApp {
             ui_kit::i18n::set_english(true);
         }
         crate::theme::set_accent(accent);
+        // 密度皮肤(标准/紧凑)在 apply 之前恢复,apply 读当前度量
+        let density = settings
+            .as_ref()
+            .and_then(|v| v.get("density").and_then(|x| x.as_u64()))
+            .unwrap_or(0) as usize;
+        crate::theme::set_density(density);
         // 预设显式持久化优先;旧配置只有 dark 布尔 → 基调默认预设;
         // 跟随系统时明暗由系统外观决定(忽略持久化预设,取该基调默认)
         if !follow_system {
@@ -946,6 +952,7 @@ impl ShujingApp {
             "preset": crate::theme::preset_idx(),
             "autoBackup": &self.auto_backup,
             "accent": crate::theme::accent_idx(),
+            "density": crate::theme::density_idx(),
             "followSystem": self.follow_system_theme,
             "ai": &self.ai_config,
             "english": ui_kit::i18n::is_english(),

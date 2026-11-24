@@ -2634,6 +2634,25 @@ fn modal_footer_buttons_work() {
         click(&mut h, "完成");
         assert!(!h.state().borrow().settings_open, "点「完成」应关闭设置弹窗");
     }
+    // 设置:密度切换(紧凑 ↔ 标准)。皮肤 = 色彩预设 × 密度,这是换装入按;
+    // 全局状态必须复原,否则同进程的后续坐标测试全被紧凑档带偏
+    {
+        let mut app = full_app("role");
+        app.settings_open = true;
+        let mut h = harness_with(app, crate::modals::draw_settings_modal, 1400.0);
+        click(&mut h, "紧凑");
+        assert_eq!(
+            crate::theme::density_idx(),
+            1,
+            "点「紧凑」应切到紧凑密度"
+        );
+        click(&mut h, "标准");
+        assert_eq!(
+            crate::theme::density_idx(),
+            0,
+            "点「标准」应切回标准密度"
+        );
+    }
     // 数据传输:取消
     {
         let mut app = full_app("role");
@@ -4966,4 +4985,38 @@ fn korean_and_emoji_glyphs_covered() {
     let img = h2.render().expect("render");
     let _ = std::fs::create_dir_all("/tmp/shujing_ui");
     img.save("/tmp/shujing_ui/korean_emoji.png").unwrap();
+}
+
+/// 紧凑密度整页渲染:Metrics token 真实换装的视觉验证(行高 26/字号 ×0.94)。
+/// 全程持锁 + 结束复原:密度是进程级全局,别泄漏给并行的坐标测试
+#[test]
+fn render_compact_density() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let app = full_app("role");
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 760.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::set_density(1);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let img = harness.render().expect("render 失败");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/compact_density.png")
+        .expect("保存 PNG 失败");
+    crate::theme::set_density(0);
 }
