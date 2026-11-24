@@ -412,32 +412,54 @@ pub enum TypeKind {
 
 /// 把驱动上报的列类型(可带参数或修饰,如 `varchar(128)`、`int unsigned`、
 /// `timestamp with time zone`)归入类别:取首个字母数字词(自然去掉长度/精度括号),
-/// 再按关键字匹配
+/// 再按关键字匹配。只是换个包装的类型(ClickHouse 的 `Nullable(String)`、
+/// `LowCardinality(Int32)`)按里面那个归类
 pub fn classify_type(ty: &str) -> TypeKind {
-    let t = ty.trim().to_ascii_lowercase();
-    let head: String = t
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-        .next()
-        .unwrap_or_default()
-        .to_string();
-    match head.as_str() {
-        "int" | "integer" | "tinyint" | "smallint" | "mediumint" | "bigint" | "int2" | "int4"
-        | "int8" | "int16" | "int32" | "int64" | "serial" | "bigserial" | "smallserial"
-        | "identity" => TypeKind::Integer,
-        "bool" | "boolean" | "logical" => TypeKind::Bool,
-        "decimal" | "numeric" | "dec" | "number" | "float" | "float4" | "float8" | "float32"
-        | "float64" | "double" | "real" | "money" | "smallmoney" => TypeKind::Numeric,
-        "date" | "datetime" | "datetime2" | "timestamp" | "timestamptz" | "datetimetz" | "time"
-        | "timetz" | "year" | "interval" | "smalldatetime" | "datetimeoffset" => TypeKind::Temporal,
-        "char" | "varchar" | "nchar" | "nvarchar" | "text" | "tinytext" | "mediumtext"
-        | "longtext" | "clob" | "ntext" | "string" | "character" | "varchar2" | "nvarchar2"
-        | "memo" => TypeKind::String,
-        "json" | "jsonb" | "xml" | "array" | "hstore" | "struct" | "map" | "set" | "enum"
-        | "geometry" | "geography" | "point" => TypeKind::Structured,
-        "uuid" => TypeKind::Identifier,
-        "binary" | "varbinary" | "blob" | "bytea" | "image" | "bit" | "raw" | "longblob"
-        | "mediumblob" | "tinyblob" | "bytes" | "byte" | "varbyte" => TypeKind::Binary,
-        _ => TypeKind::Other,
+    let mut t = ty.trim();
+    loop {
+        let head: String = t
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(head.as_str(), "nullable" | "lowcardinality") {
+            if let Some(open) = t.find('(') {
+                if let Some(inner) = t[open + 1..].strip_suffix(')') {
+                    t = inner.trim();
+                    continue;
+                }
+            }
+        }
+        // Decimal 在各库位数后缀不一(decimal / decimal128 / decimal(18, 2)),按前缀认
+        if head.starts_with("decimal") {
+            return TypeKind::Numeric;
+        }
+        return match head.as_str() {
+            "int" | "integer" | "tinyint" | "smallint" | "mediumint" | "bigint" | "int2" | "int4"
+            | "int8" | "int16" | "int32" | "int64" | "int128" | "uint" | "uint8" | "uint16"
+            | "uint32" | "uint64" | "uint128" | "uint256" | "ushort" | "usmallint" | "ubigint"
+            | "ulong" | "uinteger" | "serial" | "bigserial" | "smallserial" | "identity" => {
+                TypeKind::Integer
+            }
+            "bool" | "boolean" | "logical" => TypeKind::Bool,
+            "numeric" | "dec" | "number" | "float" | "float4" | "float8" | "float32"
+            | "float64" | "double" | "real" | "money" | "smallmoney" => TypeKind::Numeric,
+            "date" | "date32" | "datetime" | "datetime2" | "datetime64" | "timestamp"
+            | "timestamptz" | "datetimetz" | "time" | "timetz" | "year" | "interval"
+            | "smalldatetime" | "datetimeoffset" => TypeKind::Temporal,
+            "char" | "varchar" | "nchar" | "nvarchar" | "text" | "tinytext" | "mediumtext"
+            | "longtext" | "long" | "clob" | "nclob" | "ntext" | "string" | "fixedstring"
+            | "character" | "varchar2" | "nvarchar2" | "memo" => TypeKind::String,
+            "json" | "jsonb" | "object" | "variant" | "xml" | "array" | "hstore" | "struct"
+            | "map" | "nested" | "tuple" | "set" | "enum" | "enum8" | "enum16" | "sql_variant"
+            | "aggregatefunction" | "simpleaggregatefunction" | "geometry" | "geography"
+            | "point" | "linestring" | "polygon" => TypeKind::Structured,
+            "uuid" | "uniqueidentifier" | "inet" | "ipv4" | "ipv6" | "cidr" | "macaddr" | "oid"
+            | "rowid" | "xid" => TypeKind::Identifier,
+            "binary" | "varbinary" | "blob" | "bytea" | "image" | "bit" | "raw" | "longblob"
+            | "mediumblob" | "tinyblob" | "bytes" | "byte" | "varbyte" => TypeKind::Binary,
+            _ => TypeKind::Other,
+        };
     }
 }
 
@@ -1576,10 +1598,77 @@ mod tests {
             ("jsonb", TypeKind::Structured),
             ("uuid", TypeKind::Identifier),
             ("bytea", TypeKind::Binary),
-            ("inet", TypeKind::Other),
+            ("inet", TypeKind::Identifier),
             ("", TypeKind::Other),
+            ("   ", TypeKind::Other),
+            // 只有包装、没有元素类型:无从归类(驱动不会这么报)
+            ("Nullable", TypeKind::Other),
+            ("Nullable(", TypeKind::Other),
         ];
         for (ty, want) in cases {
+            assert_eq!(classify_type(ty), want, "type {ty:?}");
+        }
+    }
+
+    /// 结果网格显示的是驱动自报的类型名:各库写法不同,但类别要归对
+    #[test]
+    fn classify_type_kinds_names_from_each_driver() {
+        // MySQL 文本协议回包(information_schema 写法)
+        let mysql = [
+            ("int unsigned", TypeKind::Integer),
+            ("bigint", TypeKind::Integer),
+            ("decimal", TypeKind::Numeric),
+            ("double", TypeKind::Numeric),
+            ("tinyint", TypeKind::Integer),
+            ("datetime", TypeKind::Temporal),
+            ("timestamp", TypeKind::Temporal),
+            ("date", TypeKind::Temporal),
+            ("time", TypeKind::Temporal),
+            ("json", TypeKind::Structured),
+            ("enum", TypeKind::Structured),
+            ("set", TypeKind::Structured),
+            ("varchar", TypeKind::String),
+            ("char", TypeKind::String),
+            ("text", TypeKind::String),
+            ("mediumtext", TypeKind::String),
+            ("longtext", TypeKind::String),
+            ("varbinary", TypeKind::Binary),
+            ("binary", TypeKind::Binary),
+            ("blob", TypeKind::Binary),
+            ("longblob", TypeKind::Binary),
+            ("geometry", TypeKind::Structured),
+        ];
+        // ClickHouse meta.type
+        let clickhouse = [
+            ("UInt8", TypeKind::Integer),
+            ("UInt64", TypeKind::Integer),
+            ("Int32", TypeKind::Integer),
+            ("Nullable(String)", TypeKind::String),
+            ("Nullable(Int64)", TypeKind::Integer),
+            ("LowCardinality(String)", TypeKind::String),
+            ("Nullable(Decimal(18, 2))", TypeKind::Numeric),
+            ("Decimal32(2)", TypeKind::Numeric),
+            ("DateTime64(3)", TypeKind::Temporal),
+            ("Nullable(DateTime64(3, 'UTC'))", TypeKind::Temporal),
+            ("Date32", TypeKind::Temporal),
+            ("FixedString(16)", TypeKind::String),
+            ("Array(Int32)", TypeKind::Structured),
+            ("Map(String, Int64)", TypeKind::Structured),
+            ("Enum8('a' = 1)", TypeKind::Structured),
+            ("LowCardinality(Nullable(String))", TypeKind::String),
+        ];
+        // SQL Server TDS 类型名 / Oracle(插件驱动)
+        let others = [
+            ("uniqueidentifier", TypeKind::Identifier),
+            ("datetimeoffset", TypeKind::Temporal),
+            ("nvarchar", TypeKind::String),
+            ("varbinary", TypeKind::Binary),
+            ("number", TypeKind::Numeric),
+            ("varchar2", TypeKind::String),
+            ("clob", TypeKind::String),
+            ("blob", TypeKind::Binary),
+        ];
+        for (ty, want) in mysql.into_iter().chain(clickhouse).chain(others) {
             assert_eq!(classify_type(ty), want, "type {ty:?}");
         }
     }

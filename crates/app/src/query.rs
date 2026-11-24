@@ -828,6 +828,7 @@ pub fn draw_query_view(
                         ui,
                         &format!("query-results-{tab_id}"),
                         &r.columns,
+                        &r.column_types,
                         &r.rows,
                         &q.q_changes,
                         &mut q.q_editing,
@@ -854,6 +855,7 @@ pub fn draw_query_view(
                         ui,
                         &format!("query-results-{tab_id}"),
                         &r.columns,
+                        &r.column_types,
                         &r.rows,
                         &mut q.q_frozen,
                     );
@@ -1071,6 +1073,7 @@ pub fn draw_optimize_modal(
                                     ui,
                                     "optimize-plan",
                                     &plan.columns,
+                                    &plan.column_types,
                                     &plan.rows,
                                     &mut plan_frozen,
                                 );

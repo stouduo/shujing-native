@@ -3084,19 +3084,7 @@ fn draw_data_table(
         if show_rowno {
             header.col(|ui| {
                 let rect = ui.max_rect();
-                ui.painter().rect_filled(rect, 0, p.header);
-                ui.painter().text(
-                    egui::pos2(rect.right() - 14.0, rect.top() + HEAD_PAD_Y + HEAD_LINE1 / 2.0),
-                    egui::Align2::RIGHT_CENTER,
-                    "#",
-                    egui::FontId::proportional(11.0),
-                    p.muted,
-                );
-                ui.painter().line_segment(
-                    [rect.right_top(), rect.right_bottom()],
-                    egui::Stroke::new(1.0, p.border),
-                );
-                header_bottom_line(ui);
+                paint_rowno_head(ui.painter(), rect);
             });
         }
         let anno = ColAnno {
@@ -4071,6 +4059,33 @@ fn paint_sort_pair(p: &egui::Painter, center: egui::Pos2, color: Color32) {
     p.line_segment([egui::pos2(x + 2.6, y + 4.0), egui::pos2(x + 5.0, y + 1.6)], st);
 }
 
+/// 行号列头(表数据页与结果网格共用):"#" 对齐列名的名称行,
+/// 右缘一道分隔线 + 底线
+pub(crate) fn paint_rowno_head(painter: &egui::Painter, rect: egui::Rect) {
+    let p = theme::c();
+    painter.rect_filled(rect, 0, p.header);
+    painter.text(
+        egui::pos2(rect.right() - 14.0, rect.top() + HEAD_PAD_Y + HEAD_LINE1 / 2.0),
+        egui::Align2::RIGHT_CENTER,
+        "#",
+        egui::FontId::proportional(11.0),
+        p.muted,
+    );
+    let st = egui::Stroke::new(1.0, p.border);
+    painter.line_segment(
+        [egui::pos2(rect.right() - 0.5, rect.top()), egui::pos2(rect.right() - 0.5, rect.bottom())],
+        st,
+    );
+    painter.line_segment([rect.left_bottom(), rect.right_bottom()], st);
+}
+
+/// 结果网格的列头(不能排序/筛选):只有 名称 + 类型 两行
+pub(crate) fn paint_result_col_head(painter: &egui::Painter, rect: egui::Rect, name: &str, ty: &str) {
+    paint_col_title(painter, rect, name, 0.0);
+    let ty = (!ty.is_empty()).then_some(ty);
+    paint_col_anno(painter, rect, ty, None, false);
+}
+
 /// DBX 式列头:第一行 名称 + 排序 + 漏斗;第二行 🔑 + 类型(按类别着色);
 /// 第三行 注释(有才显示)。返回漏斗控件的命中矩形
 fn paint_col_head(
@@ -4089,20 +4104,8 @@ fn paint_col_head(
         egui::pos2(rect.right() - 6.0, cy1),
         egui::vec2(16.0, 16.0),
     );
-    // 名称:13px 粗体,右侧让出排序箭头(16)+ 漏斗(16)+ 间距
-    let name_w = (rect.width() - HEAD_PAD_X * 2.0 - 36.0).max(24.0);
-    let g = icons::text_galley(
-        painter,
-        name.to_owned(),
-        theme::bold(theme::FS_HEADER),
-        p.text,
-        name_w,
-    );
-    painter.galley(
-        egui::pos2(rect.left() + HEAD_PAD_X, cy1 - g.size().y / 2.0),
-        g,
-        p.text,
-    );
+    // 名称右侧让出排序箭头(16)+ 漏斗(16)+ 间距
+    paint_col_title(painter, rect, name, 36.0);
     match sorted {
         Some(asc) => paint_sort_arrow(painter, sort_center.x, cy1, asc, p.accent),
         None => paint_sort_pair(painter, sort_center, p.muted),
@@ -4119,10 +4122,49 @@ fn paint_col_head(
             p.muted
         },
     );
-    // 第二行:主键钥匙 + 类型小字(按类别着色)
+    let ty = anno.types.get(name).map(String::as_str).filter(|t| !t.is_empty());
+    let comment = anno.comments.get(name).map(|s| s.trim()).filter(|s| !s.is_empty());
+    paint_col_anno(
+        painter,
+        rect,
+        ty,
+        comment,
+        anno.pk_cols.iter().any(|k| k == name),
+    );
+    funnel_rect
+}
+
+/// 第一行:列名(13px 粗体);`reserve_right` 是名称右侧让给控件的宽度
+fn paint_col_title(painter: &egui::Painter, rect: egui::Rect, name: &str, reserve_right: f32) {
+    let p = theme::c();
+    let cy1 = rect.top() + HEAD_PAD_Y + HEAD_LINE1 / 2.0;
+    let name_w = (rect.width() - HEAD_PAD_X * 2.0 - reserve_right).max(24.0);
+    let g = icons::text_galley(
+        painter,
+        name.to_owned(),
+        theme::bold(theme::FS_HEADER),
+        p.text,
+        name_w,
+    );
+    painter.galley(
+        egui::pos2(rect.left() + HEAD_PAD_X, cy1 - g.size().y / 2.0),
+        g,
+        p.text,
+    );
+}
+
+/// 第二行:主键钥匙 + 类型小字(按类别着色);第三行:列注释(灰字,有才显示)
+fn paint_col_anno(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    ty: Option<&str>,
+    comment: Option<&str>,
+    pk: bool,
+) {
+    let p = theme::c();
     let y2 = rect.top() + HEAD_PAD_Y + HEAD_LINE1;
     let mut x = rect.left() + HEAD_PAD_X;
-    if anno.pk_cols.iter().any(|k| k == name) {
+    if pk {
         paint_key(
             painter,
             egui::pos2(x + 5.0, y2 + HEAD_LINE2 / 2.0),
@@ -4130,31 +4172,23 @@ fn paint_col_head(
         );
         x += 12.0;
     }
-    if let Some(ty) = anno.types.get(name) {
-        if !ty.is_empty() {
-            let color = theme::type_color(theme::classify_type(ty));
-            let avail = (rect.right() - HEAD_PAD_X - x).max(8.0);
-            let tg = icons::text_galley(
-                painter,
-                ty.clone(),
-                egui::FontId::proportional(theme::FS_TYPE),
-                color,
-                avail,
-            );
-            painter.galley(
-                egui::pos2(x, y2 + (HEAD_LINE2 - tg.size().y) / 2.0),
-                tg,
-                color,
-            );
-        }
+    if let Some(ty) = ty {
+        let color = theme::type_color(theme::classify_type(ty));
+        let avail = (rect.right() - HEAD_PAD_X - x).max(8.0);
+        let tg = icons::text_galley(
+            painter,
+            ty.to_owned(),
+            egui::FontId::proportional(theme::FS_TYPE),
+            color,
+            avail,
+        );
+        painter.galley(
+            egui::pos2(x, y2 + (HEAD_LINE2 - tg.size().y) / 2.0),
+            tg,
+            color,
+        );
     }
-    // 第三行:列注释(灰字)
-    if let Some(cm) = anno
-        .comments
-        .get(name)
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(cm) = comment {
         let cg = icons::text_galley(
             painter,
             cm.to_owned(),
@@ -4171,7 +4205,6 @@ fn paint_col_head(
             p.muted,
         );
     }
-    funnel_rect
 }
 
 fn paint_sort_arrow(p: &egui::Painter, x: f32, y: f32, asc: bool, color: Color32) {

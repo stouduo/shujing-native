@@ -292,8 +292,18 @@ pub fn draw_kafka_view(
                 ui_kit::t!("Payload", "消息体").to_string(),
                 ui_kit::t!("Time", "时间").to_string(),
             ];
+            // 消息网格的五列是固定的,类型随列写死
+            let col_types = ["int64", "int32", "string", "string", "timestamp"]
+                .map(String::from);
             let mut frozen = k.frozen;
-            grid::result_rows(ui, &format!("kafka-msgs-{tab_id}"), &cols, &k.msgs_grid(), &mut frozen);
+            grid::result_rows(
+                ui,
+                &format!("kafka-msgs-{tab_id}"),
+                &cols,
+                &col_types,
+                &k.msgs_grid(),
+                &mut frozen,
+            );
             k.frozen = frozen;
         });
     actions

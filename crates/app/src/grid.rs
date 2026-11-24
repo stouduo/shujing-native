@@ -1,5 +1,7 @@
 //! 共用结果网格:egui_extras TableBuilder(粘性表头/列宽可调/行虚拟化/横向滚动)。
-//! 查询结果页直接复用;视觉与表数据页一致(30pt 行高、36pt 单行列头、13px 比例字体数据)。
+//! 查询结果、执行计划、Parquet 预览、Kafka 消息共用;视觉与表数据页同一套:
+//! 两行列头(名称 + 类型小字,52pt)、30pt 行高、13px 比例字体、数字右对齐、
+//! 列间分隔线、行间靠斑马纹。
 
 use crate::table_view::{badge_value, paint_badge};
 use crate::{icons, theme};
@@ -36,19 +38,22 @@ struct EditFields<'a> {
     commit: &'a mut Option<(usize, usize, String)>,
 }
 
-/// 渲染只读结果集(带行号列、行发丝线)
+/// 渲染只读结果集(带行号列)。`column_types` 与 `columns` 等长,拿不到类型的列传空串。
+#[allow(clippy::too_many_arguments)]
 pub fn result_rows(
     ui: &mut egui::Ui,
     id_salt: &str,
     columns: &[String],
+    column_types: &[String],
     rows: &[Vec<Option<String>>],
     frozen: &mut usize,
 ) {
     let p = theme::c();
     let old_spacing = ui.spacing().item_spacing;
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-    let col_widths = crate::table_view::fitted_widths(rows, columns, ui.available_width());
-    let desired_w = 48.0 + col_widths.iter().sum::<f32>();
+    let col_widths = fitted_widths_typed(rows, columns, column_types, ui.available_width());
+    let numeric = numeric_flags(columns, column_types, rows);
+    let desired_w = ROWNO_W + col_widths.iter().sum::<f32>();
     let table_left = ui.max_rect().left();
     let table_right = ui.max_rect().right();
     let outer = ui.available_rect_before_wrap();
@@ -83,7 +88,7 @@ pub fn result_rows(
                 let in_body: bool = started
                     .map(|p| {
                         content.contains(p)
-                            && p.y > content.top() + theme::HEADER_H
+                            && p.y > content.top() + HEADER_H
                             && p.x < content.right() - 16.0
                     })
                     .unwrap_or(false);
@@ -108,155 +113,86 @@ pub fn result_rows(
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .vscroll(true)
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                .column(Column::exact(48.0));
+                .column(Column::exact(ROWNO_W));
             // initial(而非 exact):exact 把 width_range 钉死在 w..=w,拖拽调宽无效
             for (i, _c) in columns.iter().enumerate() {
                 tb = tb
                     .column(Column::initial(col_widths[i]).resizable(true).clip(true).at_least(40.0));
             }
             tb = tb.column(Column::remainder().at_least(0.0));
-            tb.header(theme::HEADER_H, |mut header| {
+            tb.header(HEADER_H, |mut header| {
                 header.col(|ui| {
                     let rect = ui.max_rect();
                     if geom.header_top.is_none() {
                         geom.header_top = Some(rect.top());
                     }
-                    ui.painter().rect_filled(rect, 0, p.header);
-                    ui.painter().text(
-                        egui::pos2(rect.right() - 14.0, rect.center().y),
-                        egui::Align2::RIGHT_CENTER,
-                        "#",
-                        egui::FontId::proportional(11.0),
-                        p.muted,
-                    );
-                    header_line(ui, p.border);
+                    crate::table_view::paint_rowno_head(ui.painter(), rect);
                 });
                 for (vw, c) in columns.iter().enumerate() {
                     header.col(|ui| {
                         let rect = ui.max_rect();
-                        ui.painter().rect_filled(rect, 0, p.header);
-                        let font = egui::FontId::proportional(theme::FS_HEADER);
-                        let g = icons::text_galley(
-                            ui.painter(),
-                            c.clone(),
-                            font,
-                            p.text2,
-                            rect.width() - 24.0,
-                        );
-                        ui.painter().galley(
-                            egui::pos2(rect.left() + 12.0, rect.center().y - g.size().y / 2.0),
-                            g,
-                            p.text2,
-                        );
+                        paint_grid_head(ui.painter(), rect, c, type_at(column_types, vw));
                         let resp = ui.allocate_rect(rect, Sense::click());
                         grid_header_freeze_menu(&resp, vw, columns.len(), frozen);
-                        header_line(ui, p.border);
                     });
                 }
                 header.col(|ui| {
+                    // 末尾占位列:延续表头底色与底线
                     let rect = ui.max_rect();
                     ui.painter().rect_filled(rect, 0, p.header);
-                    header_line(ui, p.border);
+                    hline(ui.painter(), rect, p.border);
                 });
             })
             .body(|body| {
-                actual_widths.set(body.widths().to_vec());
-                // rows() 消费 body:先取数据区矩形供空行延伸
+                // rows() 消费 body:列宽、数据区矩形都先取出来
+                let ws = body.widths().to_vec();
+                actual_widths.set(ws.clone());
                 let brect = body.max_rect();
                 // 行悬停:每格用自身矩形判定(跨行累积并工会点亮悬停行下方全部行)
+                let hovers = |ui: &egui::Ui, rect: egui::Rect| {
+                    ui.input(|i| i.pointer.latest_pos())
+                        .map(|pt| {
+                            pt.y >= rect.top()
+                                && pt.y < rect.bottom()
+                                && pt.x >= table_left
+                                && pt.x <= table_right
+                        })
+                        .unwrap_or(false)
+                };
                 body.rows(theme::ROW_H, rows.len(), |mut row| {
                     let ri = row.index();
                     let row_y = std::cell::Cell::new(f32::NAN);
                     let rowdata = &rows[ri];
-                    let mut hovered = false;
                     row.col(|ui| {
                         let rect = ui.max_rect();
                         row_y.set(rect.top());
-                        hovered = ui
-                            .input(|i| i.pointer.latest_pos())
-                            .map(|pt| {
-                                pt.y >= rect.top()
-                                    && pt.y < rect.bottom()
-                                    && pt.x >= table_left
-                                    && pt.x <= table_right
-                            })
-                            .unwrap_or(false);
-                        if hovered {
-                            ui.painter().rect_filled(rect, 0, p.row_hover);
-                        } else if ri % 2 == 1 {
-                            ui.painter().rect_filled(rect, 0, p.stripe);
-                        }
-                        ui.painter().text(
-                            egui::pos2(rect.right() - 14.0, rect.center().y),
-                            egui::Align2::RIGHT_CENTER,
-                            format!("{}", ri + 1),
-                            egui::FontId::proportional(11.0),
-                            p.muted,
-                        );
-                        row_line(ui, p.row_line);
+                        paint_grid_row_bg(ui.painter(), rect, ri, hovers(ui, rect), false);
+                        paint_grid_rowno(ui.painter(), rect, ri + 1);
                     });
                     for (ci, col) in columns.iter().enumerate() {
-                        let v = &rowdata[ci];
                         row.col(|ui| {
                             let rect = ui.max_rect();
-                            hovered = ui
-                                .input(|i| i.pointer.latest_pos())
-                                .map(|pt| {
-                                    pt.y >= rect.top()
-                                        && pt.y < rect.bottom()
-                                        && pt.x >= table_left
-                                        && pt.x <= table_right
-                                })
-                                .unwrap_or(false);
                             let painter = ui.painter().with_clip_rect(rect);
-                            if hovered {
-                                painter.rect_filled(rect, 0, p.row_hover);
-                            } else if ri % 2 == 1 {
-                                painter.rect_filled(rect, 0, p.stripe);
-                            }
-                            if let Some((label, on)) = badge_value(col, v) {
-                                paint_badge(
-                                    &painter,
-                                    rect.left() + 12.0,
-                                    rect.center().y,
-                                    &label,
-                                    on,
-                                );
-                            } else {
-                                let color = icons::cell_text_color(v, false);
-                                let g = icons::text_galley(
-                                    &painter,
-                                    icons::cell_text(v, 4000),
-                                    egui::FontId::proportional(theme::FS_DATA),
-                                    color,
-                                    rect.width() - 24.0,
-                                );
-                                painter.galley(
-                                    egui::pos2(
-                                        rect.left() + 12.0,
-                                        rect.center().y - g.size().y / 2.0,
-                                    ),
-                                    g,
-                                    color,
-                                );
-                            }
-                            row_line(ui, p.row_line);
+                            paint_grid_row_bg(&painter, rect, ri, hovers(ui, rect), false);
+                            paint_grid_cell_text(
+                                &painter,
+                                rect,
+                                col,
+                                &rowdata[ci],
+                                false,
+                                numeric[ci],
+                            );
                         });
                     }
-                    // 末尾占位列:延续行背景/行线
+                    // 末尾占位列:延续行底色
                     row.col(|ui| {
                         let rect = ui.max_rect();
-                        if hovered {
-                            ui.painter().rect_filled(rect, 0, p.row_hover);
-                        } else if ri % 2 == 1 {
-                            ui.painter().rect_filled(rect, 0, p.stripe);
-                        }
-                        row_line(ui, p.row_line);
+                        paint_grid_row_bg(ui.painter(), rect, ri, hovers(ui, rect), false);
                     });
                     geom.vis_rows.push((ri, row_y.get()));
                 });
 
-                // 空白区网格延续:与数据表格页同款(评审两轮共指的断裂感)
+                // 空白区网格延续(与数据表格页同款):斑马纹 + 列分隔线,竖线位置与数据列右缘对齐
                 {
                     let mut y = brect.top() + rows.len() as f32 * theme::ROW_H;
                     let mut empty_ri = rows.len();
@@ -268,10 +204,21 @@ pub fn result_rows(
                         if empty_ri % 2 == 1 {
                             body_painter.rect_filled(band, 0, p.stripe);
                         }
-                        body_painter.line_segment(
-                            [band.left_bottom(), band.right_bottom()],
-                            egui::Stroke::new(1.0, p.row_line),
-                        );
+                        let mut ex = band.left();
+                        // 末位是 remainder 占位列,没有右缘
+                        for w in ws.iter().take(ws.len().saturating_sub(1)) {
+                            ex += *w;
+                            if ex >= band.right() - 1.0 {
+                                break;
+                            }
+                            body_painter.line_segment(
+                                [
+                                    egui::pos2(ex - 0.5, band.top()),
+                                    egui::pos2(ex - 0.5, band.bottom()),
+                                ],
+                                egui::Stroke::new(1.0, p.row_line),
+                            );
+                        }
                         y += theme::ROW_H;
                         empty_ri += 1;
                     }
@@ -283,6 +230,8 @@ pub fn result_rows(
         ui,
         id_salt,
         columns,
+        column_types,
+        &numeric,
         rows,
         frozen,
         hout.state.offset.x,
@@ -296,30 +245,184 @@ pub fn result_rows(
     ui.spacing_mut().item_spacing = old_spacing;
 }
 
-fn header_line(ui: &egui::Ui, color: Color32) {
-    let r = ui.max_rect();
-    let y = r.bottom() - 0.5;
-    ui.painter().line_segment(
-        [egui::pos2(r.left(), y), egui::pos2(r.right(), y)],
+// ---------------------------------------------------------------- 绘制(三处网格同一套)
+
+/// 表头高度:与表数据页同一套两行列头(名称 + 类型)
+const HEADER_H: f32 = theme::DATA_HEADER_H;
+/// 行号列宽
+const ROWNO_W: f32 = 48.0;
+
+/// 第 `i` 列的类型名;越界或驱动没给出时为空串
+fn type_at(types: &[String], i: usize) -> &str {
+    types.get(i).map(String::as_str).unwrap_or("")
+}
+
+/// 右缘竖线(画在矩形内侧,不被相邻格的底色盖掉)
+fn vline(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    painter.line_segment(
+        [
+            egui::pos2(rect.right() - 0.5, rect.top()),
+            egui::pos2(rect.right() - 0.5, rect.bottom()),
+        ],
         egui::Stroke::new(1.0, color),
     );
 }
 
-fn row_line(ui: &egui::Ui, color: Color32) {
-    let r = ui.max_rect();
-    let y = r.bottom() - 0.5;
-    ui.painter().line_segment(
-        [egui::pos2(r.left(), y), egui::pos2(r.right(), y)],
+/// 底缘横线
+fn hline(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.bottom() - 0.5),
+            egui::pos2(rect.right(), rect.bottom() - 0.5),
+        ],
         egui::Stroke::new(1.0, color),
     );
+}
+
+/// 列头格:底色 + 名称/类型两行 + 右竖线 + 底线
+fn paint_grid_head(painter: &egui::Painter, rect: egui::Rect, name: &str, ty: &str) {
+    let p = theme::c();
+    let cp = painter.with_clip_rect(rect);
+    cp.rect_filled(rect, 0, p.header);
+    crate::table_view::paint_result_col_head(&cp, rect, name, ty);
+    vline(&cp, rect, p.row_line);
+    hline(&cp, rect, p.border);
+}
+
+/// 行底色:悬停 > 奇偶斑马纹;有未保存改动的格再叠一块内缩色块
+fn paint_grid_row_bg(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    ri: usize,
+    hovered: bool,
+    changed: bool,
+) {
+    let p = theme::c();
+    if hovered {
+        painter.rect_filled(rect, 0, p.row_hover);
+    } else if ri % 2 == 1 {
+        painter.rect_filled(rect, 0, p.stripe);
+    }
+    if changed {
+        painter.rect_filled(rect.shrink2(egui::vec2(2.0, 3.0)), 3, p.change_bg);
+    }
+}
+
+/// 数据格:状态徽章列画徽章;数字列右对齐(NULL 靠左);右竖线
+#[allow(clippy::too_many_arguments)]
+fn paint_grid_cell_text(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    col: &str,
+    shown: &Option<String>,
+    changed: bool,
+    numeric: bool,
+) {
+    let p = theme::c();
+    if let Some((label, on)) = badge_value(col, shown) {
+        paint_badge(painter, rect.left() + 12.0, rect.center().y, &label, on);
+    } else {
+        let color = icons::cell_text_color(shown, changed);
+        let g = icons::text_galley(
+            painter,
+            icons::cell_text(shown, 4000),
+            egui::FontId::proportional(theme::FS_DATA),
+            color,
+            rect.width() - 24.0,
+        );
+        let x = if numeric && shown.is_some() {
+            rect.right() - 12.0 - g.size().x
+        } else {
+            rect.left() + 12.0
+        };
+        painter.galley(
+            egui::pos2(x, rect.center().y - g.size().y / 2.0),
+            g,
+            color,
+        );
+    }
+    vline(painter, rect, p.row_line);
+}
+
+/// 行号格:行号右对齐 + 右竖线
+fn paint_grid_rowno(painter: &egui::Painter, rect: egui::Rect, rowno: usize) {
+    painter.text(
+        egui::pos2(rect.right() - 14.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        format!("{rowno}"),
+        egui::FontId::proportional(11.0),
+        theme::c().muted,
+    );
+    vline(painter, rect, theme::c().row_line);
+}
+
+/// 各列是否右对齐:有类型按类型类别(整数/小数);类型拿不到的列退回按值预判
+/// (前 200 行的非空值全是数字)。按列数生成——类型数组可以整个为空
+/// (PG 的简单查询协议、执行计划、Parquet 预览都没有类型)
+fn numeric_flags(columns: &[String], column_types: &[String], rows: &[Vec<Option<String>>]) -> Vec<bool> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, _)| match (!type_at(column_types, i).is_empty()).then_some(type_at(column_types, i)) {
+            Some(ty) => matches!(
+                theme::classify_type(ty),
+                theme::TypeKind::Integer | theme::TypeKind::Numeric
+            ),
+            None => {
+                let mut seen = false;
+                let all_numeric = rows.iter().take(200).all(|r| match r.get(i).and_then(|v| v.as_deref()) {
+                    Some(v) => {
+                        seen = true;
+                        looks_numeric(v)
+                    }
+                    None => true,
+                });
+                seen && all_numeric
+            }
+        })
+        .collect()
+}
+
+/// 值看起来是不是数字。前导零(邮编/编号)与超过 15 位的数字串(卡号/条码/身份证)
+/// 不算——这些多半是存在文本列里的标识,而不是数量
+fn looks_numeric(v: &str) -> bool {
+    if v.is_empty() || v.len() > 15 || !v.bytes().all(|b| b.is_ascii_digit() || b".-+eE".contains(&b)) {
+        return false;
+    }
+    let body = v.strip_prefix(['-', '+']).unwrap_or(v);
+    let leading_zero = body.starts_with('0') && !body.starts_with("0.") && body.len() > 1;
+    !leading_zero && v.parse::<f64>().is_ok()
+}
+
+/// 结果网格列宽:同表数据页的启发式(列名/数据采样),并保证放得下类型小字。
+/// 类型数组可以比列少甚至为空(没有类型的结果集只按名称与数据定宽)
+fn fitted_widths_typed(
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+    column_types: &[String],
+    available: f32,
+) -> Vec<f32> {
+    let mut base = crate::table_view::suggested_widths(rows, columns);
+    for (i, w) in base.iter_mut().enumerate() {
+        // 类型小字 10px:ASCII 约 5.4pt/字,CJK 约 10pt/字
+        let tw: f32 = type_at(column_types, i)
+            .chars()
+            .take(40)
+            .map(|c| if c.is_ascii() { 5.4 } else { 10.0 })
+            .sum();
+        *w = w.max(84.0).max(tw + 16.0);
+    }
+    crate::table_view::fitted_from_base(base, available)
 }
 
 /// 可编辑结果集(查询回写):双击进入编辑,改动以 (行号,列名,新值) 记在 changes。
 /// 返回 (请求开始编辑的格, 提交的格);开始编辑由调用方置 draft,提交由调用方记 changes。
+#[allow(clippy::too_many_arguments)]
 pub fn result_rows_editable(
     ui: &mut egui::Ui,
     id_salt: &str,
     columns: &[String],
+    column_types: &[String],
     rows: &[Vec<Option<String>>],
     changes: &[(usize, String, Option<String>)],
     editing: &mut Option<(usize, usize)>,
@@ -334,8 +437,9 @@ pub fn result_rows_editable(
     let p = theme::c();
     let old_spacing = ui.spacing().item_spacing;
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-    let col_widths = crate::table_view::fitted_widths(rows, columns, ui.available_width());
-    let desired_w = 48.0 + col_widths.iter().sum::<f32>();
+    let col_widths = fitted_widths_typed(rows, columns, column_types, ui.available_width());
+    let numeric = numeric_flags(columns, column_types, rows);
+    let desired_w = ROWNO_W + col_widths.iter().sum::<f32>();
     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.command);
     let editing_active = editing.is_some();
     // 编辑行滚出视口的帧末取消(与表数据页同款):行虚拟化下编辑格不渲染,
@@ -376,7 +480,7 @@ pub fn result_rows_editable(
                 let in_body: bool = started
                     .map(|p| {
                         content.contains(p)
-                            && p.y > content.top() + theme::HEADER_H
+                            && p.y > content.top() + HEADER_H
                             && p.x < content.right() - 16.0
                     })
                     .unwrap_or(false);
@@ -401,91 +505,61 @@ pub fn result_rows_editable(
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .vscroll(true)
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                .column(Column::exact(48.0));
+                .column(Column::exact(ROWNO_W));
             // initial(而非 exact):exact 把 width_range 钉死在 w..=w,拖拽调宽无效
             for (i, _c) in columns.iter().enumerate() {
                 tb = tb
                     .column(Column::initial(col_widths[i]).resizable(true).clip(true).at_least(40.0));
             }
             tb = tb.column(Column::remainder().at_least(0.0));
-            tb.header(theme::HEADER_H, |mut header| {
+            tb.header(HEADER_H, |mut header| {
                 header.col(|ui| {
                     let rect = ui.max_rect();
                     if geom.header_top.is_none() {
                         geom.header_top = Some(rect.top());
                     }
-                    ui.painter().rect_filled(rect, 0, p.header);
-                    ui.painter().text(
-                        egui::pos2(rect.right() - 14.0, rect.center().y),
-                        egui::Align2::RIGHT_CENTER,
-                        "#",
-                        egui::FontId::proportional(11.0),
-                        p.muted,
-                    );
-                    header_line(ui, p.border);
+                    crate::table_view::paint_rowno_head(ui.painter(), rect);
                 });
                 for (vw, c) in columns.iter().enumerate() {
                     header.col(|ui| {
                         let rect = ui.max_rect();
-                        ui.painter().rect_filled(rect, 0, p.header);
-                        let g = icons::text_galley(
-                            ui.painter(),
-                            c.clone(),
-                            egui::FontId::proportional(theme::FS_HEADER),
-                            p.text2,
-                            rect.width() - 24.0,
-                        );
-                        ui.painter().galley(
-                            egui::pos2(rect.left() + 12.0, rect.center().y - g.size().y / 2.0),
-                            g,
-                            p.text2,
-                        );
+                        paint_grid_head(ui.painter(), rect, c, type_at(column_types, vw));
                         let resp = ui.allocate_rect(rect, Sense::click());
                         grid_header_freeze_menu(&resp, vw, columns.len(), frozen);
-                        header_line(ui, p.border);
                     });
                 }
                 header.col(|ui| {
+                    // 末尾占位列:延续表头底色与底线
                     let rect = ui.max_rect();
                     ui.painter().rect_filled(rect, 0, p.header);
-                    header_line(ui, p.border);
+                    hline(ui.painter(), rect, p.border);
                 });
             })
             .body(|body| {
-                actual_widths.set(body.widths().to_vec());
-                // rows() 消费 body:先取数据区矩形供空行延伸
+                // rows() 消费 body:列宽、数据区矩形都先取出来
+                let ws = body.widths().to_vec();
+                actual_widths.set(ws.clone());
                 let brect = body.max_rect();
                 // 行悬停:每格用自身矩形判定(跨行累积并工会点亮悬停行下方全部行)
+                let hovers = |ui: &egui::Ui, rect: egui::Rect| {
+                    ui.input(|i| i.pointer.latest_pos())
+                        .map(|pt| {
+                            pt.y >= rect.top()
+                                && pt.y < rect.bottom()
+                                && pt.x >= table_left
+                                && pt.x <= table_right
+                        })
+                        .unwrap_or(false)
+                };
                 body.rows(theme::ROW_H, rows.len(), |mut row| {
                     let ri = row.index();
                     let row_y = std::cell::Cell::new(f32::NAN);
                     let rowdata = &rows[ri];
-                    let mut hovered = false;
                     row.col(|ui| {
                         let rect = ui.max_rect();
                         row_y.set(rect.top());
-                        hovered = ui
-                            .input(|i| i.pointer.latest_pos())
-                            .map(|pt| {
-                                pt.y >= rect.top()
-                                    && pt.y < rect.bottom()
-                                    && pt.x >= table_left
-                                    && pt.x <= table_right
-                            })
-                            .unwrap_or(false);
-                        if hovered {
-                            ui.painter().rect_filled(rect, 0, p.row_hover);
-                        } else if ri % 2 == 1 {
-                            ui.painter().rect_filled(rect, 0, p.stripe);
-                        }
-                        ui.painter().text(
-                            egui::pos2(rect.right() - 14.0, rect.center().y),
-                            egui::Align2::RIGHT_CENTER,
-                            format!("{}", ri + 1),
-                            egui::FontId::proportional(11.0),
-                            p.muted,
-                        );
-                        row_line(ui, p.row_line);
+                        paint_grid_row_bg(ui.painter(), rect, ri, hovers(ui, rect), false);
+                        paint_grid_rowno(ui.painter(), rect, ri + 1);
                     });
                     for (ci, col) in columns.iter().enumerate() {
                         let v = &rowdata[ci];
@@ -496,26 +570,9 @@ pub fn result_rows_editable(
                             *editing == Some((ri, ci)) && !frozen_scrolled;
                         row.col(|ui| {
                             let rect = ui.max_rect();
-                            hovered = ui
-                                .input(|i| i.pointer.latest_pos())
-                                .map(|pt| {
-                                    pt.y >= rect.top()
-                                        && pt.y < rect.bottom()
-                                        && pt.x >= table_left
-                                        && pt.x <= table_right
-                                })
-                                .unwrap_or(false);
                             let painter = ui.painter().with_clip_rect(rect);
                             let changed = changes.iter().any(|(r, c, _)| *r == ri && c == col);
-                            if hovered || changed {
-                                painter.rect_filled(
-                                    rect,
-                                    0,
-                                    if changed { p.change_bg } else { p.row_hover },
-                                );
-                            } else if ri % 2 == 1 {
-                                painter.rect_filled(rect, 0, p.stripe);
-                            }
+                            paint_grid_row_bg(&painter, rect, ri, hovers(ui, rect), changed);
                             if is_editing {
                                 editing_rendered.set(true);
                                 let inner = rect.shrink2(egui::vec2(4.0, 2.0));
@@ -551,55 +608,31 @@ pub fn result_rows_editable(
                                         .unwrap_or_default();
                                     start_edit = Some((ri, ci, shown));
                                 }
-                                if let Some((label, on)) = badge_value(col, v) {
-                                    paint_badge(
-                                        &painter,
-                                        rect.left() + 12.0,
-                                        rect.center().y,
-                                        &label,
-                                        on,
-                                    );
-                                } else {
-                                    let shown = changes
-                                        .iter()
-                                        .find(|(r, c, _)| *r == ri && c == col)
-                                        .and_then(|(_, _, nv)| nv.clone())
-                                        .or_else(|| v.clone());
-                                    let color = icons::cell_text_color(&shown, changed);
-                                    let g = icons::text_galley(
-                                        &painter,
-                                        icons::cell_text(&shown, 4000),
-                                        egui::FontId::proportional(theme::FS_DATA),
-                                        color,
-                                        rect.width() - 24.0,
-                                    );
-                                    painter.galley(
-                                        egui::pos2(
-                                            rect.left() + 12.0,
-                                            rect.center().y - g.size().y / 2.0,
-                                        ),
-                                        g,
-                                        color,
-                                    );
-                                }
+                                let shown = changes
+                                    .iter()
+                                    .find(|(r, c, _)| *r == ri && c == col)
+                                    .and_then(|(_, _, nv)| nv.clone())
+                                    .or_else(|| v.clone());
+                                paint_grid_cell_text(
+                                    &painter,
+                                    rect,
+                                    col,
+                                    &shown,
+                                    changed,
+                                    numeric[ci],
+                                );
                             }
-                            row_line(ui, p.row_line);
                         });
                     }
-                    // 末尾占位列:延续行背景/行线
+                    // 末尾占位列:延续行底色
                     row.col(|ui| {
                         let rect = ui.max_rect();
-                        if hovered {
-                            ui.painter().rect_filled(rect, 0, p.row_hover);
-                        } else if ri % 2 == 1 {
-                            ui.painter().rect_filled(rect, 0, p.stripe);
-                        }
-                        row_line(ui, p.row_line);
+                        paint_grid_row_bg(ui.painter(), rect, ri, hovers(ui, rect), false);
                     });
                     geom.vis_rows.push((ri, row_y.get()));
                 });
 
-                // 空白区网格延续:与数据表格页同款(评审两轮共指的断裂感)
+                // 空白区网格延续:斑马纹 + 列分隔线(与只读网格同一套)
                 {
                     let mut y = brect.top() + rows.len() as f32 * theme::ROW_H;
                     let mut empty_ri = rows.len();
@@ -611,10 +644,20 @@ pub fn result_rows_editable(
                         if empty_ri % 2 == 1 {
                             body_painter.rect_filled(band, 0, p.stripe);
                         }
-                        body_painter.line_segment(
-                            [band.left_bottom(), band.right_bottom()],
-                            egui::Stroke::new(1.0, p.row_line),
-                        );
+                        let mut ex = band.left();
+                        for w in ws.iter().take(ws.len().saturating_sub(1)) {
+                            ex += *w;
+                            if ex >= band.right() - 1.0 {
+                                break;
+                            }
+                            body_painter.line_segment(
+                                [
+                                    egui::pos2(ex - 0.5, band.top()),
+                                    egui::pos2(ex - 0.5, band.bottom()),
+                                ],
+                                egui::Stroke::new(1.0, p.row_line),
+                            );
+                        }
                         y += theme::ROW_H;
                         empty_ri += 1;
                     }
@@ -626,6 +669,8 @@ pub fn result_rows_editable(
         ui,
         id_salt,
         columns,
+        column_types,
+        &numeric,
         rows,
         frozen,
         hout.state.offset.x,
@@ -673,12 +718,15 @@ fn grid_header_freeze_menu(
 }
 
 /// 查询结果网格的冻结覆盖层:横向滚动时把行号+前 N 列钉在视口左侧重绘。
-/// edits=Some(可编辑网格)时支持改动高亮/双击编辑/编辑框接管(与底层互斥)。
+/// 表头、数据格与底层同一套绘制;edits=Some(可编辑网格)时支持改动高亮/双击编辑/
+/// 编辑框接管(与底层互斥)。
 #[allow(clippy::too_many_arguments)]
 fn draw_frozen_grid_overlay(
     ui: &mut egui::Ui,
     id_salt: &str,
     columns: &[String],
+    column_types: &[String],
+    numeric: &[bool],
     rows: &[Vec<Option<String>>],
     frozen: &mut usize,
     offset_x: f32,
@@ -701,7 +749,7 @@ fn draw_frozen_grid_overlay(
     let left = outer.left();
     let top = geom.header_top.unwrap_or(outer.top());
     let bottom = outer.bottom();
-    let region_w = 48.0 + frozen_ws.iter().sum::<f32>();
+    let region_w = ROWNO_W + frozen_ws.iter().sum::<f32>();
     if region_w < 1.0 || !(bottom > top) {
         return;
     }
@@ -712,44 +760,19 @@ fn draw_frozen_grid_overlay(
     let pointer = ui.input(|i| i.pointer.latest_pos());
 
     // 钉住的表头
-    let header_rect =
-        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(region_w, theme::HEADER_H));
-    painter.rect_filled(header_rect, 0, p.header);
-    painter.text(
-        egui::pos2(left + 48.0 - 14.0, header_rect.center().y),
-        egui::Align2::RIGHT_CENTER,
-        "#",
-        egui::FontId::proportional(11.0),
-        p.muted,
+    crate::table_view::paint_rowno_head(
+        &painter,
+        egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(ROWNO_W, HEADER_H)),
     );
-    let mut hx = left + 48.0;
+    let mut hx = left + ROWNO_W;
     for (vw, c) in columns.iter().enumerate().take(frozen_n) {
         let w = frozen_ws[vw];
-        let rect = egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, theme::HEADER_H));
-        let cp = painter.with_clip_rect(rect);
-        let g = icons::text_galley(
-            &cp,
-            c.clone(),
-            egui::FontId::proportional(theme::FS_HEADER),
-            p.text2,
-            rect.width() - 24.0,
-        );
-        cp.galley(
-            egui::pos2(rect.left() + 12.0, rect.center().y - g.size().y / 2.0),
-            g,
-            p.text2,
-        );
+        let rect = egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, HEADER_H));
+        paint_grid_head(&painter, rect, c, type_at(column_types, vw));
         let resp = ui.interact(rect, egui::Id::new(("qfz-h", id_salt, vw)), Sense::click());
         grid_header_freeze_menu(&resp, vw, columns.len(), frozen);
         hx += w;
     }
-    painter.line_segment(
-        [
-            egui::pos2(left, header_rect.bottom() - 0.5),
-            egui::pos2(header_rect.right(), header_rect.bottom() - 0.5),
-        ],
-        egui::Stroke::new(1.0, p.border),
-    );
 
     // 钉住的数据行(y 用渲染时记录的真实行带;滚动偏移非行高整数倍时不可推算)
     for &(ri, y) in geom.vis_rows.iter() {
@@ -763,25 +786,19 @@ fn draw_frozen_grid_overlay(
         let hovered = pointer
             .map(|pt| pt.y >= y && pt.y < y + theme::ROW_H && pt.x >= left && pt.x < left + region_w)
             .unwrap_or(false);
-        let band = egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(region_w, theme::ROW_H));
-        if hovered {
-            painter.rect_filled(band, 0, p.row_hover);
-        }
-        painter.text(
-            egui::pos2(left + 48.0 - 14.0, y + theme::ROW_H / 2.0),
-            egui::Align2::RIGHT_CENTER,
-            format!("{}", ri + 1),
-            egui::FontId::proportional(11.0),
-            p.muted,
+        paint_grid_row_bg(
+            &painter,
+            egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(region_w, theme::ROW_H)),
+            ri,
+            hovered,
+            false,
         );
-        painter.line_segment(
-            [
-                egui::pos2(left, y + theme::ROW_H - 0.5),
-                egui::pos2(left + region_w, y + theme::ROW_H - 0.5),
-            ],
-            egui::Stroke::new(1.0, p.row_line),
+        paint_grid_rowno(
+            &painter,
+            egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(ROWNO_W, theme::ROW_H)),
+            ri + 1,
         );
-        let mut x = left + 48.0;
+        let mut x = left + ROWNO_W;
         for (ci, col) in columns.iter().enumerate().take(frozen_n) {
             let w = frozen_ws[ci];
             let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, theme::ROW_H));
@@ -791,15 +808,7 @@ fn draw_frozen_grid_overlay(
                 .as_ref()
                 .map(|e| e.changes.iter().any(|(r, c, _)| *r == ri && c == col))
                 .unwrap_or(false);
-            if hovered || changed {
-                cp.rect_filled(
-                    rect,
-                    0,
-                    if changed { p.change_bg } else { p.row_hover },
-                );
-            } else if ri % 2 == 1 {
-                cp.rect_filled(rect, 0, p.stripe);
-            }
+            paint_grid_row_bg(&cp, rect, ri, hovered, changed);
             let mut editing_now = false;
             if let Some(e) = edits.as_ref() {
                 editing_now = *e.editing == Some((ri, ci)) && prev_hscroll > 0.5;
@@ -845,32 +854,23 @@ fn draw_frozen_grid_overlay(
                         }
                     }
                 }
-                if let Some((label, on)) = badge_value(col, v) {
-                    paint_badge(&cp, rect.left() + 12.0, rect.center().y, &label, on);
-                } else {
-                    let shown = edits
-                        .as_ref()
-                        .and_then(|e| {
-                            e.changes
-                                .iter()
-                                .find(|(r, c, _)| *r == ri && c == col)
-                                .and_then(|(_, _, nv)| nv.clone())
-                        })
-                        .or_else(|| v.clone());
-                    let color = icons::cell_text_color(&shown, changed);
-                    let g = icons::text_galley(
-                        &cp,
-                        icons::cell_text(&shown, 4000),
-                        egui::FontId::proportional(theme::FS_DATA),
-                        color,
-                        rect.width() - 24.0,
-                    );
-                    cp.galley(
-                        egui::pos2(rect.left() + 12.0, rect.center().y - g.size().y / 2.0),
-                        g,
-                        color,
-                    );
-                }
+                let shown = edits
+                    .as_ref()
+                    .and_then(|e| {
+                        e.changes
+                            .iter()
+                            .find(|(r, c, _)| *r == ri && c == col)
+                            .and_then(|(_, _, nv)| nv.clone())
+                    })
+                    .or_else(|| v.clone());
+                paint_grid_cell_text(
+                    &cp,
+                    rect,
+                    col,
+                    &shown,
+                    changed,
+                    numeric.get(ci).copied().unwrap_or(false),
+                );
             }
             x += w;
         }
@@ -883,4 +883,69 @@ fn draw_frozen_grid_overlay(
         ],
         egui::Stroke::new(2.0, p.border),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows(spec: &[&[Option<&str>]]) -> Vec<Vec<Option<String>>> {
+        spec.iter()
+            .map(|r| r.iter().map(|v| v.map(|s| s.to_string())).collect())
+            .collect()
+    }
+
+    /// PG 的简单查询协议、执行计划、Parquet 预览都没有类型:类型数组为空也不能越界,
+    /// 数字列退回按值预判
+    #[test]
+    fn grid_without_column_types_still_works() {
+        let cols = ["id", "name", "zip", "amount"].map(String::from);
+        let types: [String; 0] = [];
+        let data = rows(&[
+            &[Some("1"), Some("张三"), Some("010000"), Some("12.50")],
+            &[Some("2"), None, Some("100000"), Some("-3")],
+        ]);
+        let flags = numeric_flags(&cols, &types, &data);
+        assert_eq!(flags, [true, false, false, true]);
+        // 列数与类型数不一致时以列数为准
+        let short = ["bigint".to_string()];
+        assert_eq!(numeric_flags(&cols, &short, &data), [true, false, false, true]);
+        let w = fitted_widths_typed(&data, &cols, &types, 800.0);
+        assert_eq!(w.len(), cols.len());
+        assert!(w.iter().all(|x| *x >= 84.0), "{w:?}");
+    }
+
+    /// 有类型时只看类型:存成文本的数字串(varchar)不右对齐
+    #[test]
+    fn numeric_flags_follow_types_when_present() {
+        let cols = ["a", "b", "c"].map(String::from);
+        let types = ["varchar", "int unsigned", "decimal"].map(String::from);
+        let data = rows(&[&[Some("123"), Some("5"), Some("1.5")]]);
+        assert_eq!(numeric_flags(&cols, &types, &data), [false, true, true]);
+    }
+
+    /// 按值预判的边界:前导零 / 超长数字串 / 非数字 / 全 NULL / 没有行 都不算数字列
+    #[test]
+    fn value_inference_rejects_identifiers_and_empty_columns() {
+        let cols = ["a", "b", "c", "d", "e"].map(String::from);
+        let types: [String; 0] = [];
+        let data = rows(&[
+            &[Some("0123"), Some("6222020200112345678"), Some("12a"), None, Some("1")],
+            &[Some("456"), Some("6222030300987654321"), None, None, Some("2.5")],
+        ]);
+        assert_eq!(numeric_flags(&cols, &types, &data), [false, false, false, false, true]);
+        // 一行数据都没有:无从判断,全部不右对齐
+        assert_eq!(numeric_flags(&cols, &types, &[]), [false; 5]);
+        assert!(looks_numeric("-3.5e2") && looks_numeric("0.5") && looks_numeric("0") && looks_numeric("123456789012345"));
+        for (v, why) in [
+            ("", "空"),
+            ("NaN", "不是十进制数字"),
+            ("inf", "不是十进制数字"),
+            ("1,000", "千分位"),
+            ("1234567890123456", "16 位"),
+            ("6222020200112345678", "卡号"),
+        ] {
+            assert!(!looks_numeric(v), "{why}: {v:?}");
+        }
+    }
 }
