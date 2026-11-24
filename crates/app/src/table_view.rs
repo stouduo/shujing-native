@@ -1674,7 +1674,7 @@ pub(crate) fn draw_table_view(
                                 ui.close_menu();
                             }
                             if ui
-                                .button(ui_kit::t!("Appearance Settings…", "外观设置…"))
+                                .button(ui_kit::t!("Settings…", "设置…"))
                                 .clicked()
                             {
                                 // 经动作中转(draw_table_view 无 self)
@@ -2742,7 +2742,7 @@ pub(crate) fn draw_table_view(
             .frame(theme::modal_frame())
             .backdrop_color(p.overlay)
             .show(ctx, |ui| {
-                ui.set_width(440.0);
+                ui.set_width(520.0);
                 theme::modal_title(
                     ui,
                     &if ui_kit::i18n::is_english() {
@@ -2761,13 +2761,35 @@ pub(crate) fn draw_table_view(
                 );
                 ui.add_space(12.0);
                 egui::ScrollArea::vertical()
-                    .max_height(330.0)
-                    .auto_shrink([false, false])
+                    .id_salt("insert-row-scroll")
+                    .max_height(360.0)
+                    // 纵向随内容收缩:字段少时不在底栏上方留一大块空白(列多时到 360 封顶滚动)
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 10.0;
+                        ui.spacing_mut().item_spacing.y = 12.0;
                         if let Some(form) = tab.insert_form.as_mut() {
                             for (i, (c, v)) in form.iter_mut().enumerate() {
-                                theme::form_field(ui, c, &format!("ins-{i}"), v, 440.0, false);
+                                // 占位提示写列类型(主键列再标"主键"):新增时不必切到结构页查类型
+                                let ty = tab.col_types.get(c).map(String::as_str).unwrap_or("");
+                                let pk = tab.pk_cols.iter().any(|k| k == c);
+                                let pk_label = ui_kit::t!("PK", "主键");
+                                let hint = match (ty.is_empty(), pk) {
+                                    (false, true) => format!("{ty} · {pk_label}"),
+                                    (false, false) => ty.to_string(),
+                                    (true, true) => pk_label.to_string(),
+                                    (true, false) => String::new(),
+                                };
+                                let id = format!("ins-{i}");
+                                theme::form_row(ui, c, |ui| {
+                                    theme::field_hint(
+                                        ui,
+                                        &id,
+                                        v,
+                                        ui.available_width(),
+                                        false,
+                                        &hint,
+                                    )
+                                });
                             }
                         }
                     });

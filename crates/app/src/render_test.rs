@@ -976,6 +976,57 @@ fn render_app_forms() {
 }
 
 #[test]
+fn render_insert_form() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        t.pk_cols = vec!["id".into()];
+        t.pk_loaded = true;
+        t.col_types = [
+            ("id", "int unsigned"),
+            ("role", "varchar(64)"),
+            ("role_name", "varchar(128)"),
+            ("access_urls", "text"),
+            ("status", "tinyint"),
+            ("created", "bigint"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        t.insert_form = Some(
+            t.columns
+                .iter()
+                .map(|c| (c.clone(), String::new()))
+                .collect(),
+        );
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1100.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(6);
+    let img = harness.render().expect("render 失败");
+    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
+    img.save("/tmp/shujing_ui/insert_form.png")
+        .expect("保存 PNG 失败");
+}
+
+#[test]
 fn render_db_filter_modal() {
     let mut app = full_app("role");
     app.db_filter = Some(crate::app::DbFilterState {

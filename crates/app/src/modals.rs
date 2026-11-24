@@ -3627,8 +3627,9 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
         .frame(theme::modal_frame())
         .backdrop_color(p.overlay)
         .show(ctx, |ui| {
-            ui.set_width(360.0);
-            theme::modal_title(ui, ui_kit::t!("Appearance", "外观设置"));
+            ui.set_width(520.0);
+            // 这里不只有外观(还有插件 / AI 助手 / 语言),标题按实际范围叫"设置"
+            theme::modal_title(ui, ui_kit::t!("Settings", "设置"));
             // 表单体可滚动:小屏视口下超高内容不再被裁(footer 固定可见)
             theme::modal_scroll_style(ui);
             egui::ScrollArea::vertical()
@@ -3637,6 +3638,8 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 .max_height((ui.ctx().screen_rect().height() - 210.0).max(320.0))
                 .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 10.0;
+            // 分区标题统一一种样式:外观 / 插件 / AI 助手 / 通用
+            ui.label(theme::strong(ui_kit::t!("Appearance", "外观"), 12.5).color(p.text2));
             ui.label(RichText::new(ui_kit::t!("Accent Color", "强调色")).size(11.0).color(p.muted));
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
@@ -3672,14 +3675,16 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.add_space(6.0);
             ui.label(RichText::new(ui_kit::t!("Theme Preset", "主题预设")).size(11.0).color(p.muted));
             ui.add_space(4.0);
-            // 3×3 预设色卡:整卡=背景色,上条=面板色,圆点=当前强调色在该基调下的样子
+            // 3×3 预设色卡:整卡=背景色,上条=面板色,圆点=当前强调色在该基调下的样子。
+            // 卡宽随弹窗宽度三等分(弹窗加宽后右侧不再空出一条),最窄 104
+            let card_w = ((ui.available_width() - 16.0) / 3.0).max(104.0);
             egui::Grid::new("theme-presets")
                 .num_columns(3)
                 .spacing([8.0, 8.0])
                 .show(ui, |ui| {
                     for (i, pr) in theme::PRESETS.iter().enumerate() {
                         let (rect, resp) =
-                            ui.allocate_exact_size(egui::vec2(104.0, 56.0), egui::Sense::click());
+                            ui.allocate_exact_size(egui::vec2(card_w, 56.0), egui::Sense::click());
                         ui.painter().rect_filled(rect, egui::CornerRadius::same(6), pr.palette.bg);
                         let bar = egui::Rect::from_min_size(
                             rect.left_top() + egui::vec2(6.0, 6.0),
@@ -3871,15 +3876,17 @@ pub fn draw_settings_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             theme::form_field(ui, "Base URL", "ai-base", &mut app.ai_config.base_url, 320.0, false);
             theme::form_field(ui, "API Key", "ai-key", &mut app.ai_config.api_key, 320.0, true);
             theme::form_field(ui, ui_kit::t!("Model", "模型"), "ai-model", &mut app.ai_config.model, 320.0, false);
-            // 界面语言(框架先行:已迁移文案走英文,未迁移的仍显示中文)
-            ui.add_space(6.0);
-            ui.label(RichText::new(ui_kit::t!("Language", "界面语言 / Language")).size(11.0).color(p.muted));
-            let mut en = ui_kit::i18n::is_english();
+            // 通用:界面语言(框架先行:已迁移文案走英文,未迁移的仍显示中文)
+            ui.add_space(8.0);
+            ui.label(theme::strong(ui_kit::t!("General", "通用"), 12.5).color(p.text2));
+            ui.add_space(2.0);
+            let en = ui_kit::i18n::is_english();
             let mut en_mut = en;
-            if theme::checkbox(ui, &mut en_mut, "English (partial)").changed() {
-                en = en_mut;
-                ui_kit::i18n::set_english(en);
-                let _ = en;
+            theme::form_row(ui, ui_kit::t!("Language", "语言"), |ui| {
+                theme::checkbox(ui, &mut en_mut, "English (partial)");
+            });
+            if en_mut != en {
+                ui_kit::i18n::set_english(en_mut);
             }
             });
 

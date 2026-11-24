@@ -83,7 +83,7 @@ impl ShujingApp {
                             ui.set_min_width(250.0);
                             for (label, a) in [
                                 (
-                                    ui_kit::t!("Appearance Settings…", "外观设置…"),
+                                    ui_kit::t!("Settings…", "设置…"),
                                     7u8,
                                 ),
                                 (

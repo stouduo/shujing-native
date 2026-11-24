@@ -378,12 +378,13 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
                 } else if ri % 2 == 1 {
                     ui.painter().rect_filled(rect, 0, p.stripe);
                 }
+                // 类型按类别着色(与数据列头、设计器、DBX 一致):整数蓝 / 字符串绿 / 时间紫…
                 icons::paint_baseline_text(
                     ui.painter(),
                     rect,
                     &c.data_type,
                     theme::mono(12.0),
-                    p.text2,
+                    theme::type_color(theme::classify_type(&c.data_type)),
                     12.0,
                     rect.width() - 24.0,
                 );
