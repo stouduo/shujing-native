@@ -51,6 +51,11 @@ pub struct Capabilities {
     pub sessions: bool,
     /// 中间件型(走专属控制台,无 SQL/表结构语义)
     pub middleware: bool,
+    /// 结构页能列出索引(目前 MySQL / PG / SQLite;其余返回空,界面要说"不提供"
+    /// 而不是"没有索引")
+    pub indexes: bool,
+    /// 能生成建表语句(DDL)
+    pub ddl: bool,
 }
 
 impl Capabilities {
@@ -63,6 +68,8 @@ impl Capabilities {
             cancel: false,
             sessions: false,
             middleware: false,
+            indexes: false,
+            ddl: false,
         }
     }
 }
@@ -77,6 +84,8 @@ impl DbType {
             cancel: false,
             sessions: false,
             middleware: false,
+            indexes: true,
+            ddl: true,
         };
         match self {
             DbType::MySql | DbType::Postgres => Capabilities {
@@ -90,7 +99,12 @@ impl DbType {
                 save_result: true,
                 ..SQL_DB
             },
-            DbType::Mssql | DbType::ClickHouse => SQL_DB,
+            // 有 SQL 和表结构,但还没做索引列表与建表语句
+            DbType::Mssql | DbType::ClickHouse => Capabilities {
+                indexes: false,
+                ddl: false,
+                ..SQL_DB
+            },
             DbType::Mongo => Capabilities {
                 sql: false,
                 ..SQL_DB
@@ -100,7 +114,11 @@ impl DbType {
                 ..Capabilities::none()
             },
             // 驱动插件:能力由 agent 契约保证(SQL+结构);SQL 回写/传输等按不支持走既有拒绝
-            DbType::Plugin => SQL_DB,
+            DbType::Plugin => Capabilities {
+                indexes: false,
+                ddl: false,
+                ..SQL_DB
+            },
             DbType::Nacos | DbType::Consul | DbType::Etcd => Capabilities {
                 middleware: true,
                 ..Capabilities::none()

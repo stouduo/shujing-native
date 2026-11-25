@@ -1235,6 +1235,7 @@ impl ShujingApp {
             g,
             if resp.hovered() { p.text } else { p.text2 },
         );
+        // 表清单没加载过的库不显示数字:此前一律显示 0,看着像"这个库没有表"
         let count = self
             .trees
             .get(conn_id)
@@ -1246,21 +1247,22 @@ impl ShujingApp {
                         || m.kind.starts_with("mqtt-console")
                         || m.kind.starts_with("kv-console:"))
                     .count()
-            })
-            .unwrap_or(0);
-        let g = ui.painter().layout_no_wrap(
-            format!("{count}"),
-            egui::FontId::proportional(theme::fs_px(11.0)),
-            Color32::PLACEHOLDER,
-        );
-        ui.painter().galley(
-            egui::pos2(
-                rect.right() - g.size().x - 2.0,
-                baseline - icons::baseline_top(&g, 11.0),
-            ),
-            g,
-            p.muted,
-        );
+            });
+        if let Some(count) = count {
+            let g = ui.painter().layout_no_wrap(
+                format!("{count}"),
+                egui::FontId::proportional(theme::fs_px(11.0)),
+                Color32::PLACEHOLDER,
+            );
+            ui.painter().galley(
+                egui::pos2(
+                    rect.right() - g.size().x - 2.0,
+                    baseline - icons::baseline_top(&g, 11.0),
+                ),
+                g,
+                p.muted,
+            );
+        }
         let mut new_table = false;
         let mut er = false;
         let mut import_sql = false;

@@ -443,7 +443,7 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
             let _ = table_view::draw_table_view(ctx, &tab_id, t, &conns);
         }
         TabKind::Structure(s) => {
-            let _ = structure::draw_structure_view(ctx, &tab_id, s);
+            let _ = structure::draw_structure_view(ctx, &tab_id, s, None);
         }
         TabKind::Query(q) => {
             let conns = app.conns.clone();
@@ -847,6 +847,68 @@ fn render_data_table_narrow() {
     });
 }
 
+/// 宽表夹具:11 列带类型(照 SQL Server 实测那张表),列多到窗口放不下,
+/// 每列都会被压到最小宽度 —— 列头最挤的场景
+fn wide_tab() -> TableTab {
+    let mut tab = TableTab::new("c1".into(), "users".into(), Some("sj_gui".into()));
+    tab.columns = [
+        "id", "name", "age", "score", "active", "note", "created", "birthday", "amount", "uid",
+        "big_col",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    tab.col_types = [
+        ("id", "int"),
+        ("name", "nvarchar(64)"),
+        ("age", "int"),
+        ("score", "float"),
+        ("active", "bit"),
+        ("note", "varchar(100)"),
+        ("created", "datetime2"),
+        ("birthday", "date"),
+        ("amount", "decimal(10,2)"),
+        ("uid", "uniqueidentifier"),
+        ("big_col", "bigint"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    tab.col_comments.insert("note".to_string(), "备注说明".to_string());
+    tab.pk_cols = vec!["id".to_string()];
+    tab.pk_loaded = true;
+    tab.rows = (0..6)
+        .map(|i| {
+            vec![
+                Some((i + 1).to_string()),
+                Some(format!("张三{}", i + 1)),
+                Some((18 + i).to_string()),
+                Some(format!("{:.1}", 60.0 + i as f32 * 0.75)),
+                Some((i % 2).to_string()),
+                Some(format!("note {i}")),
+                Some("2026-11-01 08:00:30.500".to_string()),
+                Some("1990-01-15".to_string()),
+                Some(format!("{:.2}", 1000.5 + i as f32)),
+                Some("57e10b1c-2402-4aea-9a93-1f2c0f5ab7f0".to_string()),
+                Some("9007199254740993".to_string()),
+            ]
+        })
+        .collect();
+    tab
+}
+
+#[test]
+fn render_wide_table() {
+    let tab = wide_tab();
+    let cell = std::cell::RefCell::new(Some(tab));
+    let conns: Vec<shujing_core::ConnInfo> = vec![];
+    render("wide_table", 920.0, 480.0, true, move |ctx| {
+        let mut b = cell.borrow_mut();
+        let tab = b.as_mut().unwrap();
+        let _ = table_view::draw_table_view(ctx, "t1", tab, &conns);
+    });
+}
+
 #[test]
 fn render_row_detail() {
     let mut tab = role_tab();
@@ -892,7 +954,7 @@ fn render_structure_view() {
     render("structure", 1280.0, 780.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let s = b.as_mut().unwrap();
-        let _ = structure::draw_structure_view(ctx, "s1", s);
+        let _ = structure::draw_structure_view(ctx, "s1", s, None);
     });
 }
 
@@ -1281,6 +1343,41 @@ fn render_designer_edit() {
 
 
 /// 交互验证:整页滚动到底后,长 DDL 应自然展开(不再被 320px 内嵌滚动区压缩)
+/// 结构页没有索引/建表语句时的两种口径:数据源不提供(SQL Server/ClickHouse)
+/// 与 真的没有(如 SQLite 的无索引表)。都不能画成空框或"索引 0"
+#[test]
+fn render_structure_empty_states() {
+    use shujing_core::{ColumnDef, TableStructure};
+    let mk = || StructureTab {
+        conn_id: "c1".into(),
+        table: "users".into(),
+        database: Some("sj_gui".into()),
+        data: Some(TableStructure {
+            columns: vec![
+                ColumnDef { name: "id".into(), data_type: "int".into(), nullable: false, key: "PRI".into(), default: None, extra: "".into(), comment: "".into() },
+                ColumnDef { name: "name".into(), data_type: "nvarchar(64)".into(), nullable: true, key: "".into(), default: None, extra: "".into(), comment: "".into() },
+            ],
+            indexes: vec![],
+            ddl: String::new(),
+        }),
+        fks: vec![],
+        loading: false,
+        error: None,
+    };
+    let cell = std::cell::RefCell::new(Some(mk()));
+    render("structure_unsupported", 900.0, 420.0, true, move |ctx| {
+        let mut b = cell.borrow_mut();
+        let s = b.as_mut().unwrap();
+        let _ = structure::draw_structure_view(ctx, "s2", s, Some(shujing_core::DbType::Mssql));
+    });
+    let cell = std::cell::RefCell::new(Some(mk()));
+    render("structure_no_index", 900.0, 420.0, true, move |ctx| {
+        let mut b = cell.borrow_mut();
+        let s = b.as_mut().unwrap();
+        let _ = structure::draw_structure_view(ctx, "s3", s, Some(shujing_core::DbType::Sqlite));
+    });
+}
+
 #[test]
 fn structure_long_ddl_scroll_to_bottom() {
     let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -5270,4 +5367,329 @@ fn result_grid_header_matches_data_page_header() {
         result_grid.abs_diff(data_page) <= 1,
         "结果网格表头 {result_grid}px 应与数据页 {data_page}px 同高(两行列头对齐)"
     );
+}
+
+
+// ---------------------------------------------------------------- 网格键盘与剪贴板
+
+type GridHarness<'a> = egui_kittest::Harness<'a, std::cell::RefCell<ShujingApp>>;
+
+/// 数据网格夹具:role 表(id 主键,6 列),行数可扩到 `rows`(验证滚动)。
+/// 列宽超出视口一截,横向可滚
+fn keyboard_grid_harness(rows: usize) -> GridHarness<'static> {
+    let mut app = full_app("role");
+    if let TabKind::Table(t) = &mut app.tabs[2].kind {
+        t.active_filter = None;
+        while t.rows.len() < rows {
+            let r = t.rows[t.rows.len() % 8].clone();
+            t.rows.push(r);
+        }
+    }
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            cell,
+        );
+    harness.run_steps(8);
+    harness
+}
+
+fn press_key(h: &mut GridHarness<'_>, key: egui::Key, m: egui::Modifiers) {
+    h.input_mut().modifiers = m;
+    h.input_mut().events.push(egui::Event::Key {
+        key,
+        pressed: true,
+        repeat: false,
+        modifiers: m,
+        physical_key: None,
+    });
+    h.step();
+    h.step();
+    h.input_mut().modifiers = Default::default();
+}
+
+fn type_text(h: &mut GridHarness<'_>, s: &str) {
+    h.input_mut().events.push(egui::Event::Text(s.to_string()));
+    h.step();
+    h.step();
+}
+
+/// 单击(完整的按下/释放),坐标是网格内的逻辑坐标
+fn click_grid(h: &mut GridHarness<'_>, pos: egui::Pos2) {
+    h.input_mut().events.push(egui::Event::PointerMoved(pos));
+    h.step();
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.step();
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.step();
+    h.step();
+}
+
+/// (选中格, 矩形选区)
+fn selection(h: &GridHarness<'_>) -> (Option<(usize, usize)>, Option<((usize, usize), (usize, usize))>) {
+    let app = h.state().borrow();
+    let t = app.tabs[2].table_data().unwrap();
+    (t.selected, t.sel_range)
+}
+
+/// 网格里的状态快照(借用结束后再断言)
+struct GridSnap {
+    editing: Option<(usize, usize)>,
+    draft: String,
+    changes: Vec<(usize, String, Option<String>)>,
+    cells: Vec<Vec<Option<String>>>,
+}
+
+fn snap(h: &GridHarness<'_>) -> GridSnap {
+    let app = h.state().borrow();
+    let t = app.tabs[2].table_data().unwrap();
+    GridSnap {
+        editing: t.editing,
+        draft: t.draft.clone(),
+        changes: t.changes.clone(),
+        cells: t.rows.clone(),
+    }
+}
+
+#[test]
+fn grid_keyboard_navigation_moves_selection() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = keyboard_grid_harness(8);
+    let plain = egui::Modifiers::NONE;
+    let shift = egui::Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    let cmd = egui::Modifiers {
+        command: true,
+        ..Default::default()
+    };
+    use egui::Key::*;
+    // 点选 role 列第一行 =(0,1)
+    click_grid(&mut h, egui::pos2(380.0, 182.0));
+    // 点选本身也落一个 1×1 的矩形选区(拖选状态机的起点,既有行为)
+    assert_eq!(selection(&h), (Some((0, 1)), Some(((0, 1), (0, 1)))), "点选后应选中 (0,1)");
+
+    // 方向键逐格移动
+    press_key(&mut h, ArrowDown, plain);
+    assert_eq!(selection(&h), (Some((1, 1)), None), "↓ 收拢为单格");
+    press_key(&mut h, ArrowRight, plain);
+    assert_eq!(selection(&h).0, Some((1, 2)), "→");
+    press_key(&mut h, ArrowUp, plain);
+    assert_eq!(selection(&h).0, Some((0, 2)), "↑");
+    press_key(&mut h, ArrowLeft, plain);
+    assert_eq!(selection(&h).0, Some((0, 1)), "←");
+    press_key(&mut h, ArrowUp, plain);
+    assert_eq!(selection(&h).0, Some((0, 1)), "顶边不越界");
+
+    // Shift+方向:以原格为锚点扩展矩形选区
+    press_key(&mut h, ArrowDown, shift);
+    assert_eq!(selection(&h), (Some((1, 1)), Some(((0, 1), (1, 1)))), "Shift+↓ 扩展");
+    press_key(&mut h, ArrowDown, shift);
+    assert_eq!(selection(&h).1, Some(((0, 1), (2, 1))), "继续扩展");
+    press_key(&mut h, ArrowRight, plain);
+    assert_eq!(selection(&h), (Some((2, 2)), None), "不带 Shift 收拢为单格");
+
+    // Home/End 到行首行尾;Tab 行尾折到下一行,Shift+Tab 行首折到上一行
+    press_key(&mut h, End, plain);
+    assert_eq!(selection(&h).0, Some((2, 5)), "End");
+    press_key(&mut h, Tab, plain);
+    assert_eq!(selection(&h).0, Some((3, 0)), "Tab 行尾折返");
+    press_key(&mut h, Home, plain);
+    assert_eq!(selection(&h).0, Some((3, 0)), "Home");
+    press_key(&mut h, Tab, shift);
+    assert_eq!(selection(&h).0, Some((2, 5)), "Shift+Tab 行首折返");
+
+    // ⌘+方向:跳到行/列首尾;翻页越界夹到最后一行
+    press_key(&mut h, ArrowDown, cmd);
+    assert_eq!(selection(&h).0, Some((7, 5)), "⌘↓ 最后一行");
+    press_key(&mut h, ArrowUp, cmd);
+    assert_eq!(selection(&h).0, Some((0, 5)), "⌘↑ 第一行");
+    press_key(&mut h, ArrowLeft, cmd);
+    assert_eq!(selection(&h).0, Some((0, 0)), "⌘← 第一列");
+    press_key(&mut h, ArrowRight, cmd);
+    assert_eq!(selection(&h).0, Some((0, 5)), "⌘→ 最后一列");
+    press_key(&mut h, PageDown, plain);
+    assert_eq!(selection(&h).0, Some((7, 5)), "PageDown 夹到最后一行");
+    press_key(&mut h, PageUp, plain);
+    assert_eq!(selection(&h).0, Some((0, 5)), "PageUp 回到第一行");
+}
+
+#[test]
+fn grid_keyboard_edit_then_commit_moves_on() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = keyboard_grid_harness(8);
+    let plain = egui::Modifiers::NONE;
+    use egui::Key::*;
+    click_grid(&mut h, egui::pos2(380.0, 182.0));
+    assert_eq!(selection(&h).0, Some((0, 1)));
+
+    // 选中格上直接打字 = 进入编辑,首字符就是打的内容
+    type_text(&mut h, "x");
+    let s = snap(&h);
+    assert_eq!(s.editing, Some((0, 1)), "打字应进入编辑");
+    assert_eq!(s.draft, "x");
+    type_text(&mut h, "y");
+    assert_eq!(snap(&h).draft, "xy");
+
+    // Tab:提交并移到右边一格
+    press_key(&mut h, Tab, plain);
+    let s = snap(&h);
+    assert_eq!(s.editing, None, "Tab 应提交并退出编辑");
+    assert_eq!(s.cells[0][1].as_deref(), Some("xy"));
+    assert!(s.changes.contains(&(0, "role".to_string(), Some("xy".to_string()))));
+    assert_eq!(selection(&h).0, Some((0, 2)), "Tab 后移到右边一格");
+
+    // 回车:进入编辑(带着原值);再回车:提交并移到下一行
+    let original = snap(&h).cells[0][2].clone();
+    press_key(&mut h, Enter, plain);
+    let s = snap(&h);
+    assert_eq!(s.editing, Some((0, 2)), "回车应进入编辑");
+    assert_eq!(s.draft, original.clone().unwrap_or_default(), "编辑框带原值");
+    type_text(&mut h, "!");
+    press_key(&mut h, Enter, plain);
+    let s = snap(&h);
+    assert_eq!(s.editing, None);
+    let expect = format!("{}!", original.unwrap_or_default());
+    assert_eq!(s.cells[0][2].as_deref(), Some(expect.as_str()));
+    assert_eq!(selection(&h).0, Some((1, 2)), "回车后移到下一行");
+
+    // F2 进入编辑,Esc 取消:值不变,选中格不动
+    press_key(&mut h, F2, plain);
+    assert_eq!(snap(&h).editing, Some((1, 2)), "F2 应进入编辑");
+    type_text(&mut h, "Z");
+    assert_eq!(snap(&h).draft, "内容编辑Z");
+    press_key(&mut h, Escape, plain);
+    let s = snap(&h);
+    assert_eq!(s.editing, None, "Esc 退出编辑");
+    assert_eq!(s.cells[1][2].as_deref(), Some("内容编辑"), "Esc 不提交");
+    assert_eq!(selection(&h).0, Some((1, 2)));
+
+    // Esc 之后网格继续接管键盘:Delete 把选中格置 NULL(暂存)
+    press_key(&mut h, Delete, plain);
+    let s = snap(&h);
+    assert_eq!(s.cells[1][2], None, "Delete 置 NULL");
+    assert!(s.changes.contains(&(1, "role_name".to_string(), None)));
+    // Shift+Tab:回到左边一格
+    press_key(&mut h, Tab, egui::Modifiers { shift: true, ..Default::default() });
+    assert_eq!(selection(&h).0, Some((1, 1)));
+
+    // Delete 不动主键列(与右键菜单"设为 NULL"同一条规则)
+    click_grid(&mut h, egui::pos2(285.0, 212.0));
+    assert_eq!(selection(&h).0, Some((1, 0)), "点选 id 列第二行");
+    let before = snap(&h).changes.len();
+    press_key(&mut h, Delete, plain);
+    let s = snap(&h);
+    assert_eq!(s.cells[1][0].as_deref(), Some("2"), "主键不被 Delete 置 NULL");
+    assert_eq!(s.changes.len(), before, "主键格上 Delete 不产生改动");
+}
+
+#[test]
+fn grid_paste_block_and_single_value_fill() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = keyboard_grid_harness(8);
+    click_grid(&mut h, egui::pos2(380.0, 182.0));
+    assert_eq!(selection(&h).0, Some((0, 1)));
+
+    // 从 Excel 那样复制来的 3×2 块:贴到以选中格为左上角的位置
+    h.input_mut()
+        .events
+        .push(egui::Event::Paste("a\tb\nc\td\ne\tf".to_string()));
+    h.step();
+    h.step();
+    let s = snap(&h);
+    assert_eq!(s.cells[0][1].as_deref(), Some("a"));
+    assert_eq!(s.cells[0][2].as_deref(), Some("b"));
+    assert_eq!(s.cells[2][1].as_deref(), Some("e"));
+    assert_eq!(s.cells[2][2].as_deref(), Some("f"));
+    assert_eq!(s.changes.len(), 6, "3×2 块应产生 6 处改动: {:?}", s.changes);
+    assert_eq!(selection(&h), (Some((0, 1)), Some(((0, 1), (2, 2)))), "贴完选中贴入的区域");
+
+    // 单值贴进多格选区 = 填充整个选区(与"打字后回车"同一语义,主键列跳过)
+    press_key(
+        &mut h,
+        egui::Key::A,
+        egui::Modifiers { command: true, ..Default::default() },
+    );
+    assert_eq!(selection(&h).1, Some(((0, 0), (7, 5))));
+    h.input_mut().events.push(egui::Event::Paste("z".to_string()));
+    h.step();
+    h.step();
+    let s = snap(&h);
+    assert_eq!(s.changes.len(), 8 * 5, "8 行 × 5 个非主键列");
+    assert!(
+        s.changes.iter().all(|(_, c, v)| c != "id" && v.as_deref() == Some("z")),
+        "主键列跳过,其余都是 z"
+    );
+    assert_eq!(s.cells[7][4].as_deref(), Some("z"));
+    assert_eq!(s.cells[7][0].as_deref(), Some("8"), "主键不动");
+}
+
+/// 两幅渲染图(RGBA 原始字节)在给定矩形内的差异像素数;矩形坐标是物理像素
+fn diff_pixels(a: &[u8], b: &[u8], w: usize, rect: (usize, usize, usize, usize)) -> usize {
+    let (x0, y0, x1, y1) = rect;
+    (y0..y1)
+        .map(|y| {
+            (x0..x1)
+                .filter(|&x| {
+                    let i = (y * w + x) * 4;
+                    a[i..i + 3] != b[i..i + 3]
+                })
+                .count()
+        })
+        .sum()
+}
+
+#[test]
+fn grid_keyboard_scrolls_selection_into_view() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = keyboard_grid_harness(100);
+    let plain = egui::Modifiers::NONE;
+    click_grid(&mut h, egui::pos2(380.0, 182.0));
+    h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(60.0, 660.0)));
+    h.step();
+    let before = h.render().expect("render").into_raw();
+    assert_eq!(table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+    // 翻到看不见的行:网格要跟着滚
+    press_key(&mut h, egui::Key::PageDown, plain);
+    press_key(&mut h, egui::Key::PageDown, plain);
+    let row = selection(&h).0.expect("选中格").0;
+    assert!(row >= 20, "两次翻页后应到了第 {row} 行");
+    h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(60.0, 660.0)));
+    h.step();
+    let after = h.render().expect("render").into_raw();
+    // 数据区(避开侧栏/表头/底栏):x 240..900,y 200..620(逻辑坐标,×2)
+    let moved = diff_pixels(&before, &after, 2000, (480, 400, 1800, 1240));
+    assert!(moved > 100_000, "翻页后数据区应滚动了,差异像素 {moved}");
+
+    // End 到最后一列:横向也要滚进视野
+    press_key(&mut h, egui::Key::End, plain);
+    let hx = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(hx > 0, "End 到最右列后横向滚动条应离开原点,实际 {hx}");
 }

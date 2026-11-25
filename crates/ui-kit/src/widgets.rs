@@ -184,7 +184,8 @@ pub fn paint_col_anno(
         );
         x += 12.0;
     }
-    if let Some(ty) = ty {
+    // 只剩一个省略号的位置(列被压到最窄)就不画:孤零零的"…"没有信息
+    if let Some(ty) = ty.filter(|_| rect.right() - HEAD_PAD_X - x >= 20.0) {
         let color = crate::theme::type_color(crate::theme::classify_type(ty));
         let avail = (rect.right() - HEAD_PAD_X - x).max(8.0);
         let tg = crate::icons::text_galley(

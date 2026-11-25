@@ -1800,21 +1800,21 @@ pub(crate) fn draw_table_view(
                             }
                         } else if ui_kit::i18n::is_english() {
                             format!(
-                                "Selected {}×{} · Type and press Enter to fill · ⌘C copy · Delete for NULL",
+                                "Selected {}×{} · Type and press Enter to fill · ⌘C copy · ⌘V paste · Delete for NULL",
                                 r2 - r1 + 1,
                                 c2 - c1 + 1
                             )
                         } else {
                             format!(
-                                "已选 {}×{} · 输入值回车填充 · ⌘C 复制 · Delete 置 NULL",
+                                "已选 {}×{} · 输入值回车填充 · ⌘C 复制 · ⌘V 粘贴 · Delete 置 NULL",
                                 r2 - r1 + 1,
                                 c2 - c1 + 1
                             )
                         };
                         ui.label(RichText::new(msg).size(theme::fs_px(11.5)).color(p.accent))
                             .on_hover_text(ui_kit::t!(
-                                "Type and press Enter to fill · ⌘C copy · Delete for NULL",
-                                "输入值回车填充 · ⌘C 复制 · Delete 置 NULL"
+                                "Type and press Enter to fill · ⌘C copy · ⌘V paste (block from the top-left cell, or fill the selection) · Delete for NULL",
+                                "输入值回车填充 · ⌘C 复制 · ⌘V 粘贴(整块从左上角贴入,单值则填充整个选区)· Delete 置 NULL"
                             ));
                     }
                 } else if tab.multi_sel.len() > 1 {
@@ -1838,6 +1838,17 @@ pub(crate) fn draw_table_view(
                             "⌘C copy · right-click a row for batch delete",
                             "⌘C 复制 · 行右键批量删除"
                         ));
+                } else if tab.selected.is_some() && !compact_footer {
+                    // 单格选中:轻提示键盘操作。用灰色,不像选区提示那样抢眼
+                    theme::vsep(ui);
+                    ui.label(
+                        RichText::new(ui_kit::t!(
+                            "Arrows move · Enter edits · ⌘C copy · ⌘V paste",
+                            "方向键移动 · 回车编辑 · ⌘C 复制 · ⌘V 粘贴"
+                        ))
+                        .size(theme::fs_px(11.5))
+                        .color(p.muted),
+                    );
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
@@ -2238,6 +2249,21 @@ pub(crate) fn draw_table_view(
                 .filter(|(_, c)| !tab.hidden_cols.contains(c))
                 .map(|(i, _)| i)
                 .collect();
+            // ---- 键盘交互 ----
+            // 网格的键盘焦点位:点选单元格后焦点归网格,方向键/Tab/Esc 由网格处理
+            let grid_id = egui::Id::new(("grid-focus", tab_id));
+            let reveal_id = egui::Id::new(("grid-reveal", tab_id));
+            let grid_focused = ui.memory(|m| m.has_focus(grid_id));
+            // 编辑提交后的去向 / 是否把焦点还给网格:绘制函数的闭包里写、这里读
+            let after_edit = std::cell::Cell::new(None);
+            let refocus = std::cell::Cell::new(false);
+            // 上一帧键盘移到的格:(行, 可见列, 是否居中滚入)
+            let reveal = ui.memory(|m| m.data.get_temp::<(usize, usize, bool)>(reveal_id));
+            // 一屏能放下的行数(翻页步长):要在网格占掉空间之前量
+            let page_rows = ((ui.available_height() - theme::data_header_h() - 14.0)
+                / theme::row_h())
+            .max(1.0) as usize;
+
             let mut sort_click: Option<String> = None;
             let mut commit: Option<(usize, usize, String)> = None;
             let mut new_selection: Option<Option<(usize, usize)>> = None;
@@ -2278,6 +2304,16 @@ pub(crate) fn draw_table_view(
                 ui.spacing_mut().scroll.active_handle_opacity = 1.0;
                 ui.spacing_mut().scroll.bar_width = 12.0;
                 ui.spacing_mut().scroll.bar_inner_margin = 2.0;
+                // 网格的键盘焦点位:一块只可获焦点的区域(不拦点击)。持焦时把
+                // Tab/方向键/Esc 锁给网格,否则 egui 会拿它们在控件间遍历焦点
+                let grid_resp = ui.interact(
+                    ui.available_rect_before_wrap(),
+                    grid_id,
+                    Sense::focusable_noninteractive(),
+                );
+                if grid_resp.has_focus() {
+                    ui.memory_mut(|mem| mem.set_focus_lock_filter(grid_id, GRID_FOCUS_KEYS));
+                }
                 let hout = egui::ScrollArea::horizontal()
                     .id_salt(format!("data-hscroll-{tab_id_s}"))
                     // 内建拖拽平移与矩形拖选冲突:拖动手势让位选区,平移走滚轮/滚动条
@@ -2329,6 +2365,9 @@ pub(crate) fn draw_table_view(
                             sel_range,
                             drag_sel,
                             drag_row,
+                            reveal,
+                            &after_edit,
+                            &refocus,
                         );
                         if let Some(a) = menu_action {
                             actions.push(a);
@@ -2336,8 +2375,41 @@ pub(crate) fn draw_table_view(
                     });
                 // 冻结列编辑框归属判定用「上一帧」横向偏移(与表格渲染时的判定一致)
                 let prev_hscroll = LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed) as f32;
+                let mut hscroll_x = hout.state.offset.x;
+                // 键盘移到的列滚入横向视野。表格自己的滚动区会把横向目标一并取走,
+                // 外层这层横向滚动区拿不到,只能直接改它的偏移。冻结列始终钉在
+                // 可见区,不用管;其余列要避开冻结列盖住的那一段
+                if let Some((_, c, center)) = reveal {
+                    if c >= frozen_vis {
+                        let ws = actual_widths.take();
+                        let first = usize::from(tab.show_rowno);
+                        let pinned: f32 = ws.iter().take(first + frozen_vis).sum();
+                        let left: f32 = ws.iter().take(first + c).sum();
+                        if let Some(&w) = ws.get(first + c) {
+                            let (right, view_w) = (left + w, hout.inner_rect.width());
+                            hscroll_x = if center {
+                                (left + right) / 2.0 - view_w / 2.0
+                            } else if left < hscroll_x + pinned {
+                                (left - pinned).max(0.0)
+                            } else if right > hscroll_x + view_w - 14.0 {
+                                right - view_w + 14.0
+                            } else {
+                                hscroll_x
+                            }
+                            .max(0.0);
+                        }
+                        // 冻结覆盖层接着要用这份列宽对齐
+                        actual_widths.set(ws);
+                    }
+                    ui.memory_mut(|m| m.data.remove::<(usize, usize, bool)>(reveal_id));
+                    if hscroll_x != hout.state.offset.x {
+                        let mut st = hout.state;
+                        st.offset.x = hscroll_x;
+                        st.store(ui.ctx(), hout.id);
+                    }
+                }
                 LAST_HSCROLL_X.store(
-                    hout.state.offset.x as i32,
+                    hscroll_x as i32,
                     std::sync::atomic::Ordering::Relaxed,
                 );
                 // 冻结列覆盖层:横向滚动时把行号+前 N 列钉在视口左侧重绘
@@ -2377,6 +2449,8 @@ pub(crate) fn draw_table_view(
                     mysql_quote_flag,
                     &mut frozen_out,
                     sel_range,
+                    &after_edit,
+                    &refocus,
                 );
                 if let Some(a) = menu_action {
                     actions.push(a);
@@ -2421,6 +2495,28 @@ pub(crate) fn draw_table_view(
 
             if let Some(sel) = new_selection {
                 *selected = sel;
+                // 点选了单元格:键盘焦点归网格
+                if sel.is_some() {
+                    ui.memory_mut(|mem| mem.request_focus(grid_id));
+                }
+            }
+            // 编辑提交后的去向(回车向下 / Tab 向右):落到新格并滚入视野
+            if let Some(motion) = after_edit.take() {
+                if let Some(cur) = *selected {
+                    let next = move_cell(cur, motion, (rows.len(), vis_idx.len()), page_rows);
+                    *selected = Some(next);
+                    *sel_range = None;
+                    ui.memory_mut(|m| {
+                        m.data.insert_temp(reveal_id, (next.0, next.1, motion.is_jump()))
+                    });
+                }
+            }
+            // 编辑框让出焦点后把键盘焦点还给网格。此时输入事件里还留着刚按的
+            // 回车/Tab/Esc,本帧不能再当导航键处理(否则 Tab 走两格、回车紧接着
+            // 又进入下一格的编辑)
+            let edit_ended = refocus.get();
+            if edit_ended {
+                ui.memory_mut(|mem| mem.request_focus(grid_id));
             }
             // 矩形选区(直接操作):无焦点输入时直接打字 = 从锚点格编辑,回车提交到整个选区;
             // Delete/Backspace = 选区置 NULL(暂存,保存前可丢弃)
@@ -2430,7 +2526,8 @@ pub(crate) fn draw_table_view(
                     r2 > r1 || c2 > c1
                 })
                 .unwrap_or(false);
-            let field_focused = ui.ctx().memory(|m| m.focused().is_some());
+            // 有输入框持焦时让给它;网格自己的焦点位不算(否则网格持焦时打字/⌘C 全失效)
+            let field_focused = ui.ctx().memory(|m| m.focused().is_some_and(|id| id != grid_id));
             // ⌘A:全选本页单元格(可视列 × 本页行);输入框持焦时让给编辑器的全选
             let cmd_a = ui.input(|i| {
                 i.events.iter().any(|e| {
@@ -2485,6 +2582,130 @@ pub(crate) fn draw_table_view(
                         commit = Some((tl.0, tl.1, String::new()));
                     }
                 }
+            }
+            // ---- 键盘导航(输入框没持焦、没在编辑时):方向键/Tab/Home/End/翻页/⌘+方向
+            // 移动选中格,按着 Shift 则以原锚点扩展矩形选区;回车/F2 进入编辑;
+            // Delete/Backspace 单格置 NULL;⌘V 粘贴;Esc 放开网格焦点
+            let mut edit_start: Option<(usize, usize)> = None;
+            let mut null_cell: Option<(usize, usize)> = None;
+            let mut paste: Option<String> = None;
+            let mut moved: Option<(usize, usize, bool)> = None;
+            let mut release_focus = false;
+            if !edit_ended
+                && !field_focused
+                && editing.is_none()
+                && !rows.is_empty()
+                && !vis_idx.is_empty()
+            {
+                let bounds = (rows.len(), vis_idx.len());
+                ui.input(|i| {
+                    for e in i.events.iter() {
+                        let egui::Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } = e
+                        else {
+                            if let egui::Event::Paste(t) = e {
+                                paste = Some(t.clone());
+                            }
+                            continue;
+                        };
+                        let plain = !modifiers.command
+                            && !modifiers.shift
+                            && !modifiers.alt
+                            && !modifiers.ctrl;
+                        if let Some((motion, extend)) = key_motion(*key, *modifiers) {
+                            // 还没有选中格时第一次按导航键:落到左上角
+                            let cur = selected.unwrap_or((0, 0));
+                            let next = if selected.is_some() {
+                                move_cell(cur, motion, bounds, page_rows)
+                            } else {
+                                cur
+                            };
+                            if extend {
+                                let anchor = sel_range.map(|r| r.0).unwrap_or(cur);
+                                *sel_range = Some((anchor, next));
+                            } else {
+                                *sel_range = None;
+                            }
+                            *selected = Some(next);
+                            moved = Some((next.0, next.1, motion.is_jump()));
+                        } else if plain && (*key == egui::Key::Enter || *key == egui::Key::F2) {
+                            edit_start = *selected;
+                        } else if plain
+                            && (*key == egui::Key::Delete || *key == egui::Key::Backspace)
+                            // 多格选区的 Delete 走上面的批量置 NULL,这里只管单格
+                            && !sel_spanning
+                        {
+                            null_cell = *selected;
+                        } else if plain && *key == egui::Key::Escape && grid_focused {
+                            release_focus = true;
+                        }
+                    }
+                });
+            }
+            if let Some((r, c)) = edit_start {
+                if !pk_cols.is_empty() {
+                    if let Some(&full) = vis_idx.get(c) {
+                        *draft = rows
+                            .get(r)
+                            .and_then(|row| row.get(full))
+                            .cloned()
+                            .flatten()
+                            .unwrap_or_default();
+                        *editing = Some((r, c));
+                    }
+                }
+            }
+            if !pk_cols.is_empty() {
+                if let Some((r, c)) = null_cell {
+                    // 主键列不许一键置 NULL(与右键菜单"设为 NULL"同一条规则)
+                    let on_pk = vis_idx.get(c).is_some_and(|f| pk_cols.contains(&columns[*f]));
+                    if let (Some(&full), false) = (vis_idx.get(c), on_pk) {
+                        stage_cell(
+                            rows,
+                            columns,
+                            pk_cols,
+                            &mut tab.orig_pks,
+                            changes,
+                            r,
+                            full,
+                            String::new(),
+                        );
+                    }
+                }
+                if let Some(text) = paste {
+                    let block = parse_clipboard(&text);
+                    // 锚点:选区左上角,没有选区就是当前格
+                    let anchor = sel_range.map(|r| norm_range(r).0).or(*selected);
+                    let single = block.len() == 1 && block[0].len() == 1;
+                    if let (Some((r0, c0)), true) = (anchor, !block.is_empty()) {
+                        if single && sel_spanning {
+                            // 单值贴进多格选区 = 填充整个选区(走和"打字后回车"同一条路)
+                            commit = Some((r0, c0, block[0][0].clone()));
+                        } else if let Some(last) = paste_block(
+                            rows,
+                            columns,
+                            pk_cols,
+                            &mut tab.orig_pks,
+                            changes,
+                            &vis_idx,
+                            (r0, c0),
+                            &block,
+                        ) {
+                            *selected = Some((r0, c0));
+                            *sel_range = Some(((r0, c0), last));
+                        }
+                    }
+                }
+            }
+            if let Some(req) = moved {
+                ui.memory_mut(|m| m.data.insert_temp(reveal_id, req));
+            }
+            if release_focus {
+                ui.memory_mut(|mem| mem.surrender_focus(grid_id));
             }
             if copy_text.is_none() && editing.is_none() && !field_focused {
                 if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) && sel_spanning
@@ -2590,34 +2811,16 @@ pub(crate) fn draw_table_view(
                     }
                 } else {
                     let full_ci = vis_idx.get(ci).copied().unwrap_or(ci);
-                    let col_name = columns[full_ci].clone();
-                    // 与原值相同不记改动(此前双击后原样回车也会产生假"未保存 1 处")
-                    let unchanged = rows[ri][full_ci].as_deref() == Some(val.as_str())
-                        || (rows[ri][full_ci].is_none() && val.is_empty());
-                    if unchanged {
-                        changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
-                    } else {
-                        // 编辑主键列:覆写前快照整行原始主键(保存 WHERE 用)
-                        if pk_cols.contains(&col_name) && !tab.orig_pks.contains_key(&ri) {
-                            tab.orig_pks.insert(
-                                ri,
-                                pk_cols
-                                    .iter()
-                                    .map(|pc| {
-                                        let pi = columns.iter().position(|c| c == pc).unwrap_or(0);
-                                        (
-                                            pc.clone(),
-                                            rows[ri].get(pi).cloned().flatten().unwrap_or_default(),
-                                        )
-                                    })
-                                    .collect(),
-                            );
-                        }
-                        let new_val = (!val.is_empty()).then_some(val);
-                        rows[ri][full_ci] = new_val.clone();
-                        changes.retain(|(r, cn, _)| !(*r == ri && cn == &col_name));
-                        changes.push((ri, col_name, new_val));
-                    }
+                    stage_cell(
+                        rows,
+                        columns,
+                        pk_cols,
+                        &mut tab.orig_pks,
+                        changes,
+                        ri,
+                        full_ci,
+                        val,
+                    );
                 }
             }
             if let Some((ri, ci)) = set_null {
@@ -2818,6 +3021,208 @@ fn range_tint(accent: Color32) -> Color32 {
 }
 
 /// 选区两端归一化为(左上,右下)
+/// 键盘移动网格选中格的方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GridMotion {
+    Rows(isize),
+    Cols(isize),
+    /// Tab:逐格右移(负 = 左移),行尾折到下一行行首、行首折到上一行行尾
+    Tab(isize),
+    /// PageUp/PageDown:移动一屏的行数
+    Page(isize),
+    FirstCol,
+    LastCol,
+    FirstRow,
+    LastRow,
+}
+
+impl GridMotion {
+    /// 翻页/首尾跳转:落点离原格很远,滚入视野时居中而不是贴边
+    fn is_jump(self) -> bool {
+        matches!(
+            self,
+            GridMotion::Page(_) | GridMotion::FirstRow | GridMotion::LastRow
+        )
+    }
+}
+
+/// 按键 → (移动方式, 是否按着 Shift 扩展选区)。⌘+方向键 = 跳到行/列的首尾。
+/// 返回 None = 不是导航键,或带 ⌥/⌃(留给别的用途)
+pub(crate) fn key_motion(key: egui::Key, m: egui::Modifiers) -> Option<(GridMotion, bool)> {
+    if m.alt || m.ctrl {
+        return None;
+    }
+    let extend = m.shift;
+    let (dc, dr) = match key {
+        egui::Key::ArrowLeft => (-1, 0),
+        egui::Key::ArrowRight => (1, 0),
+        egui::Key::ArrowUp => (0, -1),
+        egui::Key::ArrowDown => (0, 1),
+        egui::Key::Tab => return Some((GridMotion::Tab(if extend { -1 } else { 1 }), false)),
+        egui::Key::PageUp => return Some((GridMotion::Page(-1), extend)),
+        egui::Key::PageDown => return Some((GridMotion::Page(1), extend)),
+        egui::Key::Home if !m.command => return Some((GridMotion::FirstCol, extend)),
+        egui::Key::End if !m.command => return Some((GridMotion::LastCol, extend)),
+        _ => return None,
+    };
+    Some((
+        if m.command {
+            match (dc, dr) {
+                (-1, _) => GridMotion::FirstCol,
+                (1, _) => GridMotion::LastCol,
+                (_, -1) => GridMotion::FirstRow,
+                _ => GridMotion::LastRow,
+            }
+        } else if dr != 0 {
+            GridMotion::Rows(dr)
+        } else {
+            GridMotion::Cols(dc)
+        },
+        extend,
+    ))
+}
+
+/// 从当前格出发按移动方式落到的新格(越界夹取;Tab 在行内折返)。
+/// `bounds` = (行数, 可见列数);`page_rows` = 一屏能放下的行数(翻页用)
+pub(crate) fn move_cell(
+    cur: (usize, usize),
+    motion: GridMotion,
+    bounds: (usize, usize),
+    page_rows: usize,
+) -> (usize, usize) {
+    let (rows, cols) = (bounds.0.max(1), bounds.1.max(1));
+    let (r, c) = cur;
+    let clamp = |v: isize, max: usize| v.clamp(0, max as isize - 1) as usize;
+    match motion {
+        GridMotion::Rows(d) => (clamp(r as isize + d, rows), c),
+        GridMotion::Cols(d) => (r, clamp(c as isize + d, cols)),
+        GridMotion::Tab(d) => {
+            let nc = c as isize + d;
+            if nc < 0 {
+                (r.saturating_sub(1), cols - 1)
+            } else if nc as usize >= cols {
+                ((r + 1).min(rows - 1), 0)
+            } else {
+                (r, nc as usize)
+            }
+        }
+        GridMotion::Page(d) => (
+            clamp(r as isize + d * page_rows.max(1) as isize, rows),
+            c,
+        ),
+        GridMotion::FirstCol => (r, 0),
+        GridMotion::LastCol => (r, cols - 1),
+        GridMotion::FirstRow => (0, c),
+        GridMotion::LastRow => (rows - 1, c),
+    }
+}
+
+/// 把一个格子记为改动(空串 = 置 NULL)。与原值相同不记改动;写主键列前先快照
+/// 整行原始主键(保存时的 WHERE 用)。`col` 是全量列下标
+pub(crate) fn stage_cell(
+    rows: &mut [Vec<Option<String>>],
+    columns: &[String],
+    pk_cols: &[String],
+    orig_pks: &mut std::collections::HashMap<usize, Vec<(String, String)>>,
+    changes: &mut Vec<(usize, String, Option<String>)>,
+    r: usize,
+    col: usize,
+    val: String,
+) {
+    let Some((col_name, cur)) = columns.get(col).zip(rows.get(r).and_then(|row| row.get(col))) else {
+        return;
+    };
+    // 与原值相同不记改动(此前双击后原样回车也会产生假"未保存 1 处")
+    if cur.as_deref() == Some(val.as_str()) || (cur.is_none() && val.is_empty()) {
+        changes.retain(|(rr, cn, _)| !(*rr == r && cn == col_name));
+        return;
+    }
+    if pk_cols.contains(col_name) && !orig_pks.contains_key(&r) {
+        orig_pks.insert(
+            r,
+            pk_cols
+                .iter()
+                .map(|pc| {
+                    (
+                        pc.clone(),
+                        columns
+                            .iter()
+                            .position(|c| c == pc)
+                            .and_then(|pi| rows[r].get(pi).cloned().flatten())
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect(),
+        );
+    }
+    let new_val = (!val.is_empty()).then_some(val);
+    rows[r][col] = new_val.clone();
+    changes.retain(|(rr, cn, _)| !(*rr == r && cn == col_name));
+    changes.push((r, col_name.clone(), new_val));
+}
+
+/// 把剪贴板的矩形块贴到以 (r0, c0) 为左上角的位置(c 是可见列下标)。行/列越界的
+/// 部分丢弃,主键列跳过(防键冲突),空单元格 = 置 NULL。返回实际贴到的右下角
+pub(crate) fn paste_block(
+    rows: &mut [Vec<Option<String>>],
+    columns: &[String],
+    pk_cols: &[String],
+    orig_pks: &mut std::collections::HashMap<usize, Vec<(String, String)>>,
+    changes: &mut Vec<(usize, String, Option<String>)>,
+    vis_idx: &[usize],
+    (r0, c0): (usize, usize),
+    block: &[Vec<String>],
+) -> Option<(usize, usize)> {
+    let mut last = None;
+    for (dr, line) in block.iter().enumerate() {
+        let rr = r0 + dr;
+        if rr >= rows.len() {
+            break;
+        }
+        for (dc, val) in line.iter().enumerate() {
+            let cc = c0 + dc;
+            let Some(&full) = vis_idx.get(cc) else {
+                break;
+            };
+            if pk_cols.contains(&columns[full]) {
+                continue;
+            }
+            stage_cell(rows, columns, pk_cols, orig_pks, changes, rr, full, val.clone());
+            last = Some((rr, cc));
+        }
+    }
+    last
+}
+
+/// 剪贴板文本 → 行 × 列(换行分行、制表符分列;去掉首尾空行与行尾 \r)
+pub(crate) fn parse_clipboard(text: &str) -> Vec<Vec<String>> {
+    text.trim_matches('\n')
+        .split('\n')
+        .map(|line| {
+            line.trim_end_matches('\r')
+                .split('\t')
+                .map(str::to_string)
+                .collect()
+        })
+        .collect()
+}
+
+/// 网格持焦点时,这些键留给网格(不给 egui 做焦点遍历)
+const GRID_FOCUS_KEYS: egui::EventFilter = egui::EventFilter {
+    tab: true,
+    horizontal_arrows: true,
+    vertical_arrows: true,
+    escape: true,
+};
+
+/// 单元格编辑框持焦点时,Tab 留给网格(提交后移到下一格)
+const EDIT_FOCUS_KEYS: egui::EventFilter = egui::EventFilter {
+    tab: true,
+    horizontal_arrows: true,
+    vertical_arrows: true,
+    escape: false,
+};
+
 fn norm_range(r: ((usize, usize), (usize, usize))) -> ((usize, usize), (usize, usize)) {
     let ((r1, c1), (r2, c2)) = r;
     ((r1.min(r2), c1.min(c2)), (r1.max(r2), c1.max(c2)))
@@ -2873,6 +3278,10 @@ fn draw_data_table(
     sel_range: &mut Option<((usize, usize), (usize, usize))>,
     drag_sel: &mut Option<(usize, usize)>,
     drag_row: &mut Option<usize>,
+    // 键盘交互:要滚入视野的行 / 编辑提交后的去向 / 是否把焦点还给网格
+    reveal: Option<(usize, usize, bool)>,
+    after_edit: &std::cell::Cell<Option<GridMotion>>,
+    refocus: &std::cell::Cell<bool>,
 ) {
     *geom = FrozenGeom::default();
     let p = theme::c();
@@ -2908,6 +3317,12 @@ fn draw_data_table(
         .vscroll(true)
         .drag_to_scroll(false)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+    // 行是虚拟化的(滚出视口的不渲染),键盘移到的行靠表格自己的"滚到第 N 行"进视野:
+    // 逐格移动刚好露出即可,翻页/首尾跳转居中
+    let builder = match reveal {
+        Some((row, _, center)) => builder.scroll_to_row(row, center.then_some(egui::Align::Center)),
+        None => builder,
+    };
     // 编辑行是否本帧被渲染(行虚拟化:滚出视口的行不渲染,
     // editing 悬死会让 Enter 失效、拖拽平移被永久禁用)
     // 编辑态是否在进入本帧前就已存在:双击/右键菜单会在行循环中途才置 editing,
@@ -2921,14 +3336,18 @@ fn draw_data_table(
     };
     // 所有真实列都按内容宽度布局,末尾再补一个 remainder 占位列:
     // 内容窄时占位列把右侧铺满;内容宽时占位列收缩为 0,表格整体溢出并出现横向滚动条。
-    for (vw, _vi) in vis_idx.iter().enumerate() {
+    for (vw, &vi) in vis_idx.iter().enumerate() {
         // initial(而非 exact):exact 把 width_range 钉死在 w..=w,拖拽调宽被钳到 0。
         // 首帧用启发式宽度建状态,之后由 TableState 保持(可拖宽)。
+        // 最小宽度按列名算:宽表被压到最窄时,标题 + 一个漏斗仍放得下
+        // (一律压到 40 时 id 列的类型注记只剩一个省略号,长列名只剩两个字母)
+        let min_w =
+            (theme::text_width(&columns[vi]) + theme::HEAD_PAD_X * 2.0 + 20.0).clamp(56.0, 120.0);
         tb = tb.column(
             Column::initial(col_widths[vw])
                 .resizable(true)
                 .clip(true)
-                .at_least(40.0),
+                .at_least(min_w),
         );
     }
     tb = tb.column(Column::remainder().at_least(0.0));
@@ -3163,6 +3582,8 @@ fn draw_data_table(
                             )
                             .inner;
                         resp.request_focus();
+                        // Tab 留给网格:提交后移到下一格,而不是被 egui 拿去遍历焦点
+                        ui.memory_mut(|mem| mem.set_focus_lock_filter(resp.id, EDIT_FOCUS_KEYS));
                         ui.painter().rect_stroke(
                             rect.shrink(1.0),
                             egui::CornerRadius::same(3),
@@ -3171,9 +3592,32 @@ fn draw_data_table(
                         );
                         let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let (tab, shift) =
+                            ui.input(|i| (i.key_pressed(egui::Key::Tab), i.modifiers.shift));
                         if esc {
                             *editing = None;
-                        } else if resp.lost_focus() || enter {
+                            refocus.set(true);
+                        } else if enter || tab {
+                            *cr = Some((ri, ci, draft.clone()));
+                            *editing = None;
+                            // 单格编辑:回车向下、Tab 向右(Shift 反向),顺着一路录;
+                            // 往整个选区批量填充后留在原处
+                            let spanning = sel_range
+                                .as_ref()
+                                .map(|rr| {
+                                    let (a, b) = norm_range(*rr);
+                                    a != b
+                                })
+                                .unwrap_or(false);
+                            if !spanning {
+                                after_edit.set(Some(if enter {
+                                    GridMotion::Rows(1)
+                                } else {
+                                    GridMotion::Tab(if shift { -1 } else { 1 })
+                                }));
+                            }
+                            refocus.set(true);
+                        } else if resp.lost_focus() {
                             *cr = Some((ri, ci, draft.clone()));
                             *editing = None;
                         }
@@ -3443,6 +3887,9 @@ fn draw_frozen_overlay(
     mysql_q: bool,
     frozen_out: &mut Option<i64>,
     sel_range: &Option<((usize, usize), (usize, usize))>,
+    // 键盘交互:编辑提交后的去向 / 是否把焦点还给网格
+    after_edit: &std::cell::Cell<Option<GridMotion>>,
+    refocus: &std::cell::Cell<bool>,
 ) {
     if frozen_vis == 0 || offset_x <= 0.5 {
         return;
@@ -3664,6 +4111,7 @@ fn draw_frozen_overlay(
                         .desired_width(inner.width()),
                 );
                 resp.request_focus();
+                ui.memory_mut(|mem| mem.set_focus_lock_filter(resp.id, EDIT_FOCUS_KEYS));
                 cell_ui.painter().rect_stroke(
                     rect.shrink(1.0),
                     egui::CornerRadius::same(3),
@@ -3672,9 +4120,21 @@ fn draw_frozen_overlay(
                 );
                 let esc = cell_ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let enter = cell_ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let (tab, shift) =
+                    cell_ui.input(|i| (i.key_pressed(egui::Key::Tab), i.modifiers.shift));
                 if esc {
                     *editing = None;
-                } else if resp.lost_focus() || enter {
+                    refocus.set(true);
+                } else if enter || tab {
+                    *cr = Some((ri, ci, draft.clone()));
+                    *editing = None;
+                    after_edit.set(Some(if enter {
+                        GridMotion::Rows(1)
+                    } else {
+                        GridMotion::Tab(if shift { -1 } else { 1 })
+                    }));
+                    refocus.set(true);
+                } else if resp.lost_focus() {
                     *cr = Some((ri, ci, draft.clone()));
                     *editing = None;
                 }
@@ -3901,29 +4361,56 @@ fn paint_col_head(
 ) -> egui::Rect {
     let p = theme::c();
     let cy1 = rect.top() + theme::HEAD_PAD_Y + theme::HEAD_LINE1 / 2.0;
-    let sort_center = egui::pos2(rect.right() - 20.0, cy1);
+    // 标题优先:列被压窄(宽表)时按"标题放不放得下"逐级让出控件的位置。
+    // 宽裕:箭头 + 漏斗;窄:已排序的只留箭头,否则只留漏斗;
+    // 最窄:平时什么都不画,悬停/已有条件时才叠一个漏斗
+    let title_w = painter
+        .layout_no_wrap(name.to_string(), theme::bold(theme::fs_header()), p.text)
+        .size()
+        .x;
+    let full = rect.width() - theme::HEAD_PAD_X * 2.0;
+    let (reserve, show_pair, show_funnel) = if full - 36.0 >= title_w {
+        (36.0, true, true)
+    } else if sorted.is_some() {
+        (16.0, false, false)
+    } else if full - 20.0 >= title_w {
+        (20.0, false, true)
+    } else {
+        (0.0, false, hovered || has_cond)
+    };
+    let roomy = reserve >= 36.0;
+    let sort_center = egui::pos2(
+        if roomy { rect.right() - 20.0 } else { rect.right() - 10.0 },
+        cy1,
+    );
     let funnel_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.right() - 6.0, cy1),
+        egui::pos2(
+            if roomy { rect.right() - 6.0 } else { rect.right() - 10.0 },
+            cy1,
+        ),
         egui::vec2(16.0, 16.0),
     );
-    // 名称右侧让出排序箭头(16)+ 漏斗(16)+ 间距
-    theme::paint_col_title(painter, rect, name, 36.0);
+    // 名称右侧让出控件的位置
+    theme::paint_col_title(painter, rect, name, reserve);
     match sorted {
         Some(asc) => paint_sort_arrow(painter, sort_center.x, cy1, asc, p.accent),
-        None => paint_sort_pair(painter, sort_center, p.muted),
+        None if show_pair => paint_sort_pair(painter, sort_center, p.muted),
+        None => {}
     }
     // 漏斗:常显(灰);该列已有条件点亮,悬停提亮
-    icons::funnel_glyph(
-        painter,
-        funnel_rect.center(),
-        if has_cond {
-            p.accent
-        } else if hovered {
-            p.text2
-        } else {
-            p.muted
-        },
-    );
+    if show_funnel {
+        icons::funnel_glyph(
+            painter,
+            funnel_rect.center(),
+            if has_cond {
+                p.accent
+            } else if hovered {
+                p.text2
+            } else {
+                p.muted
+            },
+        );
+    }
     let ty = anno.types.get(name).map(String::as_str).filter(|t| !t.is_empty());
     let comment = anno.comments.get(name).map(|s| s.trim()).filter(|s| !s.is_empty());
     theme::paint_col_anno(
@@ -3933,7 +4420,12 @@ fn paint_col_head(
         comment,
         anno.pk_cols.iter().any(|k| k == name),
     );
-    funnel_rect
+    // 漏斗不显示时返回空矩形:点击列头就是排序
+    if show_funnel {
+        funnel_rect
+    } else {
+        egui::Rect::NOTHING
+    }
 }
 
 /// 第一行:列名(13px 粗体);`reserve_right` 是名称右侧让给控件的宽度
@@ -6092,7 +6584,11 @@ impl eframe::App for ShujingApp {
                     let conns = self.conns.clone();
                     draw_table_view(ctx, &tab_id, t, &conns)
                 }
-                TabKind::Structure(s) => structure::draw_structure_view(ctx, &tab_id, s),
+                TabKind::Structure(s) => {
+                    // 结构页按连接类型区分"没有索引 / 该数据源不提供"
+                    let dt = self.conns.iter().find(|c| c.id == s.conn_id).map(|c| c.db_type);
+                    structure::draw_structure_view(ctx, &tab_id, s, dt)
+                }
                 TabKind::Query(q) => {
                     let conns = self.conns.clone();
                     let snippets = self.snippets.clone(); // Arc:廉价引用计数,不再深拷贝
@@ -6594,5 +7090,159 @@ mod export_tests {
         assert!(mysql.contains("VALUES ('李小四');"), "{mysql}");
         let std = export_rows_inserts("users", &cols, &rows, Dialect::Standard);
         assert!(std.contains("VALUES ('a\\b');"), "{std}");
+    }
+}
+
+#[cfg(test)]
+mod grid_keys_tests {
+    use super::*;
+
+    #[test]
+    fn key_motion_maps_navigation_keys() {
+        use egui::{Key, Modifiers};
+        let m = Modifiers::NONE;
+        assert_eq!(key_motion(Key::ArrowDown, m), Some((GridMotion::Rows(1), false)));
+        assert_eq!(key_motion(Key::ArrowLeft, m), Some((GridMotion::Cols(-1), false)));
+        // Shift = 扩展选区;Shift+Tab = 反向移动(不是扩展)
+        let shift = Modifiers { shift: true, ..Default::default() };
+        assert_eq!(key_motion(Key::ArrowRight, shift), Some((GridMotion::Cols(1), true)));
+        assert_eq!(key_motion(Key::Tab, m), Some((GridMotion::Tab(1), false)));
+        assert_eq!(key_motion(Key::Tab, shift), Some((GridMotion::Tab(-1), false)));
+        assert_eq!(key_motion(Key::Home, m), Some((GridMotion::FirstCol, false)));
+        assert_eq!(key_motion(Key::End, m), Some((GridMotion::LastCol, false)));
+        assert_eq!(key_motion(Key::PageUp, m), Some((GridMotion::Page(-1), false)));
+        // ⌘+方向 = 跳到行/列首尾
+        let cmd = Modifiers { command: true, ..Default::default() };
+        assert_eq!(key_motion(Key::ArrowDown, cmd), Some((GridMotion::LastRow, false)));
+        assert_eq!(key_motion(Key::ArrowLeft, cmd), Some((GridMotion::FirstCol, false)));
+        // ⌘+Home/End 不是导航;回车/删除/字母都不是(⌥/⌃ 组合留给别的用途)
+        assert_eq!(key_motion(Key::Home, cmd), None);
+        assert_eq!(key_motion(Key::Enter, m), None);
+        assert_eq!(key_motion(Key::Delete, m), None);
+        assert_eq!(key_motion(Key::ArrowUp, Modifiers { alt: true, ..Default::default() }), None);
+    }
+
+    #[test]
+    fn move_cell_clamps_and_tab_wraps() {
+        let bounds = (8, 6);
+        assert_eq!(move_cell((0, 0), GridMotion::Rows(-1), bounds, 10), (0, 0));
+        assert_eq!(move_cell((7, 5), GridMotion::Cols(1), bounds, 10), (7, 5));
+        // Tab:行尾折到下一行行首;最后一格停在原地;行首折到上一行行尾
+        assert_eq!(move_cell((2, 5), GridMotion::Tab(1), bounds, 10), (3, 0));
+        assert_eq!(move_cell((7, 5), GridMotion::Tab(1), bounds, 10), (7, 0));
+        assert_eq!(move_cell((2, 0), GridMotion::Tab(-1), bounds, 10), (1, 5));
+        // 翻页按一屏行数走,越界夹取
+        assert_eq!(move_cell((1, 1), GridMotion::Page(1), bounds, 3), (4, 1));
+        assert_eq!(move_cell((6, 1), GridMotion::Page(1), bounds, 3), (7, 1));
+        assert_eq!(move_cell((6, 1), GridMotion::Page(-1), bounds, 3), (3, 1));
+        assert_eq!(move_cell((6, 2), GridMotion::LastCol, bounds, 3), (6, 5));
+        assert_eq!(move_cell((6, 2), GridMotion::FirstRow, bounds, 3), (0, 2));
+    }
+
+    #[test]
+    fn clipboard_parses_rows_and_cells() {
+        assert_eq!(
+            parse_clipboard("a\tb\nc\td\r\n"),
+            vec![vec!["a", "b"], vec!["c", "d"]]
+        );
+        assert_eq!(parse_clipboard("单格"), vec![vec!["单格"]]);
+        // 空单元格保留(贴进去 = 置 NULL),不塌成少一列
+        assert_eq!(parse_clipboard("\tb\n\n"), vec![vec!["", "b"]]);
+    }
+
+    /// 字面量 → 粘贴块(行 × 列)
+    fn blk(v: &[&[&str]]) -> Vec<Vec<String>> {
+        v.iter()
+            .map(|line| line.iter().map(|s| s.to_string()).collect())
+            .collect()
+    }
+
+    /// 网格夹具:3 列(id 主键 / 名 / 值)× 2 行
+    fn fixture() -> (
+        Vec<Vec<Option<String>>>,
+        Vec<String>,
+        Vec<String>,
+        std::collections::HashMap<usize, Vec<(String, String)>>,
+        Vec<(usize, String, Option<String>)>,
+    ) {
+        let rows = vec![
+            vec![Some("1".into()), Some("甲".into()), None],
+            vec![Some("2".into()), Some("乙".into()), Some("9".into())],
+        ];
+        let columns = vec!["id".into(), "名".into(), "值".into()];
+        (
+            rows,
+            columns,
+            vec!["id".to_string()],
+            Default::default(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn stage_cell_records_changes_and_original_pk() {
+        let (mut rows, columns, pk, mut orig, mut changes) = fixture();
+        // 空值 → NULL
+        stage_cell(&mut rows, &columns, &pk, &mut orig, &mut changes, 1, 2, String::new());
+        assert_eq!(rows[1][2], None);
+        assert_eq!(changes, vec![(1, "值".to_string(), None)]);
+        // 同一格再改只替换,不重复计数
+        stage_cell(&mut rows, &columns, &pk, &mut orig, &mut changes, 1, 2, "7".into());
+        assert_eq!(changes, vec![(1, "值".to_string(), Some("7".into()))]);
+        // 比较对象是网格里的当前值(没有原始值快照):改回原值仍留一条改动,
+        // 保存时是一条等值 UPDATE
+        stage_cell(&mut rows, &columns, &pk, &mut orig, &mut changes, 1, 2, "9".into());
+        assert_eq!(changes, vec![(1, "值".to_string(), Some("9".into()))]);
+        assert_eq!(rows[1][2].as_deref(), Some("9"));
+        // 本来就是 NULL 的格再置 NULL 不算改动
+        stage_cell(&mut rows, &columns, &pk, &mut orig, &mut changes, 0, 2, String::new());
+        assert_eq!(changes.len(), 1);
+        // 改主键:先快照整行原始主键(保存时 WHERE 用)
+        stage_cell(&mut rows, &columns, &pk, &mut orig, &mut changes, 0, 0, "100".into());
+        assert_eq!(orig[&0], vec![("id".to_string(), "1".to_string())]);
+        assert_eq!(rows[0][0].as_deref(), Some("100"));
+        // 越界下标静默忽略
+        stage_cell(&mut rows, &columns, &pk, &mut orig, &mut changes, 9, 9, "x".into());
+        assert_eq!(changes.len(), 2);
+    }
+
+    #[test]
+    fn paste_block_clips_and_skips_pk() {
+        let (mut rows, columns, pk, mut orig, mut changes) = fixture();
+        let vis = [0usize, 1, 2];
+        // 2×2 的块从 (0,1) 起贴:覆盖 名/值 两列两行
+        let last = paste_block(
+            &mut rows,
+            &columns,
+            &pk,
+            &mut orig,
+            &mut changes,
+            &vis,
+            (0, 1),
+            &blk(&[&["a", ""], &["b", "c"]]),
+        );
+        assert_eq!(last, Some((1, 2)));
+        assert_eq!(rows[0][1].as_deref(), Some("a"));
+        assert_eq!(rows[0][2], None, "空单元格 = 置 NULL(本来就是 NULL,不计改动)");
+        assert_eq!(rows[1][1].as_deref(), Some("b"));
+        assert_eq!(rows[1][2].as_deref(), Some("c"));
+        assert_eq!(changes.len(), 3);
+        // 从主键列起贴:主键列跳过,其余照贴;越界的行列丢弃
+        let (mut rows, columns, pk, mut orig, mut changes) = fixture();
+        let last = paste_block(
+            &mut rows,
+            &columns,
+            &pk,
+            &mut orig,
+            &mut changes,
+            &vis,
+            (1, 0),
+            &blk(&[&["x", "y", "z"], &["p", "q"]]),
+        );
+        assert_eq!(last, Some((1, 2)));
+        assert_eq!(rows[1][0].as_deref(), Some("2"), "主键不动");
+        assert_eq!(rows[1][1].as_deref(), Some("y"));
+        assert_eq!(rows[1][2].as_deref(), Some("z"));
+        assert_eq!(changes.len(), 2);
     }
 }

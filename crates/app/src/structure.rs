@@ -6,13 +6,21 @@ use crate::{icons, theme};
 use egui::{Align, Color32, Layout, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
 
+/// `db_type`:这条连接的类型(决定索引列表/建表语句是"没有"还是"不提供");
+/// 传 None 按都支持处理
 pub fn draw_structure_view(
     ctx: &egui::Context,
     tab_id: &str,
     s: &mut StructureTab,
+    db_type: Option<shujing_core::DbType>,
 ) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let p = theme::c();
+    // 不知道类型时按"支持"走(测试夹具直接画结构页,不挂连接)
+    let (ix_supported, ddl_supported) = match db_type {
+        Some(t) => (t.caps().indexes, t.caps().ddl),
+        None => (true, true),
+    };
 
     egui::TopBottomPanel::top("struct_toolbar")
         .show_separator_line(false)
@@ -86,15 +94,18 @@ pub fn draw_structure_view(
                         });
                     }
                     if let Some(d) = &s.data {
-                        if theme::button(
-                            ui,
-                            ui_kit::t!("Copy DDL", "复制 DDL"),
-                            theme::BtnKind::Secondary,
-                        )
-                        .clicked()
-                        {
-                            ui.ctx().copy_text(d.ddl.clone());
-                        }
+                        // 没有建表语句时按钮置灰(点了只会复制一片空白)
+                        ui.add_enabled_ui(!d.ddl.is_empty(), |ui| {
+                            if theme::button(
+                                ui,
+                                ui_kit::t!("Copy DDL", "复制 DDL"),
+                                theme::BtnKind::Secondary,
+                            )
+                            .clicked()
+                            {
+                                ui.ctx().copy_text(d.ddl.clone());
+                            }
+                        });
                     }
                 });
             });
@@ -130,9 +141,11 @@ pub fn draw_structure_view(
                     draw_columns(ui, data, tab_id);
                     ui.add_space(20.0);
 
-                    section_title(ui, ui_kit::t!("Indexes", "索引"), data.indexes.len());
+                    // 不提供索引信息的数据源不挂计数徽标("索引 0"会被读成"没有索引")
+                    let ix_count = if ix_supported { data.indexes.len() } else { 0 };
+                    section_title(ui, ui_kit::t!("Indexes", "索引"), ix_count);
                     ui.add_space(8.0);
-                    draw_indexes(ui, data);
+                    draw_indexes(ui, data, ix_supported);
                     ui.add_space(20.0);
 
                     // 外键(本表作为子表引用他表;失败/无 FK 则不显示区)
@@ -181,12 +194,27 @@ pub fn draw_structure_view(
                         ui.add_space(20.0);
                     }
 
+                    section_title(ui, "DDL", 0);
+                    if data.ddl.is_empty() {
+                        // 没有建表语句:一句话说明是"没取到"还是"这个数据源还不支持",
+                        // 不再画"建表语句(0 字符)"加一个空框
+                        ui.add_space(8.0);
+                        let note = if ddl_supported {
+                            ui_kit::t!("No DDL available", "未获取到建表语句")
+                        } else {
+                            ui_kit::t!(
+                                "DDL generation is not available for this data source yet",
+                                "该数据源暂不支持生成建表语句"
+                            )
+                        };
+                        ui.label(RichText::new(note).size(theme::fs_px(12.0)).color(p.muted));
+                        ui.add_space(8.0);
+                    } else {
                     let ddl_open = ui.ctx().memory(|m| {
                         m.data
                             .get_temp::<bool>(egui::Id::new(("ddl-open", tab_id)))
                             .unwrap_or(true)
                     });
-                    section_title(ui, "DDL", 0);
                     ui.add_space(4.0);
                     // 折叠头
                     let (hrect, hresp) = ui.allocate_exact_size(
@@ -243,6 +271,7 @@ pub fn draw_structure_view(
                                 ui.painter().galley(ui.cursor().left_top(), galley, p.text2);
                                 ui.allocate_space(gsize);
                             });
+                    }
                     }
                     ui.add_space(8.0);
                 });
@@ -494,8 +523,21 @@ fn draw_columns(ui: &mut egui::Ui, data: &shujing_core::TableStructure, tab_id: 
     ui.spacing_mut().item_spacing = old_spacing;
 }
 
-fn draw_indexes(ui: &mut egui::Ui, data: &shujing_core::TableStructure) {
+fn draw_indexes(ui: &mut egui::Ui, data: &shujing_core::TableStructure, supported: bool) {
     let p = theme::c();
+    if data.indexes.is_empty() {
+        // 不画空框:说清楚是"没有索引"还是"这个数据源不提供索引信息"
+        let note = if supported {
+            ui_kit::t!("No indexes", "没有索引")
+        } else {
+            ui_kit::t!(
+                "This data source does not provide index information",
+                "该数据源暂不提供索引信息"
+            )
+        };
+        ui.label(RichText::new(note).size(theme::fs_px(12.0)).color(p.muted));
+        return;
+    }
     egui::Frame::new()
         .fill(p.panel)
         .stroke(egui::Stroke::new(1.0, p.border))
