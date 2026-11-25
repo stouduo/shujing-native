@@ -4,7 +4,7 @@ use std::time::Instant;
 pub const DEFAULT_MAX_ROWS: usize = 1000;
 pub const HARD_MAX_ROWS: usize = 50_000;
 
-fn fmt_f64(v: f64) -> String {
+pub(crate) fn fmt_f64(v: f64) -> String {
     if v.is_finite() { format!("{v:?}") } else { v.to_string() }
 }
 
@@ -740,6 +740,14 @@ impl Backend {
             }
             Backend::Mssql(st) => {
                 let r = crate::mssql::query(st, sql, max).await?;
+                // 会话里的 USE 只改了执行它的那条连接:会话库跟过去,其余连接
+                // 下次取用时对齐(与 PG 的 search_path 同一套做法)
+                if let Some(db) = crate::model::extract_use_db(sql) {
+                    st.session_db = Some(db);
+                    for c in &st.cur_db {
+                        *c.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    }
+                }
                 Ok(vec![r])
             }
             Backend::ClickHouse(st) => {
@@ -1136,15 +1144,14 @@ mod column_type_tests {
         crate::clickhouse::query(&st, "DROP TABLE sj_ct", None, 1).await.unwrap();
     }
 
-    /// SQL Server 实连:TDS 类型码 → 类型名(变宽码 Intn/Floatn 等实际宽度只在
-    /// TypeInfo 里,统一按最常见宽度给名)。需本机容器(arm64 用 azure-sql-edge):
-    /// podman run -d --name shujing-mssql -p 1434:1433 -e ACCEPT_EULA=Y
+    /// SQL Server 实连:TDS 类型码 → 类型名 + 各类型的单元格文本。需本机容器
+    /// (arm64 用 azure-sql-edge,运行时约 430MB;2GB 内存的 podman 机器要先停掉
+    /// 别的测试容器):
+    /// podman run -d --name shujing-mssql -p 127.0.0.1:1434:1433 -e ACCEPT_EULA=Y
     ///   -e MSSQL_SA_PASSWORD='Shujing#2026test' -e MSSQL_PID=Developer
-    ///   mcr.microsoft.com/azure-sql-edge:latest
+    ///   -e MSSQL_MEMORY_LIMIT_MB=512 mcr.microsoft.com/azure-sql-edge:latest
     ///
-    /// ⚠ 未实跑:本机 mcr.microsoft.com 拉不动镜像,且 podman 机器只有 2GB 内存,
-    /// 再塞一个 SQL Server 容器会 OOM 杀掉别的容器。期望值是从映射单测
-    /// (mssql_type_names)抄的,没被真实回包验证过——跑通之前不要当作已验证。
+    /// 结构/回写/分页/会话库的全链路见 examples/e2e_mssql.rs。
     #[tokio::test]
     #[ignore]
     async fn live_mssql_reports_tds_types() {
@@ -1164,6 +1171,9 @@ mod column_type_tests {
         let mut st = crate::model::MssqlState {
             clients: vec![tokio::sync::Mutex::new(client)],
             next: Default::default(),
+            cur_db: vec![std::sync::Mutex::new(Some("master".into()))],
+            default_db: Some("master".into()),
+            session_db: None,
         };
         // 真实表(临时表跨查询不保活):先清后建,查完删
         let _ = crate::mssql::query(&mut st, "IF OBJECT_ID('sj_ct') IS NOT NULL DROP TABLE sj_ct", 1).await;
@@ -1185,7 +1195,26 @@ mod column_type_tests {
                 "varbinary", "money"
             ]
         );
+        // 单元格文本:整数不丢精度(bigint 超 2^53)、bit 是 1/0、小数保留标度、
+        // 时间去掉多余的小数位、二进制是占位
         assert_eq!(r.rows.len(), 1);
+        let uid = r.rows[0][12].clone().unwrap_or_default();
+        assert_eq!(uid.len(), 36, "uniqueidentifier {uid:?}");
+        let expect: Vec<Option<String>> = [
+            "1", "1", "2", "3", "1", "1.50", "2.5", "3.5", "2026-11-24", "12:34:56",
+            "2026-11-24 12:34:56.789", "2026-11-24 12:34:56.789 +08:00",
+        ]
+        .iter()
+        .map(|s| Some(s.to_string()))
+        .collect();
+        assert_eq!(r.rows[0][..12], expect[..]);
+        let tail = ["a", "b", "<BLOB 1 B>", "1.23"].map(|s| Some(s.to_string()));
+        assert_eq!(r.rows[0][13..], tail);
+        // 空结果集也要有列头
+        let empty = crate::mssql::query(&mut st, "SELECT TOP 0 id, deci FROM sj_ct", 1).await.unwrap();
+        assert!(empty.rows.is_empty());
+        assert_eq!(empty.columns, ["id", "deci"]);
+        assert_eq!(empty.column_types, ["int", "decimal"]);
         crate::mssql::query(&mut st, "DROP TABLE sj_ct", 1).await.unwrap();
     }
 

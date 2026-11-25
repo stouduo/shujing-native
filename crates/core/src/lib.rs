@@ -166,7 +166,7 @@ pub fn build_save_table_stmts(
                         row.get(ci)
                             .and_then(|v| v.as_deref())
                             .filter(|s| !s.is_empty())
-                            .map(|s| crate::edits::literal(s, mysql))
+                            .map(|s| crate::edits::literal(s, crate::edits::Dialect::of(info.db_type)))
                             .unwrap_or_else(|| "NULL".into())
                     })
                     .collect();

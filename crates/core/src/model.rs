@@ -601,6 +601,13 @@ pub type MssqlClient = tiberius::Client<
 pub struct MssqlState {
     pub clients: Vec<tokio::sync::Mutex<MssqlClient>>,
     pub next: std::sync::atomic::AtomicUsize,
+    /// 各连接当前的默认库(与 clients 等长;None = 未知,取用前先对齐)
+    pub cur_db: Vec<std::sync::Mutex<Option<String>>>,
+    /// 连接配置里的默认库(建连时问服务器记下):会话库清空后回到它
+    pub default_db: Option<String>,
+    /// 会话库 = 界面上选中的库。不带库名的语句在连接的默认库里解析,池里的连接
+    /// 又是轮发的,所以取连接时要把默认库对齐过去,否则会落到别的库
+    pub session_db: Option<String>,
 }
 
 /// 服务器会话(MySQL processlist / PG pg_stat_activity 行)
@@ -706,10 +713,14 @@ fn extract_use_db_single(sql: &str) -> Option<String> {
                 return Some(rest[a + 1..b].to_string());
             }
         }
-        return rest
-            .split_whitespace()
-            .next()
-            .map(|w| w.trim_matches(';').to_string());
+        let word = rest.split_whitespace().next().unwrap_or("").trim_matches(';');
+        // SQL Server 的 [db] / "db" 引注:取出来的是库名本身
+        let name = word
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .trim_start_matches('"')
+            .trim_end_matches('"');
+        return (!name.is_empty()).then(|| name.to_string());
     }
     if lower.starts_with("set search_path") {
         // 按词边界找 TO 或 =(此前 find("to") 会命中 "todos" 之类的子串)
@@ -877,6 +888,10 @@ mod readonly_tests {
             Some("pub".into())
         );
         assert_eq!(extract_use_db("SELECT 1"), None);
+        // SQL Server 的引注写法取库名本身;空库名不当作切换
+        assert_eq!(extract_use_db("USE [e2e_mssql]"), Some("e2e_mssql".into()));
+        assert_eq!(extract_use_db("USE \"e2e_mssql\";"), Some("e2e_mssql".into()));
+        assert_eq!(extract_use_db("USE ;"), None);
     }
 }
 

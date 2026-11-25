@@ -1155,6 +1155,7 @@ pub(crate) fn draw_table_view(
     let tab_id_s = tab_id.to_string();
     let p = theme::c();
     let mysql_quote_flag = crate::app::mysql_quote(conns, &tab.conn_id);
+    let dialect_flag = crate::app::sql_dialect(conns, &tab.conn_id);
 
     let mut toolbar_copy: Option<String> = None;
     let mut toolbar_menu: Option<TabAction> = None;
@@ -1564,7 +1565,7 @@ pub(crate) fn draw_table_view(
                                     &tab.table,
                                     tab.columns.as_slice(),
                                     tab.rows.as_slice(),
-                                    mysql_quote_flag,
+                                    dialect_flag,
                                 ));
                                 ui.close_menu();
                             }
@@ -2407,9 +2408,8 @@ pub(crate) fn draw_table_view(
                 tab.conds.push((fc, fop, fval));
                 tab.filter_bar_open = true;
                 tab.filter_mode = 0;
-                let mysql2 = mysql_quote_flag;
                 let free = tab.free_where.clone();
-                tab.applied_where = crate::app::build_cond_where(&tab.conds, &free, mysql2);
+                tab.applied_where = crate::app::build_cond_where(&tab.conds, &free, dialect_flag);
                 tab.page = 1;
                 actions.push(TabAction::Reload {
                     tab_id: tab_id_s.clone(),
@@ -6475,8 +6475,9 @@ pub fn export_rows_inserts(
     table: &str,
     columns: &[String],
     rows: &[Vec<Option<String>>],
-    mysql: bool,
+    dialect: shujing_core::edits::Dialect,
 ) -> String {
+    let mysql = dialect == shujing_core::edits::Dialect::Mysql;
     let q = crate::app::quote_ident_by(table, mysql);
     let cols: Vec<String> = columns
         .iter()
@@ -6489,7 +6490,8 @@ pub fn export_rows_inserts(
             .map(|v| match v {
                 None => "NULL".to_string(),
                 Some(s) if s.parse::<f64>().is_ok() => s.clone(),
-                Some(s) => format!("'{}'", s.replace('\'', "''")),
+                // 字面量走方言:SQL Server 带 N 前缀(否则中文回放成 ???),MySQL 反斜杠双写
+                Some(s) => shujing_core::edits::literal(s, dialect),
             })
             .collect();
         out.push_str(&format!(
@@ -6563,4 +6565,34 @@ fn detail_body(
             }
         });
     close
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::export_rows_inserts;
+    use shujing_core::edits::Dialect;
+
+    /// 导出的 INSERT 回放时字面量必须按方言写:SQL Server 不带 N 前缀时中文变 ???,
+    /// MySQL 不双写反斜杠时 \b 被当成转义符
+    #[test]
+    fn inserts_literals_follow_dialect() {
+        let cols = vec!["name".to_string()];
+        let rows = vec![
+            vec![Some("李小四".to_string())],
+            vec![Some("a\\b".to_string())],
+            vec![None],
+        ];
+        let mssql = export_rows_inserts("users", &cols, &rows, Dialect::Mssql);
+        assert_eq!(
+            mssql,
+            "INSERT INTO \"users\" (\"name\") VALUES (N'李小四');\n\
+             INSERT INTO \"users\" (\"name\") VALUES (N'a\\b');\n\
+             INSERT INTO \"users\" (\"name\") VALUES (NULL);\n"
+        );
+        let mysql = export_rows_inserts("users", &cols, &rows, Dialect::Mysql);
+        assert!(mysql.contains("VALUES ('a\\\\b');"), "{mysql}");
+        assert!(mysql.contains("VALUES ('李小四');"), "{mysql}");
+        let std = export_rows_inserts("users", &cols, &rows, Dialect::Standard);
+        assert!(std.contains("VALUES ('a\\b');"), "{std}");
+    }
 }

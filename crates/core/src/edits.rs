@@ -9,6 +9,34 @@ pub struct CellUpdate {
     pub sets: Vec<(String, Option<String>)>,
 }
 
+/// SQL 文本方言:标识符引注、字符串字面量、分页写法的差异
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    /// MySQL / ClickHouse:反引号
+    Mysql,
+    /// SQL Server
+    Mssql,
+    /// 其余(SQLite / PG / 插件…):双引号 + 标准写法
+    Standard,
+}
+
+impl Dialect {
+    pub fn of(db_type: crate::model::DbType) -> Self {
+        use crate::model::DbType;
+        match db_type {
+            DbType::MySql | DbType::ClickHouse => Self::Mysql,
+            DbType::Mssql => Self::Mssql,
+            _ => Self::Standard,
+        }
+    }
+    fn mysql(self) -> bool {
+        self == Self::Mysql
+    }
+    fn mssql(self) -> bool {
+        self == Self::Mssql
+    }
+}
+
 /// 供组合模块引用的标识符引注(mysql=反引号,其余双引号)
 pub fn quote_ident_pub(database: &Option<String>, name: &str, mysql: bool) -> String {
     match database {
@@ -25,6 +53,86 @@ pub fn qualified_table(table: &str, database: Option<&str>, mysql: bool) -> Stri
     }
 }
 
+/// 数据页的表引用。SQL Server 的两段式名字是「架构.表」,限定库要写三段式
+/// db..table(架构取默认)
+pub fn page_table_ref(database: Option<&str>, table: &str, dialect: Dialect) -> String {
+    let db = database.map(str::trim).filter(|s| !s.is_empty());
+    match (dialect.mssql(), db) {
+        (true, Some(db)) => format!("{}..{}", quote(db, false), quote(table, false)),
+        (_, Some(db)) => qualified_table(table, Some(db), dialect.mysql()),
+        (_, None) => quote(table, dialect.mysql()),
+    }
+}
+
+/// 数据页分页子句(带前导空格)。SQL Server 没有 LIMIT/OFFSET:分页是
+/// ORDER BY … OFFSET n ROWS FETCH NEXT m ROWS ONLY,而且必须带 ORDER BY——
+/// 没有排序列时用 (SELECT NULL)(不改变自然顺序)
+pub fn page_clause(order: Option<&str>, limit: usize, offset: usize, dialect: Dialect) -> String {
+    match (dialect.mssql(), order) {
+        (true, order) => format!(
+            " ORDER BY {} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY",
+            order.unwrap_or("(SELECT NULL)")
+        ),
+        (false, Some(o)) => format!(" ORDER BY {o} LIMIT {limit} OFFSET {offset}"),
+        (false, None) => format!(" LIMIT {limit} OFFSET {offset}"),
+    }
+}
+
+/// 快速筛选:所有列 LIKE '%关键词%'(SQL Server 会把非字符串列隐式转成文本)
+pub fn build_like_filter(columns: &[String], query: &str, dialect: Dialect) -> String {
+    let pattern = literal(&format!("%{query}%"), dialect);
+    // 整体加括号:与筛选栏条件 AND 拼接时,无括号的 OR 串会被 SQL 优先级改写语义
+    format!(
+        "({})",
+        columns
+            .iter()
+            .map(|c| format!("{} LIKE {}", quote(c, dialect.mysql()), pattern))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    )
+}
+
+/// 条件行的 WHERE:数值原样,其余按字符串字面量(LIKE 语义 = 包含,两侧补通配符,
+/// 用户自带 % 则原样保留);自由 WHERE 原样并入
+pub fn build_cond_where(
+    conds: &[(String, String, String)],
+    free: &str,
+    dialect: Dialect,
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for (col, op, val) in conds {
+        let op = op.trim();
+        if op.is_empty() {
+            continue;
+        }
+        let ident = quote(col, dialect.mysql());
+        if op == "IS NULL" || op == "IS NOT NULL" {
+            parts.push(format!("{ident} {op}"));
+            continue;
+        }
+        let v = val.trim();
+        if v.is_empty() {
+            continue;
+        }
+        let lit = if v.parse::<f64>().map(|f| f.is_finite()).unwrap_or(false) && op != "LIKE" {
+            v.to_string()
+        } else {
+            let wrapped = if op == "LIKE" && !v.contains('%') {
+                format!("%{v}%")
+            } else {
+                v.to_string()
+            };
+            literal(&wrapped, dialect)
+        };
+        parts.push(format!("{ident} {op} {lit}"));
+    }
+    let free_t = free.trim();
+    if !free_t.is_empty() {
+        parts.push(free_t.to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(" AND "))
+}
+
 pub(crate) fn quote(name: &str, mysql: bool) -> String {
     if mysql {
         format!("`{}`", name.replace('`', "``"))
@@ -33,23 +141,28 @@ pub(crate) fn quote(name: &str, mysql: bool) -> String {
     }
 }
 
-/// 字符串字面量(统一加引号,三库都能隐式接受数字/日期文本;
-/// MySQL 默认把反斜杠当转义符,须同时双写,否则尾部反斜杠会吃掉收尾引号)
-pub(crate) fn literal(v: &str, mysql: bool) -> String {
+/// 字符串字面量(统一加引号,各库都能隐式接受数字/日期文本)。
+/// MySQL 默认把反斜杠当转义符,须同时双写,否则尾部反斜杠会吃掉收尾引号;
+/// SQL Server 必须 N'…':普通字面量按库的默认排序规则代码页转换,西文排序规则的
+/// 实例上中文会变成 ?(写进 nvarchar 列、拿来做等值比较都一样)
+pub fn literal(v: &str, dialect: Dialect) -> String {
     let mut out = v.replace('\'', "''");
-    if mysql {
+    if dialect.mysql() {
         out = out.replace('\\', "\\\\");
+    }
+    if dialect.mssql() {
+        return format!("N'{out}'");
     }
     format!("'{out}'")
 }
 
-fn where_of(pk: &[(String, String)], mysql: bool) -> Result<String, String> {
+fn where_of(pk: &[(String, String)], dialect: Dialect) -> Result<String, String> {
     if pk.is_empty() {
         return Err("该行没有主键,无法定位更新".into());
     }
     Ok(pk
         .iter()
-        .map(|(c, v)| format!("{} = {}", quote(c, mysql), literal(v, mysql)))
+        .map(|(c, v)| format!("{} = {}", quote(c, dialect.mysql()), literal(v, dialect)))
         .collect::<Vec<_>>()
         .join(" AND "))
 }
@@ -63,17 +176,16 @@ pub fn build_change_stmts(
     deletes: &[Vec<(String, String)>],
     inserts: &[Vec<(String, String)>],
 ) -> Result<Vec<String>, String> {
-    let mysql = matches!(
-        info.db_type,
-        crate::model::DbType::MySql | crate::model::DbType::ClickHouse
-    );
+    let dialect = Dialect::of(info.db_type);
+    let mysql = dialect.mysql();
     // PG 的「库」= 连接级(dbname),SQL 不允许跨库引用("e2e_a"."users" 直接报
     // relation does not exist)——database 限定只对 MySQL/ClickHouse 生效
     let table = match info.db_type {
-        crate::model::DbType::Postgres => qualified_table(table, None, false),
         // 插件驱动:库限定由 agent 会话解释,语句走 ANSI 双引号样式(契约文档约定)
-        crate::model::DbType::Plugin => qualified_table(table, None, false),
-        _ => qualified_table(table, database, mysql),
+        crate::model::DbType::Postgres | crate::model::DbType::Plugin => {
+            qualified_table(table, None, false)
+        }
+        _ => page_table_ref(database, table, dialect),
     };
     let mut stmts: Vec<String> = Vec::new();
     for u in updates {
@@ -84,7 +196,7 @@ pub fn build_change_stmts(
             .sets
             .iter()
             .map(|(c, v)| match v {
-                Some(s) => format!("{} = {}", quote(c, mysql), literal(s, mysql)),
+                Some(s) => format!("{} = {}", quote(c, mysql), literal(s, dialect)),
                 None => format!("{} = NULL", quote(c, mysql)),
             })
             .collect::<Vec<_>>()
@@ -93,18 +205,26 @@ pub fn build_change_stmts(
             "UPDATE {} SET {} WHERE {}",
             table,
             sets,
-            where_of(&u.pk, mysql)?
+            where_of(&u.pk, dialect)?
         ));
     }
     for pk in deletes {
-        stmts.push(format!("DELETE FROM {} WHERE {}", table, where_of(pk, mysql)?));
+        stmts.push(format!(
+            "DELETE FROM {} WHERE {}",
+            table,
+            where_of(pk, dialect)?
+        ));
     }
     for ins in inserts {
         if ins.is_empty() {
             continue;
         }
         let cols = ins.iter().map(|(c, _)| quote(c, mysql)).collect::<Vec<_>>().join(", ");
-        let vals = ins.iter().map(|(_, v)| literal(v, mysql)).collect::<Vec<_>>().join(", ");
+        let vals = ins
+            .iter()
+            .map(|(_, v)| literal(v, dialect))
+            .collect::<Vec<_>>()
+            .join(", ");
         stmts.push(format!("INSERT INTO {} ({}) VALUES ({})", table, cols, vals));
     }
     if stmts.is_empty() {
@@ -122,7 +242,13 @@ pub fn build_change_stmts(
                         None => s,
                     }
                 } else if let Some(rest) = s.strip_prefix("DELETE FROM ") {
-                    format!("ALTER TABLE {} DELETE WHERE {}", table, rest.split_once(" WHERE ").map(|(_, w)| w.to_string()).unwrap_or_default())
+                    format!(
+                        "ALTER TABLE {} DELETE WHERE {}",
+                        table,
+                        rest.split_once(" WHERE ")
+                            .map(|(_, w)| w.to_string())
+                            .unwrap_or_default()
+                    )
                 } else {
                     s
                 }
@@ -232,31 +358,20 @@ pub async fn apply_changes(
         #[cfg(feature = "heavy-mw")]
         Backend::Mongo(_) => return Err("MongoDB 不支持 SQL 回写".into()),
         Backend::Mssql(st) => {
-            // 与 PG 同构:BEGIN/逐条/COMMIT(simple_query 支持多语句包)
+            // 与 PG 同构:BEGIN/逐条/COMMIT,全程同一条连接
             let mut client = Backend::mssql_client(st).await?;
-            client
-                .simple_query("BEGIN TRAN")
-                .await
-                .map_err(|e| e.to_string())?;
+            crate::mssql::exec(&mut client, "BEGIN TRAN").await?;
             let mut affected = 0u64;
             for sql in &stmts {
-                // QueryStream 借用 &mut client:同一作用域内消费完再下一次调用
-                let exec = async {
-                    let stream = client.simple_query(sql).await;
-                    let mut stream = match stream {
-                        Ok(v) => v,
-                        Err(e) => return Err(e.to_string()),
-                    };
-                    // 消费首个结果集即可(DDL/写语句无后续集)
-                    let _ = stream.into_first_result().await;
-                    Ok::<(), String>(())
-                };
-                if let Err(e) = exec.await {
-                    let _ = client.simple_query("ROLLBACK TRAN").await;
-                    return Err(e);
+                match crate::mssql::exec(&mut client, sql).await {
+                    Ok(n) => affected += n,
+                    Err(e) => {
+                        let _ = crate::mssql::exec(&mut client, "ROLLBACK TRAN").await;
+                        return Err(e);
+                    }
                 }
             }
-            client.simple_query("COMMIT TRAN").await.map_err(|e| e.to_string())?;
+            crate::mssql::exec(&mut client, "COMMIT TRAN").await?;
             affected
         }
         Backend::ClickHouse(st) => {
@@ -348,6 +463,148 @@ mod tests {
             stmts[0],
             "UPDATE \"users\" SET \"age\" = '35' WHERE \"id\" = '2'"
         );
+    }
+
+    fn conn(db_type: crate::model::DbType) -> ConnInfo {
+        ConnInfo {
+            id: "t".into(),
+            name: "t".into(),
+            db_type,
+            host: None,
+            port: None,
+            user: None,
+            password: None,
+            database: Some("e2e".into()),
+            file_path: None,
+            color: None,
+            read_only: false,
+            perm: None,
+            group: None,
+            plugin: None,
+            ssh: None,
+        }
+    }
+
+    /// SQL Server 实连回归(E2E 实测):带库回写曾拼出 "e2e"."users"——两段式名字
+    /// 在 T-SQL 里是「架构.表」,报 Invalid object name;字符串不带 N 前缀时
+    /// 中文被按代码页转换,写进 nvarchar 列成了 ???
+    #[test]
+    fn mssql_write_uses_three_part_name_and_unicode_literal() {
+        let updates = [CellUpdate {
+            pk: vec![("id".into(), "2".into())],
+            sets: vec![
+                ("name".into(), Some("李小四".into())),
+                ("note".into(), None),
+            ],
+        }];
+        let stmts = build_change_stmts(
+            &conn(crate::model::DbType::Mssql),
+            "users",
+            Some("e2e"),
+            &updates,
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            stmts[0],
+            "UPDATE \"e2e\"..\"users\" SET \"name\" = N'李小四', \"note\" = NULL WHERE \"id\" = N'2'"
+        );
+        // 不带库 = 连接当前库,只引注表名
+        let stmts =
+            build_change_stmts(&conn(crate::model::DbType::Mssql), "users", None, &updates, &[], &[])
+                .unwrap();
+        let first = &stmts[0];
+        assert!(first.starts_with("UPDATE \"users\" SET"), "{first}");
+        // 其余方言的字面量不变
+        let std = build_change_stmts(
+            &conn(crate::model::DbType::Sqlite),
+            "users",
+            None,
+            &[CellUpdate {
+                pk: vec![("id".into(), "1".into())],
+                sets: vec![("name".into(), Some("it's".into()))],
+            }],
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(std[0], "UPDATE \"users\" SET \"name\" = 'it''s' WHERE \"id\" = '1'");
+    }
+
+    /// SQL Server 没有 LIMIT/OFFSET(实连实测:带上即语法错,数据页打不开);
+    /// 分页是 ORDER BY … OFFSET n ROWS FETCH NEXT m ROWS ONLY,且必须带 ORDER BY
+    #[test]
+    fn page_clause_per_dialect() {
+        use Dialect::{Mssql, Mysql, Standard};
+        assert_eq!(page_clause(None, 200, 0, Standard), " LIMIT 200 OFFSET 0");
+        assert_eq!(page_clause(None, 50, 100, Mysql), " LIMIT 50 OFFSET 100");
+        assert_eq!(
+            page_clause(Some("\"id\" DESC"), 50, 100, Standard),
+            " ORDER BY \"id\" DESC LIMIT 50 OFFSET 100"
+        );
+        assert_eq!(
+            page_clause(None, 200, 0, Mssql),
+            " ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 200 ROWS ONLY"
+        );
+        assert_eq!(
+            page_clause(Some("\"id\" DESC"), 50, 100, Mssql),
+            " ORDER BY \"id\" DESC OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn page_table_ref_per_dialect() {
+        use Dialect::{Mssql, Mysql, Standard};
+        assert_eq!(page_table_ref(Some("shop"), "users", Mysql), "`shop`.`users`");
+        assert_eq!(page_table_ref(None, "users", Mysql), "`users`");
+        assert_eq!(page_table_ref(Some("pub"), "users", Standard), "\"pub\".\"users\"");
+        assert_eq!(page_table_ref(None, "users", Standard), "\"users\"");
+        // 三段式 db..table:架构取默认;空串库视同未设置
+        assert_eq!(page_table_ref(Some("e2e"), "users", Mssql), "\"e2e\"..\"users\"");
+        assert_eq!(page_table_ref(Some(""), "users", Mssql), "\"users\"");
+    }
+
+    #[test]
+    fn like_filter_escapes_and_quotes() {
+        use Dialect::{Mssql, Mysql, Standard};
+        let cols = vec!["id".to_string(), "na`me".to_string()];
+        // 值里的单引号翻倍;列名里的方言引号翻倍
+        let mysql = build_like_filter(&cols, "o'brien", Mysql);
+        assert!(mysql.contains("`id` LIKE '%o''brien%'"), "{mysql}");
+        assert!(mysql.contains("`na``me` LIKE '%o''brien%'"), "{mysql}");
+        let pg_cols = vec!["na\"me".to_string()];
+        let pg = build_like_filter(&pg_cols, "x", Standard);
+        assert!(pg.contains("\"na\"\"me\" LIKE '%x%'"), "{pg}");
+        // SQL Server:字面量带 N 前缀,否则中文筛不到(实连实测 0 行)
+        let mssql = build_like_filter(&pg_cols, "张", Mssql);
+        assert!(mssql.contains("\"na\"\"me\" LIKE N'%张%'"), "{mssql}");
+    }
+
+    #[test]
+    fn cond_where_builder() {
+        use Dialect::{Mssql, Mysql, Standard};
+        let conds = vec![
+            ("age".to_string(), ">".to_string(), "18".to_string()),
+            ("name".to_string(), "LIKE".to_string(), "张%".to_string()),
+            ("del".to_string(), "IS NULL".to_string(), String::new()),
+            ("empty".to_string(), "=".to_string(), String::new()),
+        ];
+        let w = build_cond_where(&conds, "", Mysql).unwrap();
+        assert!(w.contains("`age` > 18"), "{w}");
+        assert!(w.contains("`name` LIKE '张%'"), "{w}");
+        assert!(w.contains("`del` IS NULL"), "{w}");
+        assert!(!w.contains("empty"), "{w}");
+        let w = build_cond_where(&conds, "", Mssql).unwrap();
+        assert!(w.contains("\"age\" > 18"), "{w}");
+        // 用户自带 % 的值原样保留,只多出 N 前缀
+        assert!(w.contains("\"name\" LIKE N'张%'"), "{w}");
+        let wrapped = build_cond_where(&[("n".into(), "LIKE".into(), "李".into())], "", Mssql).unwrap();
+        assert_eq!(wrapped, "\"n\" LIKE N'%李%'");
+        // 自由 WHERE 并入
+        let w2 = build_cond_where(&[], "status = 1 AND amount > 0", Standard).unwrap();
+        assert_eq!(w2, "status = 1 AND amount > 0");
+        assert!(build_cond_where(&[], "", Mysql).is_none());
     }
 }
 

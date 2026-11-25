@@ -2,44 +2,51 @@
 //! 返回的互斥锁守卫(与 PG 同一并发纪律)。
 
 use crate::model::Backend;
-use tiberius::Row;
+use futures_util::TryStreamExt;
+use tiberius::{ColumnData, FromSql, QueryItem};
 
-fn row_cell(row: &Row, i: usize) -> Option<String> {
-    use tiberius::ColumnType as CT;
-    let v = row.get::<&str, _>(i);
-    if let Some(s) = v {
-        return Some(s.to_string());
-    }
-    // 数值/时间等按 Display 兜底;tiberius Row::get 对每个目标类型独立尝试
-    let null_type = matches!(row.columns().get(i).map(|c| c.column_type()), Some(CT::Null));
-    if null_type {
-        return None;
-    }
-    macro_rules! try_num {
-        ($t:ty) => {
-            if let Some(n) = row.get::<$t, _>(i) {
-                return Some(n.to_string());
-            }
-        };
-    }
-    try_num!(i16);
-    try_num!(i32);
-    try_num!(i64);
-    try_num!(u8);
-    try_num!(f32);
-    try_num!(f64);
-    if let Some(b) = row.get::<bool, _>(i) {
-        return Some(b.to_string());
-    }
-    if let Some(d) = row.get::<chrono::NaiveDateTime, _>(i) {
-        return Some(d.format("%Y-%m-%d %H:%M:%S").to_string());
-    }
-    // 二进制/UUID/嵌套:十六进制/字符串兜底
-    // 最后兜底:列声明类型可显示,值不可显示则置 NULL
-    None
+/// 单元格 → 显示文本。按驱动的值变体逐类渲染:驱动的 `Row::get` 遇到类型不匹配
+/// 会 panic(内部是 `try_get(..).unwrap()`),`cells()` 不做转换。
+fn cell_text(data: &ColumnData<'static>) -> Option<String> {
+    use ColumnData as D;
+    Some(match data {
+        D::U8(v) => v.as_ref()?.to_string(),
+        D::I16(v) => v.as_ref()?.to_string(),
+        D::I32(v) => v.as_ref()?.to_string(),
+        D::I64(v) => v.as_ref()?.to_string(),
+        // real 先 widening 成 f64 再打印会把 0.1 写成 0.10000000149011612
+        D::F32(v) => {
+            let v = *v.as_ref()?;
+            format!("{v:?}")
+        }
+        D::F64(v) => crate::exec::fmt_f64(*v.as_ref()?),
+        D::Bit(v) => u8::from(*v.as_ref()?).to_string(),
+        D::String(s) => return s.as_ref().map(|s| s.to_string()),
+        D::Guid(v) => v.as_ref()?.to_string(),
+        D::Binary(b) => format!("<BLOB {} B>", b.as_ref()?.len()),
+        D::Numeric(v) => v.as_ref()?.to_string(),
+        D::Xml(x) => return x.as_ref().map(|x| x.as_ref().to_string()),
+        D::DateTime(_) | D::SmallDateTime(_) | D::DateTime2(_) => {
+            time_text::<chrono::NaiveDateTime>(data)?
+        }
+        D::Time(_) => time_text::<chrono::NaiveTime>(data)?,
+        D::Date(_) => time_text::<chrono::NaiveDate>(data)?,
+        D::DateTimeOffset(_) => time_text::<chrono::DateTime<chrono::FixedOffset>>(data)?,
+    })
 }
 
-/// 通用查询:simple_query 渲染全部结果集(最后一张表为主)
+/// 驱动的时间类型 → chrono → 文本(`YYYY-MM-DD[ HH:MM:SS[.小数秒]]`,带时区的
+/// 末尾追加时差)。越界的值驱动报错而不 panic,兜底显示原始值,不当作 NULL
+fn time_text<'a, T: FromSql<'a> + std::fmt::Display>(
+    data: &'a ColumnData<'static>,
+) -> Option<String> {
+    match T::from_sql(data) {
+        Ok(v) => v.map(|v| v.to_string()),
+        Err(_) => Some(format!("{data:?}")),
+    }
+}
+
+/// 通用查询:取第一个结果集,最多 `max_rows` 行(多出的行读完丢弃并置 `truncated`)
 pub async fn query(
     st: &mut crate::model::MssqlState,
     sql: &str,
@@ -51,53 +58,122 @@ pub async fn query(
         .simple_query(sql)
         .await
         .map_err(|e| format!("SQL Server: {e}"))?;
-    // 行名/列类型来自首行;行前拿列名的 api 是 async(Option<&[Column]>),用首行兜底
+    // 列名/类型取自结果集元数据(空结果集也有列头)
     let mut columns: Vec<String> = Vec::new();
     let mut column_types: Vec<String> = Vec::new();
     let mut rows: Vec<Vec<Option<String>>> = Vec::new();
-    let batch = rs
-        .into_first_result()
-        .await
-        .map_err(|e| format!("SQL Server: {e}"))?;
-    if let Some(first) = batch.first() {
-        columns = (0..first.len())
-            .enumerate()
-            .map(|(i, _)| {
-                first
+    let mut truncated = false;
+    while let Some(item) = rs.try_next().await.map_err(|e| format!("SQL Server: {e}"))? {
+        match item {
+            QueryItem::Metadata(meta) if meta.result_index() == 0 => {
+                columns = meta.columns().iter().map(|c| c.name().to_string()).collect();
+                column_types = meta
                     .columns()
-                    .get(i)
-                    .map(|c| c.name().to_string())
-                    .unwrap_or_else(|| format!("col{i}"))
-            })
-            .collect();
-        column_types = (0..first.len())
-            .map(|i| {
-                first
-                    .columns()
-                    .get(i)
+                    .iter()
                     .map(|c| mssql_type_name(c.column_type()).to_string())
-                    .unwrap_or_default()
-            })
-            .collect();
-    }
-    for row in &batch {
-        if rows.len() >= max_rows {
-            break;
+                    .collect();
+            }
+            QueryItem::Row(row) if row.result_index() == 0 => {
+                if rows.len() >= max_rows {
+                    truncated = true;
+                    continue;
+                }
+                let cells: Vec<_> = row.cells().collect();
+                if rows.is_empty() {
+                    column_types = cells
+                        .iter()
+                        .map(|(c, d)| refine(c.column_type(), d).to_string())
+                        .collect();
+                    if columns.is_empty() {
+                        columns = cells.iter().map(|(c, _)| c.name().to_string()).collect();
+                    }
+                }
+                rows.push(cells.iter().map(|(_, d)| cell_text(d)).collect());
+            }
+            _ => {}
         }
-        rows.push((0..row.len()).map(|i| row_cell(row, i)).collect());
     }
+    // 流借着 client,读完先放手
+    drop(rs);
+    // 没有结果集 = 写语句:报最后一条语句的影响行数
+    let affected = if columns.is_empty() { rowcount(&mut client).await? } else { 0 };
     Ok(crate::model::ExecResult {
         columns,
         rows,
-        affected: 0,
-        truncated: false,
+        affected,
+        truncated,
         elapsed_ms: started.elapsed().as_millis() as u64,
         column_types,
     })
 }
 
-/// SQL Server 列类型(TDS 类型码)→ 类型名。变长类型码(Intn/Floatn 等)的实际
-/// 宽度只在 TypeInfo 里,按最常见的宽度给名。
+/// 执行非查询语句,返回影响行数。响应流读完:出错时驱动在取流那一步就报,
+/// 但流里后续的错不读就不报;读完也免得驱动在下一条语句前替我们丢弃残留回包
+pub(crate) async fn exec(client: &mut crate::model::MssqlClient, sql: &str) -> Result<u64, String> {
+    let mut rs = client
+        .simple_query(sql)
+        .await
+        .map_err(|e| format!("SQL Server: {e}"))?;
+    while rs.try_next().await.map_err(|e| format!("SQL Server: {e}"))?.is_some() {}
+    drop(rs);
+    rowcount(client).await
+}
+
+/// 上一条语句的影响行数。simple_query 的流不暴露 DONE 计数,只能紧跟在同一个
+/// 连接上问 `@@ROWCOUNT`:多语句批次只有最后一条语句的数,非写语句为 0
+async fn rowcount(client: &mut crate::model::MssqlClient) -> Result<u64, String> {
+    let row = client
+        .simple_query("SELECT @@ROWCOUNT")
+        .await
+        .map_err(|e| format!("SQL Server: {e}"))?
+        .into_row()
+        .await
+        .map_err(|e| format!("SQL Server: {e}"))?;
+    let n = row
+        .as_ref()
+        .and_then(|r| cell_text(r.get_column_data(0).ok()?))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    Ok(n)
+}
+
+/// 这条连接当前的默认库
+pub(crate) async fn current_database(
+    client: &mut crate::model::MssqlClient,
+) -> Result<String, String> {
+    let row = client
+        .simple_query("SELECT DB_NAME()")
+        .await
+        .map_err(|e| format!("SQL Server: {e}"))?
+        .into_row()
+        .await
+        .map_err(|e| format!("SQL Server: {e}"))?;
+    Ok(row
+        .as_ref()
+        .and_then(|r| cell_text(r.get_column_data(0).ok()?))
+        .unwrap_or_default())
+}
+
+/// 切换连接的默认库
+pub(crate) async fn switch_database(
+    client: &mut crate::model::MssqlClient,
+    db: &str,
+) -> Result<(), String> {
+    exec(client, &format!("USE {}", crate::edits::quote(db, false))).await.map(|_| ())
+}
+
+/// 列类型:类型码 → 类型名。datetime / smalldatetime 共用类型码 Datetimen
+/// (宽度不体现在类型码里),按值的变体细分
+fn refine(ct: tiberius::ColumnType, data: &ColumnData<'_>) -> &'static str {
+    match (ct, data) {
+        (tiberius::ColumnType::Datetimen, ColumnData::SmallDateTime(_)) => "smalldatetime",
+        _ => mssql_type_name(ct),
+    }
+}
+
+/// SQL Server 列类型(TDS 类型码)→ 类型名。驱动已按线上的字节宽度把 Intn/Floatn
+/// 归到具体宽度(可空的 int/bigint/real/float…);仍分不出的只有可空 smallmoney
+/// (与 money 同码,报成 money)。
 pub(crate) fn mssql_type_name(ct: tiberius::ColumnType) -> &'static str {
     use tiberius::ColumnType as CT;
     match ct {
@@ -134,24 +210,30 @@ pub(crate) fn mssql_type_name(ct: tiberius::ColumnType) -> &'static str {
     }
 }
 
-/// 表结构(sys.columns;类型含长度)
+/// 表结构(sys.columns;类型含长度)。目标库用三段式名指过去,不发 USE:连接是
+/// 池化轮发的,改了某条连接的默认库会串到之后的查询上
 pub async fn structure(
     st: &mut crate::model::MssqlState,
     database: Option<&str>,
     table: &str,
 ) -> Result<crate::model::TableStructure, String> {
     let mut client = Backend::mssql_client(st).await?;
-    if let Some(d) = database.map(str::trim).filter(|s| !s.is_empty()) {
-        let use_sql = format!("USE {}", crate::edits::quote(d, false));
-        client
-            .simple_query(&use_sql)
-            .await
-            .map_err(|e| format!("SQL Server: {e}"))?;
-    }
+    let db = database
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|d| crate::edits::quote(d, false));
+    // cat = "db".(视图前缀) / obj = OBJECT_ID 里的 "db".. ;没给库 = 连接当前库
+    let cat = db.as_ref().map(|d| format!("{d}.")).unwrap_or_default();
+    let obj = db.as_ref().map(|d| format!("{d}..")).unwrap_or_default();
     let qt = table.replace('\'', "''");
+    // 列进多个索引也不重复、只有主键索引的列算主键:主键判定用 EXISTS,
+    // 直接 JOIN sys.index_columns 会按索引行展开
+    // 长度:nchar/nvarchar 的 max_length 是字节数,换成字符数
     let sql = format!(
         "SELECT c.name, CAST(t.name AS NVARCHAR(60)) + \
-         CASE WHEN t.name IN ('varchar','nvarchar','char','nchar','varbinary') \
+         CASE WHEN t.name IN ('nvarchar','nchar') \
+         THEN '(' + IIF(c.max_length = -1, 'MAX', CAST(c.max_length / 2 AS NVARCHAR(10))) + ')' \
+         WHEN t.name IN ('varchar','char','varbinary','binary') \
          THEN '(' + IIF(c.max_length = -1, 'MAX', CAST(c.max_length AS NVARCHAR(10))) + ')' \
          WHEN t.name IN ('decimal','numeric') \
          THEN '(' + CAST(c.precision AS NVARCHAR(10)) + ',' + CAST(c.scale AS NVARCHAR(10)) + ')' \
@@ -159,14 +241,14 @@ pub async fn structure(
          c.is_nullable, \
          ISNULL(dc.definition, '') AS def, \
          CAST(ISNULL(ep.value, '') AS NVARCHAR(4000)) AS comment, \
-         CAST(IIF(ic.column_id IS NOT NULL, 1, 0) AS bit) AS is_pk \
-         FROM sys.columns c \
-         JOIN sys.types t ON c.user_type_id = t.user_type_id \
-         LEFT JOIN sys.default_constraints dc ON c.default_object_id = dc.object_id \
-         LEFT JOIN sys.extended_properties ep ON ep.major_id = c.object_id AND ep.minor_id = c.column_id AND ep.name = 'MS_Description' \
-         LEFT JOIN sys.index_columns ic ON ic.object_id = c.object_id AND ic.column_id = c.column_id \
-         LEFT JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id AND i.is_primary_key = 1 \
-         WHERE c.object_id = OBJECT_ID('{qt}') \
+         CAST(IIF(EXISTS (SELECT 1 FROM {cat}sys.index_columns ic \
+         JOIN {cat}sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id \
+         WHERE ic.object_id = c.object_id AND ic.column_id = c.column_id AND i.is_primary_key = 1), 1, 0) AS bit) AS is_pk \
+         FROM {cat}sys.columns c \
+         JOIN {cat}sys.types t ON c.user_type_id = t.user_type_id \
+         LEFT JOIN {cat}sys.default_constraints dc ON c.default_object_id = dc.object_id \
+         LEFT JOIN {cat}sys.extended_properties ep ON ep.major_id = c.object_id AND ep.minor_id = c.column_id AND ep.name = 'MS_Description' \
+         WHERE c.object_id = OBJECT_ID('{obj}{qt}') \
          ORDER BY c.column_id"
     );
     let rows = client

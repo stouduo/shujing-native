@@ -338,7 +338,10 @@ pub async fn connect(
                 if let Some(d) = db {
                     config.database(d);
                 }
-                config.encryption(tiberius::EncryptionLevel::NotSupported);
+                // 只加密登录包(密码不走明文);服务器多半是自签证书,默认不校验
+                // 证书就建不了连(实连实测:rustls 拒收旧版 X.509 的自签证书)
+                config.encryption(tiberius::EncryptionLevel::Off);
+                config.trust_cert();
                 use tokio_util::compat::TokioAsyncWriteCompatExt;
                 match tiberius::Client::connect(config, tcp.compat_write()).await {
                     Ok(c) => clients.push(tokio::sync::Mutex::new(c)),
@@ -354,9 +357,22 @@ pub async fn connect(
                     last_err.unwrap_or_default()
                 ));
             }
+            // 逐条问服务器当前的默认库:之后"当前库 ≠ 会话库"才发 USE
+            let mut cur_db = Vec::with_capacity(clients.len());
+            for c in &clients {
+                let db = crate::mssql::current_database(&mut *c.lock().await).await?;
+                // 问不到库名就当未知:之后不对齐,也不拿空名去 USE
+                cur_db.push(std::sync::Mutex::new((!db.is_empty()).then_some(db)));
+            }
+            let default_db = cur_db
+                .first()
+                .and_then(|c| c.lock().ok().and_then(|d| d.clone()));
             Ok(Backend::Mssql(crate::model::MssqlState {
                 clients,
                 next: std::sync::atomic::AtomicUsize::new(0),
+                cur_db,
+                default_db,
+                session_db: None,
             }))
         }
         DbType::ClickHouse => {
@@ -715,7 +731,23 @@ impl Backend {
         }
         let n = st.next.fetch_add(1, Ordering::Relaxed) % st.clients.len();
         let idx = n.min(st.clients.len().saturating_sub(1));
-        Ok(st.clients[idx].lock().await)
+        let mut client = st.clients[idx].lock().await;
+        // 把这条连接的默认库对齐到会话库(没选库 = 连接配置里的默认库)。各连接
+        // 各记各的当前库:会话里的 USE 只改了执行它的那一条
+        let want = st
+            .session_db
+            .clone()
+            .or_else(|| st.default_db.clone())
+            .filter(|d| !d.is_empty());
+        // 守卫不跨 await 持有(std 的 MutexGuard 不是 Send,future 要能派到后台线程)
+        let stale = *st.cur_db[idx].lock().unwrap_or_else(|e| e.into_inner()) != want;
+        if stale {
+            if let Some(db) = &want {
+                crate::mssql::switch_database(&mut client, db).await?;
+            }
+            *st.cur_db[idx].lock().unwrap_or_else(|e| e.into_inner()) = want;
+        }
+        Ok(client)
     }
 
     /// 会话库上下文读取(MySQL/PG)
@@ -723,6 +755,7 @@ impl Backend {
         match self {
             Backend::MySql(mp) => mp.session_db.as_deref(),
             Backend::Pg(p) => p.session_db.as_deref(),
+            Backend::Mssql(s) => s.session_db.as_deref(),
             _ => None,
         }
     }
@@ -730,6 +763,7 @@ impl Backend {
     pub fn set_session_db(&mut self, db: Option<&str>) {
         match self {
             Backend::MySql(mp) => mp.session_db = db.map(str::to_string),
+            Backend::Mssql(s) => s.session_db = db.map(str::to_string),
             Backend::Pg(p) => {
                 p.session_db = db.map(str::to_string);
                 // 上下文变化:所有槽位重新应用
@@ -817,7 +851,8 @@ impl Backend {
                 let ver = rows
                     .first()
                     .and_then(|r| r.get::<&str, _>(0))
-                    .map(|s| s.split(" on ").next().unwrap_or(s).to_string())
+                    // @@VERSION 是四行文本(产品/构建日期/版权/平台),界面上要的是首行
+                    .map(|s| s.lines().next().unwrap_or("").trim().to_string())
                     .unwrap_or_else(|| "SQL Server".into());
                 Ok(ver)
             }

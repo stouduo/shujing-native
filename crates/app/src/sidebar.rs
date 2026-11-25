@@ -1624,8 +1624,13 @@ impl ShujingApp {
             if ui.button(ui_kit::t!("Copy SELECT *", "复制 SELECT *")).clicked() {
                 let mysql = crate::app::mysql_quote(&self.conns, conn_id);
                 let ident = crate::app::quote_ident_by(name, mysql);
-                ui.ctx()
-                    .copy_text(format!("SELECT * FROM {ident} LIMIT 100;"));
+                // SQL Server 没有 LIMIT,取前 N 行用 TOP
+                let sql = if crate::app::sql_dialect(&self.conns, conn_id) == shujing_core::edits::Dialect::Mssql {
+                    format!("SELECT TOP 100 * FROM {ident};")
+                } else {
+                    format!("SELECT * FROM {ident} LIMIT 100;")
+                };
+                ui.ctx().copy_text(sql);
                 ui.close_menu();
             }
             if ui
@@ -1716,17 +1721,22 @@ impl ShujingApp {
                             format!("把表 {name} 复制为新表(结构+数据)。输入新表名:")
                         },
                         None,
-                        format!("CREATE TABLE {{v}} AS SELECT * FROM {ident};"),
+                        // SQL Server 的「建表并灌数」是 SELECT … INTO
+                        if crate::app::sql_dialect(&self.conns, conn_id) == shujing_core::edits::Dialect::Mssql {
+                            format!("SELECT * INTO {{v}} FROM {ident};")
+                        } else {
+                            format!("CREATE TABLE {{v}} AS SELECT * FROM {ident};")
+                        },
                     );
                 }
                 "analyze" => {
                     let mysql = crate::app::mysql_quote(&self.conns, conn_id);
                     let ident = crate::app::quote_ident_by(name, mysql);
                     // MySQL 语法要求 ANALYZE TABLE;PG/SQLite 接受裸 ANALYZE
-                    let sql = if mysql {
-                        format!("ANALYZE TABLE {ident};")
-                    } else {
-                        format!("ANALYZE {ident};")
+                    let sql = match crate::app::sql_dialect(&self.conns, conn_id) {
+                        shujing_core::edits::Dialect::Mysql => format!("ANALYZE TABLE {ident};"),
+                        shujing_core::edits::Dialect::Mssql => format!("UPDATE STATISTICS {ident};"),
+                        _ => format!("ANALYZE {ident};"),
                     };
                     self.open_confirm(
                         conn_id,

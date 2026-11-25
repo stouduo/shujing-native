@@ -2,6 +2,7 @@
 
 use crate::net;
 use egui::Color32;
+use shujing_core::edits::{page_clause, page_table_ref};
 use shujing_core::{ConnInfo, Service};
 mod state;
 
@@ -2559,6 +2560,7 @@ impl ShujingApp {
             Some(t) => (mysql_quote(&self.conns, &t.conn_id), t.conn_id.clone()),
             None => return,
         };
+        let dialect = sql_dialect(&self.conns, &conn_id);
         let is_mongo = self
             .conns
             .iter()
@@ -2583,7 +2585,7 @@ impl ShujingApp {
         });
         let mut where_parts: Vec<String> = Vec::new();
         if let Some(q) = &tab.active_filter {
-            where_parts.push(build_like_filter(&cols_snapshot, q, mysql));
+            where_parts.push(build_like_filter(&cols_snapshot, q, dialect));
         }
         if let Some(w) = &tab.applied_where {
             where_parts.push(w.clone());
@@ -2636,22 +2638,13 @@ impl ShujingApp {
             });
         }
         net::spawn(async move {
-            let full = match &database {
-                Some(db) => format!(
-                    "{}.{}",
-                    quote_ident_by(db, mysql),
-                    quote_ident_by(&table, mysql)
-                ),
-                None => quote_ident_by(&table, mysql),
-            };
+            // 带库表名与分页写法按方言:SQL Server 限定库写 db..table,没有 LIMIT/OFFSET
+            let full = page_table_ref(database.as_deref(), &table, dialect);
             let mut sql = format!("SELECT * FROM {full}");
             if let Some(w) = &where_clause {
                 sql.push_str(&format!(" WHERE {w}"));
             }
-            if let Some(o) = &order {
-                sql.push_str(&format!(" ORDER BY {o}"));
-            }
-            sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
+            sql.push_str(&page_clause(order.as_deref(), limit, offset, dialect));
             let result = service.run_sql(&conn_id, sql.clone(), Some(limit)).await;
             let result = result.map(|mut rs| rs.pop().unwrap_or_default());
             let _ = tx.send(BgEvent::RowsLoaded {
@@ -4630,17 +4623,17 @@ impl ShujingApp {
 
     /// 应用筛选栏(字段/自由模式)
     pub fn apply_filter_bar(&mut self, tab_id: &str) {
-        let mysql = self
+        let dialect = self
             .table_tab(tab_id)
-            .map(|t| mysql_quote(&self.conns, &t.conn_id))
-            .unwrap_or(true);
+            .map(|t| sql_dialect(&self.conns, &t.conn_id))
+            .unwrap_or(shujing_core::edits::Dialect::Mysql);
         let (conds, free) = {
             let Some(t) = self.table_tab(tab_id) else {
                 return;
             };
             (t.conds.clone(), t.free_where.clone())
         };
-        let built = build_cond_where(&conds, &free, mysql);
+        let built = build_cond_where(&conds, &free, dialect);
         if let Some(t) = self.table_tab_mut(tab_id) {
             t.filter_error = None;
             t.applied_where = built;
@@ -4779,23 +4772,50 @@ impl ShujingApp {
                         tree.online = true;
                         tree.version = version;
                         self.apply_saved_db_filter(&conn_id);
-                        // 启动竞态自愈:会话恢复的表标签可能在连接完成前就发起加载,
-                        // 失败后错误一直挂着("连接未建立或已断开")。连接建立即自动重载
-                        let stale: Vec<String> = self
+                        // 启动竞态自愈:会话恢复的标签可能在连接完成前就发起加载,
+                        // 失败后错误一直挂着("连接未建立或已断开")。连接建立即自动重载。
+                        // 表以外的标签同样中招(实机复现:恢复后结构页一直报连接未建立)
+                        let stale: Vec<(String, &'static str)> = self
                             .tabs
                             .iter()
-                            .filter(|t| match &t.kind {
-                                TabKind::Table(tb) => {
-                                    tb.conn_id == conn_id
-                                        && tb.changes.is_empty()
-                                        && (tb.error.is_some() || tb.columns.is_empty())
+                            .filter_map(|t| match &t.kind {
+                                TabKind::Table(tb) => (tb.conn_id == conn_id
+                                    && tb.changes.is_empty()
+                                    && (tb.error.is_some() || tb.columns.is_empty()))
+                                .then(|| (t.id.clone(), "table")),
+                                TabKind::Structure(st) => (st.conn_id == conn_id
+                                    && !st.loading
+                                    && (st.error.is_some() || st.data.is_none()))
+                                .then(|| (t.id.clone(), "structure")),
+                                TabKind::Designer(d) => (d.conn_id == conn_id
+                                    && d.original_table.is_some()
+                                    && !d.loading
+                                    && (d.error.is_some() || !d.loaded))
+                                .then(|| (t.id.clone(), "designer")),
+                                TabKind::Er(e) => {
+                                    (e.conn_id == conn_id && !e.loading && e.error.is_some())
+                                        .then(|| (t.id.clone(), "er"))
                                 }
-                                _ => false,
+                                TabKind::Ddl(dl) => (dl.conn_id == conn_id
+                                    && !dl.loading
+                                    && (dl.error.is_some() || dl.ddl.is_none()))
+                                .then(|| (t.id.clone(), "ddl")),
+                                TabKind::Redis(r) => (r.conn_id == conn_id
+                                    && !r.scanning
+                                    && r.error.is_some())
+                                .then(|| (t.id.clone(), "redis")),
+                                _ => None,
                             })
-                            .map(|t| t.id.clone())
                             .collect();
-                        for tid in stale {
-                            self.load_rows(&tid);
+                        for (tid, kind) in stale {
+                            match kind {
+                                "structure" => self.load_structure(&tid),
+                                "designer" => self.load_designer_structure(&tid),
+                                "er" => self.load_er(&tid),
+                                "ddl" => self.load_ddl(&tid),
+                                "redis" => self.redis_scan(&tid, true),
+                                _ => self.load_rows(&tid),
+                            }
                         }
                         let tx = self.event_tx.clone();
                         let service = self.service.clone();
@@ -4837,21 +4857,28 @@ impl ShujingApp {
                                 tree.expanded_db = Some(db);
                             }
                         }
+                        // 没有要恢复的展开库就展开列表里第一个可见的
                         if tree.expanded_db.is_none() {
-                            if let Some(db) = tree.databases.iter().find(|d| shown(d)).cloned() {
-                                tree.expanded_db = Some(db.clone());
-                                let tx = self.event_tx.clone();
-                                let service = self.service.clone();
-                                let cid = conn_id.clone();
-                                net::spawn(async move {
-                                    let tables = service.list_tables(&cid, Some(db.clone())).await;
-                                    let _ = tx.send(BgEvent::TablesLoaded {
-                                        conn_id: cid,
-                                        database: Some(db),
-                                        tables: tables.unwrap_or_default(),
-                                    });
+                            tree.expanded_db = tree.databases.iter().find(|d| shown(d)).cloned();
+                        }
+                        // 展开的库还没拉过表清单就拉一次:会话恢复只带回了展开状态,
+                        // 不拉的话重启后展开的库底下是空的,要点一下才出来
+                        if let Some(db) = tree
+                            .expanded_db
+                            .clone()
+                            .filter(|d| !tree.tables_by_db.contains_key(d) && !tree.loading)
+                        {
+                            let tx = self.event_tx.clone();
+                            let service = self.service.clone();
+                            let cid = conn_id.clone();
+                            net::spawn(async move {
+                                let tables = service.list_tables(&cid, Some(db.clone())).await;
+                                let _ = tx.send(BgEvent::TablesLoaded {
+                                    conn_id: cid,
+                                    database: Some(db),
+                                    tables: tables.unwrap_or_default(),
                                 });
-                            }
+                            });
                         }
                     }
                 }
@@ -6163,6 +6190,17 @@ impl ShujingApp {
 }
 
 /// 该连接是否用 MySQL 反引号引注标识符(SQLite 接受反引号,Postgres 必须双引号)
+/// SQL 文本生成用的方言(分页/字面量/带库表名都按它分)
+pub fn sql_dialect(conns: &[ConnInfo], conn_id: &str) -> shujing_core::edits::Dialect {
+    conns
+        .iter()
+        .find(|c| c.id == conn_id)
+        .map(|c| shujing_core::edits::Dialect::of(c.db_type))
+        .unwrap_or(shujing_core::edits::Dialect::Standard)
+}
+
+pub use shujing_core::edits::{build_cond_where, build_like_filter};
+
 pub fn mysql_quote(conns: &[ConnInfo], conn_id: &str) -> bool {
     conns
         .iter()
@@ -6177,68 +6215,6 @@ pub fn mysql_quote(conns: &[ConnInfo], conn_id: &str) -> bool {
 }
 
 /// 全列 LIKE 筛选:列名按方言引注,值转义单引号
-pub fn build_like_filter(columns: &[String], query: &str, mysql: bool) -> String {
-    let mut escaped = query.replace('\'', "''");
-    if mysql {
-        escaped = escaped.replace('\\', "\\\\");
-    }
-    let pattern = format!("'%{escaped}%'");
-    // 整体加括号:与筛选栏条件 AND 拼接时,无括号的 OR 串会被 SQL 优先级改写语义
-    format!(
-        "({})",
-        columns
-            .iter()
-            .map(|c| format!("{} LIKE {}", quote_ident_by(c, mysql), pattern))
-            .collect::<Vec<_>>()
-            .join(" OR ")
-    )
-}
-
-/// 筛选栏条件 → WHERE 片段(数字裸值,其余引号转义;自由模式原文并入)
-pub fn build_cond_where(
-    conds: &[(String, String, String)],
-    free: &str,
-    mysql: bool,
-) -> Option<String> {
-    let mut parts: Vec<String> = Vec::new();
-    for (col, op, val) in conds {
-        let op = op.trim();
-        if op.is_empty() {
-            continue;
-        }
-        let ident = quote_ident_by(col, mysql);
-        if op == "IS NULL" || op == "IS NOT NULL" {
-            parts.push(format!("{ident} {op}"));
-            continue;
-        }
-        let v = val.trim();
-        if v.is_empty() {
-            continue;
-        }
-        let literal = if v.parse::<f64>().map(|f| f.is_finite()).unwrap_or(false) && op != "LIKE" {
-            v.to_string()
-        } else {
-            // LIKE 语义 = 包含:两侧补通配符(用户自带 % 则原样保留)
-            let wrapped = if op == "LIKE" && !v.contains('%') {
-                format!("%{v}%")
-            } else {
-                v.to_string()
-            };
-            let mut quoted = wrapped.replace('\'', "''");
-            if mysql {
-                quoted = quoted.replace('\\', "\\\\");
-            }
-            format!("'{quoted}'")
-        };
-        parts.push(format!("{ident} {op} {literal}"));
-    }
-    let free_t = free.trim();
-    if !free_t.is_empty() {
-        parts.push(free_t.to_string());
-    }
-    (!parts.is_empty()).then(|| parts.join(" AND "))
-}
-
 /// 检测 SQL 是否为可回写的单表 SELECT,返回表名(取最后一段标识符)
 pub fn detect_single_table(sql: &str) -> Option<(Option<String>, String)> {
     // ascii 小写化等长(Unicode 小写化字节可变,偏移切原串会 panic)
@@ -6322,23 +6298,6 @@ fn rand_suffix() -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static N: AtomicUsize = AtomicUsize::new(1);
     N.fetch_add(1, Ordering::Relaxed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn like_filter_escapes_and_quotes() {
-        let cols = vec!["id".to_string(), "na`me".to_string()];
-        // 值里的单引号翻倍;列名里的方言引号翻倍
-        let mysql = build_like_filter(&cols, "o'brien", true);
-        assert!(mysql.contains("`id` LIKE '%o''brien%'"), "{mysql}");
-        assert!(mysql.contains("`na``me` LIKE '%o''brien%'"), "{mysql}");
-        let pg_cols = vec!["na\"me".to_string()];
-        let pg = build_like_filter(&pg_cols, "x", false);
-        assert!(pg.contains("\"na\"\"me\" LIKE '%x%'"), "{pg}");
-    }
 }
 
 /// 写未压缩 TGA(32bit BGRA,顶左原点)
@@ -6520,22 +6479,4 @@ mod session_tests {
         );
     }
 
-    #[test]
-    fn cond_where_builder() {
-        let conds = vec![
-            ("age".to_string(), ">".to_string(), "18".to_string()),
-            ("name".to_string(), "LIKE".to_string(), "张%".to_string()),
-            ("del".to_string(), "IS NULL".to_string(), String::new()),
-            ("empty".to_string(), "=".to_string(), String::new()),
-        ];
-        let w = build_cond_where(&conds, "", true).unwrap();
-        assert!(w.contains("`age` > 18"), "{w}");
-        assert!(w.contains("`name` LIKE '张%'"), "{w}");
-        assert!(w.contains("`del` IS NULL"), "{w}");
-        assert!(!w.contains("empty"), "{w}");
-        // 自由 WHERE 并入
-        let w2 = build_cond_where(&[], "status = 1 AND amount > 0", false).unwrap();
-        assert_eq!(w2, "status = 1 AND amount > 0");
-        assert!(build_cond_where(&[], "", true).is_none());
-    }
 }
