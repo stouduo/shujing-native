@@ -2263,11 +2263,16 @@ pub(crate) fn draw_table_view(
                 }
                 v
             };
-            let vis_idx: Vec<usize> = order_full
+            // 可视列在 order_full 里的槽位(列头拖动重排时隐藏列的槽位不动)
+            let vis_slots: Vec<usize> = order_full
                 .iter()
-                .copied()
-                .filter(|&i| !tab.hidden_cols.contains(&columns[i]))
+                .enumerate()
+                .filter(|(_, &i)| !tab.hidden_cols.contains(&columns[i]))
+                .map(|(k, _)| k)
                 .collect();
+            let vis_idx: Vec<usize> = vis_slots.iter().map(|&k| order_full[k]).collect();
+            // 列操作:列宽/列头几何按位置算,行号列在时整体后移一位
+            let col_first = usize::from(tab.show_rowno);
             // ---- 键盘交互 ----
             // 网格的键盘焦点位:点选单元格后焦点归网格,方向键/Tab/Esc 由网格处理
             let grid_id = egui::Id::new(("grid-focus", tab_id));
@@ -2283,7 +2288,7 @@ pub(crate) fn draw_table_view(
                 / theme::row_h())
             .max(1.0) as usize;
 
-            // 列缘按压(本帧命中,绘制后转成自适应请求)/ 列头拖拽落位的 refit
+            // 列缘按压(本帧命中,绘制后转成自适应请求)/ 列头拖拽落位
             let mut edge_hit: Option<usize> = None;
             let mut sort_click: Option<String> = None;
             let mut commit: Option<(usize, usize, String)> = None;
@@ -2313,28 +2318,18 @@ pub(crate) fn draw_table_view(
                     tab.base_widths = theme::suggested_widths_vis(rows, columns, &vis_idx);
                 }
                 let col_widths = theme::fitted_from_base(tab.base_widths.clone(), ui.available_width());
-                // 精确宽度帧:双击列缘的自适应 / 重排后的整排 refit(取用后即清)
+                // 精确宽度帧:重排后列宽跟着列走(整排)/ 双击列缘的自适应(只这一列,其余列
+                // 照旧保留状态里的宽度,手拖过的不会被顺手重置);取用后即清
                 let col_autofit_req = tab.col_autofit.take();
-                let col_refit = std::mem::take(&mut tab.col_refit);
-                let col_exact: Option<Vec<f32>> = if col_refit {
-                    Some(
-                        vis_idx
-                            .iter()
-                            .map(|&vi| fit_width(rows, columns, vi))
-                            .collect(),
-                    )
-                } else {
-                    col_autofit_req.map(|vw| {
-                        (0..vis_idx.len())
-                            .map(|k| {
-                                if k == vw {
-                                    fit_width(rows, columns, vis_idx[k])
-                                } else {
-                                    col_widths[k]
-                                }
-                            })
-                            .collect()
-                    })
+                let col_carry = tab.col_carry.take();
+                let col_exact: Vec<Option<f32>> = match col_carry {
+                    Some(w) if w.len() == vis_idx.len() => w.into_iter().map(Some).collect(),
+                    _ => (0..vis_idx.len())
+                        .map(|k| {
+                            (Some(k) == col_autofit_req)
+                                .then(|| fit_width(rows, columns, vis_idx[k]))
+                        })
+                        .collect(),
                 };
                 let desired_w =
                     if tab.show_rowno { 48.0 } else { 0.0 } + col_widths.iter().sum::<f32>();
@@ -2527,7 +2522,7 @@ pub(crate) fn draw_table_view(
                     let mut x = content_left + rowno_w;
                     for k in 0..=vis_idx.len() {
                         xs.push(x);
-                        x += ws_now.get(1 + k).copied().unwrap_or(0.0);
+                        x += ws_now.get(col_first + k).copied().unwrap_or(0.0);
                     }
                     let on_layer = pointer
                         .is_some_and(|pt| ui.memory(|m| m.layer_id_at(pt) == Some(ui.layer_id())));
@@ -2547,13 +2542,8 @@ pub(crate) fn draw_table_view(
                         }
                         Some(best)
                     };
-                    let (p_pressed, p_down, p_released) = ui.input(|i| {
-                        (
-                            i.pointer.primary_pressed(),
-                            i.pointer.primary_down(),
-                            i.pointer.any_released(),
-                        )
-                    });
+                    let (p_pressed, p_down) =
+                        ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
 
                     // 列缘按下的这一帧:双击判定(同缘 0.3s 内、位置 6px 内)
                     if let Some(b) = edge_hit.take() {
@@ -2567,7 +2557,7 @@ pub(crate) fn draw_table_view(
                                     b2 == b && now - t2 < 0.3 && (px - x2).abs() < 6.0
                                 });
                             if dbl {
-                                tab.col_autofit = Some(b);
+                                tab.col_autofit = Some(b - 1);
                             } else {
                                 tab.edge_click = Some((b, now, px));
                             }
@@ -2603,59 +2593,43 @@ pub(crate) fn draw_table_view(
                             } else {
                                 tab.col_drag = None;
                             }
-                        } else if !p_down {
-                            // 松开落位
-                            tab.col_drag = None;
-                            if let Some(pt) = pointer {
-                                if let Some(t) = nearest_boundary(pt) {
-                                    if t != src && t != src + 1 && src < vis_idx.len() {
-                                        // 全序重排:col_order 缺失时先固化为自然序;
-                                        // 可视序列在 full 的槽位间移动,隐藏列槽位不动
-                                        if tab.col_order.is_empty() {
-                                            tab.col_order = columns.clone();
-                                        }
-                                        let mut full: Vec<String> = tab
-                                            .col_order
-                                            .iter()
-                                            .filter(|n| columns.contains(n))
-                                            .cloned()
-                                            .collect();
-                                        for c in columns.iter() {
-                                            if !full.contains(c) {
-                                                full.push(c.clone());
-                                            }
-                                        }
-                                        let vis_slot: Vec<usize> = vis_idx
-                                            .iter()
-                                            .map(|&vi| {
-                                                full.iter()
-                                                    .position(|n| n == &columns[vi])
-                                                    .unwrap_or(0)
-                                            })
-                                            .collect();
-                                        let mut v = vis_slot.clone();
-                                        let moved = v.remove(src);
-                                        let t = t
-                                            .saturating_sub(usize::from(t > src))
-                                            .min(v.len());
-                                        v.insert(t, moved);
-                                        let mut new_full = full.clone();
-                                        for (slot, &vi) in v.iter().enumerate() {
-                                            new_full[vis_slot[slot]] = columns[vi].clone();
-                                        }
-                                        tab.col_order = new_full;
-                                        // 宽度按位置存,不跟列走:整排按适配宽重画一帧
-                                        tab.base_widths.clear();
-                                        tab.col_refit = true;
-                                        // 可视坐标全部失效:清选区/编辑(行多选按行,保留)
-                                        *selected = None;
-                                        *sel_range = None;
-                                        *drag_sel = None;
-                                        *editing = None;
+                    } else if !p_down {
+                        // 松开落位
+                        tab.col_drag = None;
+                        if let Some(pt) = pointer {
+                            if let Some(t) = nearest_boundary(pt) {
+                                if let Some(new_vis) = crate::grid::reorder_vis(&vis_idx, src, t) {
+                                    // 可视列在各自槽位间移动,隐藏列的槽位不动
+                                    let mut new_full = order_full.clone();
+                                    for (slot, &i) in vis_slots.iter().zip(&new_vis) {
+                                        new_full[*slot] = i;
                                     }
+                                    tab.col_order =
+                                        new_full.iter().map(|&i| columns[i].clone()).collect();
+                                    // 宽度按位置存,不跟列走:下一帧把各列原宽度搬到新位置;
+                                    // 初始宽度缓存同序搬运
+                                    tab.col_carry = crate::grid::carry_by_vis(
+                                        ws_now.get(col_first..).unwrap_or(&[]),
+                                        &vis_idx,
+                                        &new_vis,
+                                    );
+                                    if tab.base_widths.len() == vis_idx.len() {
+                                        tab.base_widths = crate::grid::carry_by_vis(
+                                            &tab.base_widths,
+                                            &vis_idx,
+                                            &new_vis,
+                                        )
+                                        .unwrap_or_default();
+                                    }
+                                    // 可视坐标全部失效:清选区/编辑(行多选按行,保留)
+                                    *selected = None;
+                                    *sel_range = None;
+                                    *drag_sel = None;
+                                    *editing = None;
                                 }
                             }
                         }
+                    }
                     }
                 }
             }
@@ -3359,9 +3333,9 @@ fn draw_data_table(
     reveal: Option<(usize, usize, bool)>,
     after_edit: &std::cell::Cell<Option<GridMotion>>,
     refocus: &std::cell::Cell<bool>,
-    // 列操作:Some 按下标给出本帧的精确列宽(双击列缘自适应/拖动重排后的 refit),
-    // 列缘按压制松误选,由外层转成自适应请求
-    col_exact: &Option<Vec<f32>>,
+    // 列操作:Some 给出本帧该列的精确宽度(双击列缘自适应/拖动重排后列宽搬运),
+    // None 照旧取状态里的宽度;列缘按压制松误选,由外层转成自适应请求
+    col_exact: &[Option<f32>],
     edge_hit: &mut Option<usize>,
 ) {
     *geom = FrozenGeom::default();
@@ -3427,9 +3401,9 @@ fn draw_data_table(
         // (一律压到 40 时 id 列的类型注记只剩一个省略号,长列名只剩两个字母)
         let min_w =
             (theme::text_width(&columns[vi]) + theme::HEAD_PAD_X * 2.0 + 20.0).clamp(56.0, 120.0);
-        // 精确宽度帧(自适应/重排 refit):Column::exact 会把宽度写进 egui_extras 的
+        // 精确宽度帧(自适应/重排后列宽搬运):Column::exact 会把宽度写进 egui_extras 的
         // 状态持久化,下一帧起恢复 initial+可拖
-        tb = tb.column(if let Some(&w) = col_exact.as_ref().and_then(|v| v.get(vw)) {
+        tb = tb.column(if let Some(w) = col_exact.get(vw).copied().flatten() {
             Column::exact(w)
         } else {
             Column::initial(col_widths[vw])
@@ -3911,31 +3885,23 @@ fn draw_data_table(
                     {
                         let header_top = geom.header_top.unwrap_or(f32::INFINITY);
                         let y_ok = pt.y >= header_top && pt.y <= brect.bottom() - 16.0;
-                        let mut x = table_left + rowno_w;
+                        // 边界 b 是列 b-1 的右缘:拖它改的是左列宽,双击自适应的也必须是左列
+                        let mut x = table_left + rowno_w + w_of(0);
                         let on_edge = (y_ok && vis_idx.len() > 0).then(|| {
                             let mut hit_b = None;
-                            for b in 0..vis_idx.len() {
+                            for b in 1..=vis_idx.len() {
                                 if (pt.x - x).abs() <= 4.0 {
                                     hit_b = Some(b);
                                 }
-                                x += ws.get(1 + b).copied().unwrap_or(0.0);
+                                x += w_of(b);
                             }
                             hit_b
                         });
+                        // 列缘是列的把手(拖宽 / 双击自适应):不点选、不给拖选设锚——
+                        // 按住列缘移动是 egui_extras 的拖宽,双击是自适应,都不该落到旁边的格上
                         if let Some(Some(b)) = on_edge {
                             *edge_hit = Some(b);
-                            if let Some((ri, ci)) = hit(pt) {
-                                let anchor = if shift {
-                                    (*selected).unwrap_or((ri, ci))
-                                } else {
-                                    (ri, ci)
-                                };
-                                *sel_range = Some(norm_range((anchor, (ri, ci))));
-                                *selected = Some((ri, ci));
-                                if !shift {
-                                    multi_sel.clear();
-                                }
-                            }
+                            *sel_range = None;
                         } else if let Some(ri) = rowno_hit(pt) {
                         *drag_row = Some(ri);
                         *sel_range = None;

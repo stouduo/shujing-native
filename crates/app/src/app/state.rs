@@ -122,9 +122,9 @@ pub struct TableTab {
     pub col_order: Vec<String>,
     /// 列头拖拽进行中:(源可视列下标, 指针相对列左缘的偏移)。画插入指示线,松开落位
     pub col_drag: Option<(usize, f32)>,
-    /// 重排落位后整排按适配宽重画一帧(egui_extras 的宽度按位置存,拖宽值不跟列走;
-    /// 一次性全部按内容重排最可预期),用后即清
-    pub col_refit: bool,
+    /// 重排落位后按新显示序搬运的列宽(egui_extras 的宽度按位置存,拖宽值不跟列走):
+    /// 下一帧整排按这组宽度画一帧,宽度跟着列走;用后即清
+    pub col_carry: Option<Vec<f32>>,
     /// 列缘双击自适应:下一帧该列按适配宽画一帧(Column::exact 会把宽度写进
     /// egui_extras 的状态持久化),用后即清
     pub col_autofit: Option<usize>,
@@ -172,7 +172,7 @@ impl TableTab {
             base_widths: vec![],
             col_order: vec![],
             col_drag: None,
-            col_refit: false,
+            col_carry: None,
             col_autofit: None,
             edge_click: None,
             filter_bar_open: false,

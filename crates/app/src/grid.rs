@@ -205,6 +205,78 @@ impl GridSel {
     }
 }
 
+/// 结果网格的列状态:列头拖动重排的顺序 + 双击列缘自适应 / 重排后列宽搬运的当帧请求。
+/// 顺序按列名存;结果集换了列(重新运行出不同列)即作废回自然序
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GridCols {
+    pub order: Vec<String>,
+    /// 自适应的可视列(下一帧该列按内容宽画一帧,Column::exact 会把宽度写进
+    /// egui_extras 的状态持久化),用后即清
+    pub autofit: Option<usize>,
+    /// 重排落位后按新显示序搬运的列宽(egui_extras 的宽度按位置存,不跟列走):
+    /// 下一帧整排按这组宽度画一帧,宽度跟着列走;用后即清
+    pub carry: Option<Vec<f32>>,
+    /// 列头拖拽进行中:(源可视列, 指针相对列左缘的偏移)
+    pub drag: Option<(usize, f32)>,
+    /// 列缘双击判定:上一次按在哪个列缘(边界下标, 时刻, 指针 x)
+    pub edge_click: Option<(usize, f64, f32)>,
+    /// 这一轮按压起点在列缘上(拖宽中):指针归列把手,不拖选单元格
+    pub edge_down: bool,
+}
+
+/// 显示序列重排:把可视列 `src` 搬到边界 `t`(边界 b 的左侧是可视列 b)。
+/// 原地不动(落在自己两侧的边界)返回 None
+pub(crate) fn reorder_vis(vis: &[usize], src: usize, t: usize) -> Option<Vec<usize>> {
+    if src >= vis.len() || t > vis.len() || t == src || t == src + 1 {
+        return None;
+    }
+    let mut v = vis.to_vec();
+    let moved = v.remove(src);
+    v.insert(t - usize::from(t > src), moved);
+    Some(v)
+}
+
+/// 按新显示序搬运"按位置存"的值(egui_extras 的列宽、初始宽度缓存):`vals[k]` 是
+/// 重排前显示位置 k 的值,返回各可视列在各自新位置上应有的值;有对不上的返回 None
+pub(crate) fn carry_by_vis(vals: &[f32], vis: &[usize], new_vis: &[usize]) -> Option<Vec<f32>> {
+    new_vis
+        .iter()
+        .map(|&c| vis.iter().position(|&x| x == c).and_then(|k| vals.get(k)).copied())
+        .collect()
+}
+
+fn cols_id(id_salt: &str) -> egui::Id {
+    egui::Id::new(("grid-cols", id_salt))
+}
+
+fn load_cols(ctx: &egui::Context, id_salt: &str) -> GridCols {
+    ctx.memory(|m| m.data.get_temp::<GridCols>(cols_id(id_salt)))
+        .unwrap_or_default()
+}
+
+fn store_cols(ctx: &egui::Context, id_salt: &str, cols: GridCols) {
+    ctx.memory_mut(|m| m.data.insert_temp(cols_id(id_salt), cols));
+}
+
+/// 列的内容宽:数据采样、表头标题、类型小字三者取大,夹在最小可读宽与 720 之间。
+/// 是未摊派的宽度——拿摊派后的宽度(按可用空间撑开、顶到上限)当"自适应"会让表撑爆
+pub(crate) fn fit_width(
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+    column_types: &[String],
+    nat: usize,
+) -> f32 {
+    let header = theme::text_width(&columns[nat]) + theme::HEAD_PAD_X * 2.0 + 20.0;
+    theme::base_width_at(rows, columns, column_types, nat)
+        .max(header)
+        .clamp(40.0, 720.0)
+}
+
+#[cfg(test)]
+pub(crate) fn debug_cols(ctx: &egui::Context, id_salt: &str) -> GridCols {
+    load_cols(ctx, id_salt)
+}
+
 fn sel_id(id_salt: &str) -> egui::Id {
     egui::Id::new(("grid-sel", id_salt))
 }
@@ -344,6 +416,12 @@ pub(crate) fn debug_geom(ctx: &egui::Context, id_salt: &str) -> Option<(Vec<f32>
     ctx.data(|d| d.get_temp::<(Vec<f32>, f32, f32)>(egui::Id::new(("grid-geom", id_salt))))
 }
 
+/// 诊断:"查看完整内容"弹窗是否开着(kittest 行为测试读取)
+#[cfg(test)]
+pub(crate) fn debug_view_open(ctx: &egui::Context, id_salt: &str) -> bool {
+    ctx.memory(|m| m.data.get_temp::<ViewState>(view_id(id_salt)).is_some())
+}
+
 /// 诊断:结果网格当前的横向滚动偏移(kittest 行为测试读取)
 #[cfg(test)]
 pub(crate) fn debug_hscroll(ctx: &egui::Context, id_salt: &str) -> f32 {
@@ -387,26 +465,31 @@ pub(crate) fn paste_cells(
     (out, last)
 }
 
-/// 选区 → TSV。NULL 写成 "NULL";格内的制表符/换行压成空格(贴进 Excel 不串列)。
-/// `headers` = 首行带列名
-pub(crate) fn selection_tsv(
+/// 选区 → TSV,选区列坐标是显示序(vis 把它映射回自然列)。重排后显示序里的
+/// 连续区间在自然序里可能不连续,必须按 vis 逐列取
+pub(crate) fn selection_tsv_vis(
     columns: &[String],
     rows: &[Vec<Option<String>>],
+    vis: &[usize],
     ((r1, c1), (r2, c2)): ((usize, usize), (usize, usize)),
     headers: bool,
 ) -> String {
+    let cols: Vec<usize> = (c1..=c2).filter_map(|c| vis.get(c).copied()).collect();
     let mut lines = Vec::new();
     if headers {
-        let last = c2.min(columns.len().saturating_sub(1));
-        lines.push(columns[c1..=last].join("\t"));
+        lines.push(
+            cols.iter()
+                .map(|&i| columns[i].as_str())
+                .collect::<Vec<_>>()
+                .join("\t"),
+        );
     }
     for row in rows.iter().take(r2.saturating_add(1)).skip(r1) {
-        let cells: Vec<String> = row
+        let cells: Vec<String> = cols
             .iter()
-            .take(c2.saturating_add(1))
-            .skip(c1)
-            .map(|v| {
-                v.as_deref()
+            .map(|&i| {
+                row.get(i)
+                    .and_then(|v| v.as_deref())
                     .unwrap_or("NULL")
                     .replace('\t', " ")
                     .replace('\n', " ")
@@ -417,19 +500,23 @@ pub(crate) fn selection_tsv(
     lines.join("\n")
 }
 
+
 fn copy_selection(
     ctx: &egui::Context,
     columns: &[String],
     rows: &[Vec<Option<String>>],
+    vis: &[usize],
     sel: GridSel,
 ) {
     let norm = sel.norm();
     if sel.spanning() {
         // 矩形选区:复制 行×列 TSV
-        ctx.copy_text(selection_tsv(columns, rows, norm, false));
-    } else if let Some(v) = rows.get(norm.0 .0).and_then(|row| row.get(norm.0 .1)) {
-        // 单格:原样复制(NULL 写成 "NULL" 文本)
-        ctx.copy_text(v.clone().unwrap_or_else(|| "NULL".into()));
+        ctx.copy_text(selection_tsv_vis(columns, rows, vis, norm, false));
+    } else if let Some(nat) = vis.get(norm.0 .1) {
+        // 单格:原样复制(NULL 写成 "NULL" 文本);显示坐标 → 自然列
+        if let Some(v) = rows.get(norm.0 .0).and_then(|row| row.get(*nat)) {
+            ctx.copy_text(v.clone().unwrap_or_else(|| "NULL".into()));
+        }
     }
 }
 
@@ -456,9 +543,11 @@ fn cell_menu(
     ui: &mut egui::Ui,
     columns: &[String],
     rows: &[Vec<Option<String>>],
+    vis: &[usize],
     sel: Option<GridSel>,
     ri: usize,
-    ci: usize,
+    ci_nat: usize,
+    ci_vis: usize,
     shown: &Option<String>,
     editable: bool,
     out: &GridOut,
@@ -467,13 +556,13 @@ fn cell_menu(
     let mut act = |ui: &mut egui::Ui| {
         ui.close_menu();
     };
-    if sel.is_some_and(|s| s.spanning() && s.contains(ri, ci)) {
-        let norm = sel.map_or(((ri, ci), (ri, ci)), GridSel::norm);
+    if sel.is_some_and(|s| s.spanning() && s.contains(ri, ci_vis)) {
+        let norm = sel.map_or(((ri, ci_vis), (ri, ci_vis)), GridSel::norm);
         if ui
             .button(ui_kit::t!("Copy Selection", "复制选区"))
             .clicked()
         {
-            ctx.copy_text(selection_tsv(columns, rows, norm, false));
+            ctx.copy_text(selection_tsv_vis(columns, rows, vis, norm, false));
             act(ui);
         }
         if ui
@@ -483,7 +572,7 @@ fn cell_menu(
             ))
             .clicked()
         {
-            ctx.copy_text(selection_tsv(columns, rows, norm, true));
+            ctx.copy_text(selection_tsv_vis(columns, rows, vis, norm, true));
             act(ui);
         }
     } else if ui.button(ui_kit::t!("Copy Cell", "复制单元格")).clicked() {
@@ -495,8 +584,8 @@ fn cell_menu(
         .button(ui_kit::t!("Copy Row (TSV)", "复制整行 (TSV)"))
         .clicked()
     {
-        let last = columns.len().saturating_sub(1);
-        ctx.copy_text(selection_tsv(columns, rows, ((ri, 0), (ri, last)), false));
+        let last = vis.len().saturating_sub(1);
+        ctx.copy_text(selection_tsv_vis(columns, rows, vis, ((ri, 0), (ri, last)), false));
         act(ui);
     }
     if ui
@@ -504,7 +593,7 @@ fn cell_menu(
         .clicked()
     {
         out.view.set(Some((
-            columns.get(ci).cloned().unwrap_or_default(),
+            columns.get(ci_nat).cloned().unwrap_or_default(),
             shown.clone().unwrap_or_default(),
         )));
         act(ui);
@@ -512,8 +601,9 @@ fn cell_menu(
     if editable {
         ui.separator();
         if ui.button(ui_kit::t!("Edit Cell", "编辑此格")).clicked() {
+            // 编辑坐标是显示序(与渲染循环/键盘导航同一坐标系)
             out.start_edit
-                .set(Some((ri, ci, shown.clone().unwrap_or_default())));
+                .set(Some((ri, ci_vis, shown.clone().unwrap_or_default())));
             act(ui);
         }
     }
@@ -687,6 +777,37 @@ fn draw_grid(
     let frozen_n = (*frozen).min(columns.len());
     let shape = (rows.len(), columns.len());
     let mut sel = load_sel(ui.ctx(), id_salt, shape);
+    // 列顺序(列头拖动重排)→ 显示序 vis(元素是自然列下标)。col_order 只含现存列,
+    // 结果集换列(名字对不上)时整段作废回自然序;schema 新列排尾部
+    let mut cols_st = load_cols(ui.ctx(), id_salt);
+    let col_autofit_req = cols_st.autofit.take();
+    let col_carry = cols_st.carry.take();
+    let vis: Vec<usize> = if cols_st.order.is_empty() {
+        (0..columns.len()).collect()
+    } else {
+        let mut v: Vec<usize> = cols_st
+            .order
+            .iter()
+            .filter_map(|n| columns.iter().position(|c| c == n))
+            .collect();
+        for i in 0..columns.len() {
+            if !v.contains(&i) {
+                v.push(i);
+            }
+        }
+        v
+    };
+    // 精确宽度帧:重排后列宽跟着列走(整排)/ 双击列缘的自适应(只这一列,其余列照旧
+    // 保留状态里的宽度,手拖过的不会被顺手重置)。Column::exact 把宽度写进 egui_extras
+    // 的状态持久化,下一帧起恢复 initial+可拖
+    let col_exact: Vec<Option<f32>> = match col_carry {
+        Some(w) if w.len() == vis.len() => w.into_iter().map(Some).collect(),
+        _ => (0..vis.len())
+            .map(|k| {
+                (Some(k) == col_autofit_req).then(|| fit_width(rows, columns, column_types, vis[k]))
+            })
+            .collect(),
+    };
     // 网格的键盘焦点位:点选单元格后焦点归网格,方向键/Tab/Esc 由网格处理
     let grid_id = focus_id(id_salt);
     let grid_focused = ui.memory(|m| m.has_focus(grid_id));
@@ -746,14 +867,17 @@ fn draw_grid(
                 .drag_to_scroll(false)
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .column(Column::exact(theme::ROWNO_W));
-            // initial(而非 exact):exact 把 width_range 钉死在 w..=w,拖拽调宽无效
-            for (i, _c) in columns.iter().enumerate() {
-                tb = tb.column(
-                    Column::initial(col_widths[i])
+            // initial(而非 exact):exact 把 width_range 钉死在 w..=w,拖拽调宽无效。
+            // 精确宽度帧(双击列缘自适应 / 重排后列宽搬运)例外:exact 把宽度写进状态持久化
+            for (vw, &ci) in vis.iter().enumerate() {
+                tb = tb.column(if let Some(w) = col_exact.get(vw).copied().flatten() {
+                    Column::exact(w)
+                } else {
+                    Column::initial(col_widths[ci])
                         .resizable(true)
                         .clip(true)
-                        .at_least(40.0),
-                );
+                        .at_least(40.0)
+                });
             }
             tb = tb.column(Column::remainder().at_least(0.0));
             // 行是虚拟化的(滚出视口的不渲染),键盘移到的行靠表格自己的"滚到第 N 行"进视野:
@@ -772,17 +896,17 @@ fn draw_grid(
                     }
                     crate::theme::paint_rowno_head(ui.painter(), rect);
                 });
-                for (vw, c) in columns.iter().enumerate() {
+                for (vw, &ci) in vis.iter().enumerate() {
                     header.col(|ui| {
                         let rect = ui.max_rect();
                         theme::paint_grid_head(
                             ui.painter(),
                             rect,
-                            c,
-                            theme::type_at(column_types, vw),
+                            &columns[ci],
+                            theme::type_at(column_types, ci),
                         );
                         let resp = ui.allocate_rect(rect, Sense::click());
-                        grid_header_freeze_menu(&resp, vw, columns.len(), frozen, grid_id);
+                        grid_header_freeze_menu(&resp, vw, vis.len(), frozen, grid_id);
                     });
                 }
                 header.col(|ui| {
@@ -818,12 +942,13 @@ fn draw_grid(
                         theme::paint_grid_row_bg(ui.painter(), rect, ri, hovers(ui, rect), false);
                         theme::paint_grid_rowno(ui.painter(), rect, ri + 1);
                     });
-                    for (ci, col) in columns.iter().enumerate() {
+                    for (vw, &ci) in vis.iter().enumerate() {
+                        let col = &columns[ci];
                         // 冻结列已横向滚出视口:编辑框改由覆盖层持有,底层画普通格防双 TextEdit。
                         // 用函数开头采样的 prev 值:与覆盖层编辑框归属判定严格同源
-                        let frozen_scrolled = frozen_n > 0 && ci < frozen_n && prev_hscroll > 0.5;
+                        let frozen_scrolled = frozen_n > 0 && vw < frozen_n && prev_hscroll > 0.5;
                         let editing_here =
-                            edits.as_mut().is_some_and(|e| *e.editing == Some((ri, ci)))
+                            edits.as_mut().is_some_and(|e| *e.editing == Some((ri, vw)))
                                 && !frozen_scrolled;
                         row.col(|ui| {
                             let rect = ui.max_rect();
@@ -845,7 +970,7 @@ fn draw_grid(
                                 );
                                 if let Some(x) = end.take() {
                                     if x.commit {
-                                        out.editor_commit.set(Some((ri, ci, e.draft.clone())));
+                                        out.editor_commit.set(Some((ri, vw, e.draft.clone())));
                                     }
                                     if x.motion.is_some() {
                                         out.after_edit.set(x.motion);
@@ -872,9 +997,11 @@ fn draw_grid(
                                         ui,
                                         columns,
                                         rows,
+                                        &vis,
                                         sel,
                                         ri,
                                         ci,
+                                        vw,
                                         shown,
                                         edits.is_some(),
                                         &out,
@@ -991,13 +1118,73 @@ fn draw_grid(
     let hit_rowno = |pt: egui::Pos2| rowno_at(pt, &geom, inner.left());
     let hit_cell = |pt: egui::Pos2| cell_at(pt, &geom, &ws, frozen_n, offset_x, inner.left());
     let last_col = columns.len().saturating_sub(1);
+
+    // ---- 列几何:边界屏幕 x = 内容左缘(含横向偏移)+ 行号列 + 前序显示列宽。
+    // 边界 b 是列 b-1 的右缘(边界 0 = 行号列与首列之间)。列缘是列的把手:
+    // 拖它改左列宽(egui_extras 的把手属于左列)、双击让左列自适应、表头带里按住
+    // 拖动是重排——这些时候指针不归单元格:不点选、不拖选、不算"双击单元格"
+    let rowno_w = ws.first().copied().unwrap_or(theme::ROWNO_W);
+    let content_left = inner.left() - offset_x;
+    let header_top = geom.header_top.unwrap_or(inner.top());
+    let bottom = inner.bottom() - 16.0; // 避开横向滚动条
+    let mut xs = Vec::with_capacity(vis.len() + 1);
+    let mut x = content_left + rowno_w;
+    for k in 0..=vis.len() {
+        xs.push(x);
+        x += ws.get(1 + k).copied().unwrap_or(0.0);
+    }
+    let y_band = |pt: egui::Pos2| pt.y >= header_top && pt.y <= bottom;
+    // 指针按在哪条列缘上(边界下标 1..=列数)
+    let edge_at = |pt: egui::Pos2| -> Option<usize> {
+        if !y_band(pt) {
+            return None;
+        }
+        (1..=vis.len()).find(|&b| (pt.x - xs[b]).abs() <= 4.0)
+    };
+    let nearest_boundary = |pt: egui::Pos2| -> Option<usize> {
+        if !y_band(pt) || vis.is_empty() {
+            return None;
+        }
+        let mut best = 0usize;
+        let mut bd = f32::INFINITY;
+        for (b, &bx) in xs.iter().enumerate() {
+            let d = (pt.x - bx).abs();
+            if d < bd {
+                bd = d;
+                best = b;
+            }
+        }
+        Some(best)
+    };
+    // 这一帧按在列缘上:列缘双击(同缘 0.3s 内、位置 6px 内 → 左列自适应)
+    let mut edge_now = false;
+    if p_pressed && on_layer {
+        if let Some((b, pt)) = pointer.and_then(|pt| edge_at(pt).map(|b| (b, pt))) {
+            edge_now = true;
+            cols_st.edge_down = true;
+            let now = ui.input(|i| i.time);
+            let dbl = cols_st.edge_click.take().is_some_and(|(b2, t2, x2)| {
+                b2 == b && now - t2 < 0.3 && (pt.x - x2).abs() < 6.0
+            });
+            if dbl {
+                cols_st.autofit = Some(b - 1);
+            } else {
+                cols_st.edge_click = Some((b, now, pt.x));
+            }
+        }
+    }
+    if !p_down {
+        cols_st.edge_down = false;
+    }
+    let on_handle = edge_now || (p_down && cols_st.edge_down);
+
     // 点选/导航了单元格:键盘焦点归网格
     let mut focus_req = false;
     // 双击(同一格、间隔内):只读 = 查看完整内容,可编辑 = 进入编辑。
     // 不用 egui 自带的双击判定——它只看间隔不看位置,快速连点两个格也会弹出弹窗
     let dbl_key = egui::Id::new(("grid-dbl", id_salt));
     let mut dbl_cell: Option<(usize, usize)> = None;
-    if p_pressed && on_layer {
+    if p_pressed && on_layer && !on_handle {
         if let Some(c) = pointer.and_then(hit_cell) {
             if cell_double_clicked(ui, dbl_key, c) {
                 dbl_cell = Some(c);
@@ -1006,7 +1193,7 @@ fn draw_grid(
     }
     if on_layer {
         if p_pressed {
-            if let Some(pt) = pointer {
+            if let (Some(pt), false) = (pointer, on_handle) {
                 if let Some(ri) = hit_rowno(pt) {
                     // 点行号 = 选中整行
                     if !columns.is_empty() {
@@ -1023,8 +1210,8 @@ fn draw_grid(
                     focus_req = true;
                 }
             }
-        } else if p_down {
-            // 拖选:起点在数据格/行号上才扩展选区(起点在表尾空白的不算)
+        } else if p_down && !on_handle {
+            // 拖选:起点在数据格/行号上才扩展选区(起点在表尾空白/列缘上的不算)
             if let (Some(o), Some(pt)) = (origin, pointer) {
                 let (a_rowno, a_cell) = (hit_rowno(o), hit_cell(o));
                 let (b_rowno, b_cell) = (hit_rowno(pt), hit_cell(pt));
@@ -1055,6 +1242,52 @@ fn draw_grid(
         }
     }
 
+    // ---- 列头拖动重排:表头带(非列缘)按压 → 开始拖拽(记录源列与抓取偏移)
+    if p_pressed && on_layer && !edge_now {
+        if let Some(pt) = pointer {
+            if pt.y >= header_top && pt.y < header_top + theme::data_header_h() {
+                if let Some(src) = (0..vis.len()).find(|&k| pt.x >= xs[k] && pt.x < xs[k + 1]) {
+                    cols_st.drag = Some((src, pt.x - xs[src]));
+                }
+            }
+        }
+    }
+    if let Some((src, _)) = cols_st.drag {
+        if p_down && on_layer {
+            if let Some(pt) = pointer {
+                if let Some(t) = nearest_boundary(pt) {
+                    // 插入指示线画在表头层之上
+                    let lx = xs[t.min(xs.len().saturating_sub(1))];
+                    ui.painter().line_segment(
+                        [egui::pos2(lx, header_top), egui::pos2(lx, bottom)],
+                        egui::Stroke::new(2.0, p.accent),
+                    );
+                }
+            } else {
+                cols_st.drag = None;
+            }
+        } else if !p_down {
+            // 松开落位
+            cols_st.drag = None;
+            if let Some(pt) = pointer {
+                if let Some(t) = nearest_boundary(pt) {
+                    if let Some(v) = reorder_vis(&vis, src, t) {
+                        // 显示序列里搬一格,列名固化回 order
+                        cols_st.order = v.iter().map(|&ci| columns[ci].clone()).collect();
+                        // 宽度跟着列走:下一帧按新显示序把各列原宽度搬到新位置
+                        cols_st.carry = carry_by_vis(ws.get(1..).unwrap_or(&[]), &vis, &v);
+                        // 显示坐标全部失效:清选区/编辑/双击判定
+                        sel = None;
+                        if let Some(e) = edits.as_mut() {
+                            *e.editing = None;
+                        }
+                        reset_double_click(ui.ctx(), dbl_key);
+                    }
+                }
+            }
+        }
+    }
+
     // 右键菜单刚关掉:焦点交还网格
     let menu_open_now = menu_open.get();
     if menu_open_now != menu_open_last {
@@ -1064,22 +1297,29 @@ fn draw_grid(
         focus_req = true;
     }
 
+    // 显示列 → 自然列(选区/编辑/提交在网格内部一律用显示坐标,取值才换回自然列)
+    let nat_of = |c: usize| vis.get(c).copied().unwrap_or(c);
+    // 现值(优先待保存改动):取原始值会让回车静默撤销改动
+    let current = |r: usize, c: usize| -> String {
+        let (row, col) = match (rows.get(r), columns.get(c)) {
+            (Some(row), Some(col)) => (row, col),
+            _ => return String::new(),
+        };
+        let orig = row.get(c);
+        edits
+            .as_ref()
+            .and_then(|e| orig.map(|v| shown_value(e.changes, v, r, col)))
+            .or(orig)
+            .cloned()
+            .flatten()
+            .unwrap_or_default()
+    };
     if let Some((ri, ci)) = dbl_cell {
-        if let (Some(row), Some(col)) = (rows.get(ri), columns.get(ci)) {
-            let orig = row.get(ci);
-            // 草稿/正文取现值(优先待保存改动):取原始值会让 Enter 静默撤销改动
-            let text = edits
-                .as_ref()
-                .and_then(|e| orig.map(|v| shown_value(e.changes, v, ri, col)))
-                .or(orig)
-                .cloned()
-                .flatten()
-                .unwrap_or_default();
-            if edits.is_some() {
-                out.start_edit.set(Some((ri, ci, text)));
-            } else {
-                out.view.set(Some((col.clone(), text)));
-            }
+        if edits.is_some() {
+            out.start_edit.set(Some((ri, ci, current(ri, nat_of(ci)))));
+        } else {
+            out.view
+                .set(Some((columns.get(nat_of(ci)).cloned().unwrap_or_default(), current(ri, nat_of(ci)))));
         }
     }
 
@@ -1110,7 +1350,7 @@ fn draw_grid(
         // 单格原样 / 矩形选区 TSV
         if cmd(egui::Key::C) {
             if let Some(s) = sel {
-                copy_selection(ui.ctx(), columns, rows, s);
+                copy_selection(ui.ctx(), columns, rows, &vis, s);
             }
         }
         if !rows.is_empty() && !columns.is_empty() {
@@ -1193,17 +1433,9 @@ fn draw_grid(
     let mut start_edit = out.start_edit.take();
     if start_edit.is_none() {
         if let Some((r, c)) = edit_req {
-            if let (Some(row), Some(col)) = (rows.get(r), columns.get(c)) {
-                let orig = row.get(c);
-                // 草稿取现值(优先待保存改动):取原始值会让回车静默撤销改动
-                let text = edits
-                    .as_ref()
-                    .and_then(|e| orig.map(|v| shown_value(e.changes, v, r, col)))
-                    .or(orig)
-                    .cloned()
-                    .flatten()
-                    .unwrap_or_default();
-                start_edit = Some((r, c, text));
+            // 草稿取现值(优先待保存改动)
+            if rows.get(r).is_some_and(|row| row.get(nat_of(c)).is_some()) {
+                start_edit = Some((r, c, current(r, nat_of(c))));
             }
         } else if let Some((ch, (r, c))) = typed {
             start_edit = Some((r, c, ch.to_string()));
@@ -1289,6 +1521,7 @@ fn draw_grid(
         ui,
         id_salt,
         columns,
+        &vis,
         column_types,
         &numeric,
         rows,
@@ -1323,20 +1556,27 @@ fn draw_grid(
         });
     }
     if let Some((r, c)) = open_view {
-        if let Some(v) = rows.get(r).and_then(|row| row.get(c)) {
+        let nat = nat_of(c);
+        if let (Some(row), Some(col)) = (rows.get(r), columns.get(nat)) {
             ui.memory_mut(|m| {
                 m.data.insert_temp(
                     view_id(id_salt),
                     ViewState {
-                        col: columns[c].clone(),
-                        text: v.clone().unwrap_or_default(),
+                        col: col.clone(),
+                        text: row.get(nat).cloned().flatten().unwrap_or_default(),
                     },
                 )
             });
         }
     }
     draw_view_modal(ui.ctx(), id_salt);
+    store_cols(ui.ctx(), id_salt, cols_st);
     ui.spacing_mut().item_spacing = old_spacing;
+    // 出了这个函数,列一律是自然列下标(调用方按列名记改动/回写)
+    let commits = commits
+        .into_iter()
+        .map(|(r, c, v)| (r, nat_of(c), v))
+        .collect();
     (start_edit, commits)
 }
 
@@ -1512,10 +1752,12 @@ fn grid_header_freeze_menu(
 /// 查询结果网格的冻结覆盖层:横向滚动时把行号+前 N 列钉在视口左侧重绘。
 /// 表头、数据格与底层同一套绘制;交互(选中/右键菜单/双击/编辑框)也一致
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn draw_frozen_grid_overlay(
     ui: &mut egui::Ui,
     id_salt: &str,
     columns: &[String],
+    vis: &[usize],
     column_types: &[String],
     numeric: &[bool],
     rows: &[Vec<Option<String>>],
@@ -1565,13 +1807,13 @@ fn draw_frozen_grid_overlay(
         ),
     );
     let mut hx = left + theme::ROWNO_W;
-    for (vw, c) in columns.iter().enumerate().take(frozen_n) {
+    for (vw, &ci) in vis.iter().enumerate().take(frozen_n) {
         let w = frozen_ws[vw];
         let rect =
             egui::Rect::from_min_size(egui::pos2(hx, top), egui::vec2(w, theme::data_header_h()));
-        theme::paint_grid_head(&painter, rect, c, theme::type_at(column_types, vw));
+        theme::paint_grid_head(&painter, rect, &columns[ci], theme::type_at(column_types, ci));
         let resp = ui.interact(rect, egui::Id::new(("qfz-h", id_salt, vw)), Sense::click());
-        grid_header_freeze_menu(&resp, vw, columns.len(), frozen, focus);
+        grid_header_freeze_menu(&resp, vw, vis.len(), frozen, focus);
         hx += w;
     }
 
@@ -1605,8 +1847,9 @@ fn draw_frozen_grid_overlay(
             ri + 1,
         );
         let mut x = left + theme::ROWNO_W;
-        for (ci, col) in columns.iter().enumerate().take(frozen_n) {
-            let w = frozen_ws[ci];
+        for (vw, &ci) in vis.iter().enumerate().take(frozen_n) {
+            let col = &columns[ci];
+            let w = frozen_ws[vw];
             let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, theme::row_h()));
             let v: &Option<String> = rowdata.get(ci).unwrap_or(&NONE_CELL);
             let cp = painter.with_clip_rect(rect);
@@ -1616,7 +1859,7 @@ fn draw_frozen_grid_overlay(
             theme::paint_grid_row_bg(&cp, rect, ri, hovered, changed);
             // 编辑框归属:横向滚动时冻结列的编辑框由覆盖层持有(与底层互斥)
             let editing_here =
-                edits.as_mut().is_some_and(|e| *e.editing == Some((ri, ci))) && prev_hscroll > 0.5;
+                edits.as_mut().is_some_and(|e| *e.editing == Some((ri, vw))) && prev_hscroll > 0.5;
             if editing_here {
                 editing_rendered.set(true);
                 let e = edits.as_mut().unwrap();
@@ -1624,7 +1867,7 @@ fn draw_frozen_grid_overlay(
                 cell_editor(ui, rect, e.draft, sel.is_some_and(|s| s.spanning()), &end);
                 if let Some(x) = end.take() {
                     if x.commit {
-                        out.editor_commit.set(Some((ri, ci, e.draft.clone())));
+                        out.editor_commit.set(Some((ri, vw, e.draft.clone())));
                     }
                     if x.motion.is_some() {
                         out.after_edit.set(x.motion);
@@ -1638,7 +1881,7 @@ fn draw_frozen_grid_overlay(
                     .map_or(v, |e| shown_value(e.changes, v, ri, col));
                 let resp = ui.interact(
                     rect,
-                    egui::Id::new(("qfz-c", id_salt, ri, ci)),
+                    egui::Id::new(("qfz-c", id_salt, ri, vw)),
                     cell_sense(),
                 );
                 let _ = resp.clone().context_menu(|ui| {
@@ -1646,9 +1889,11 @@ fn draw_frozen_grid_overlay(
                         ui,
                         columns,
                         rows,
+                        vis,
                         sel,
                         ri,
                         ci,
+                        vw,
                         shown,
                         edits.is_some(),
                         out,
@@ -1966,26 +2211,61 @@ mod tests {
             &[Some("2"), None, Some("z")],
             &[Some("3"), Some("c"), None],
         ]);
+        let nat: Vec<usize> = (0..3).collect();
+        let tsv = |sel, headers| selection_tsv_vis(&cols, &data, &nat, sel, headers);
+        assert_eq!(tsv(((0, 0), (1, 2)), false), "1\ta b\tx y\n2\tNULL\tz");
         assert_eq!(
-            selection_tsv(&cols, &data, ((0, 0), (1, 2)), false),
-            "1\ta b\tx y\n2\tNULL\tz"
-        );
-        assert_eq!(
-            selection_tsv(&cols, &data, ((0, 0), (1, 2)), true),
+            tsv(((0, 0), (1, 2)), true),
             "id\tname\tnote\n1\ta b\tx y\n2\tNULL\tz"
         );
         // 只要第 2 列(从 0 数)
-        assert_eq!(
-            selection_tsv(&cols, &data, ((0, 1), (2, 1)), true),
-            "name\na b\nNULL\nc"
-        );
-        assert_eq!(selection_tsv(&cols, &data, ((2, 2), (2, 2)), false), "NULL");
+        assert_eq!(tsv(((0, 1), (2, 1)), true), "name\na b\nNULL\nc");
+        assert_eq!(tsv(((2, 2), (2, 2)), false), "NULL");
         // 右下角超出结果集:按实际有的行列输出
-        assert_eq!(selection_tsv(&cols, &data, ((2, 2), (9, 9)), false), "NULL");
+        assert_eq!(tsv(((2, 2), (9, 9)), false), "NULL");
+        assert_eq!(tsv(((0, 2), (9, 9)), true), "note\nx y\nz\nNULL");
+
+        // 重排后(显示序 = 自然列 [0, 2, 1]):显示坐标的连续区间按 vis 取,
+        // 列名与数据都跟着新位置
+        let vis: Vec<usize> = vec![0, 2, 1];
         assert_eq!(
-            selection_tsv(&cols, &data, ((0, 2), (9, 9)), true),
-            "note\nx y\nz\nNULL"
+            selection_tsv_vis(&cols, &data, &vis, ((0, 1), (1, 2)), true),
+            "note\tname\nx y\ta b\nz\tNULL"
         );
+    }
+
+    /// 显示序列重排:源列搬到目标边界;落在自己两侧的边界 = 原地不动
+    #[test]
+    fn reorder_vis_moves_column_to_boundary() {
+        let vis: Vec<usize> = (0..5).collect();
+        // 位置 1 拖到边界 3 之后 → 落在位置 2
+        assert_eq!(reorder_vis(&vis, 1, 3), Some(vec![0, 2, 1, 3, 4]));
+        // 往前拖:位置 4 拖到边界 1 → 落在位置 1
+        assert_eq!(reorder_vis(&vis, 4, 1), Some(vec![0, 4, 1, 2, 3]));
+        // 拖到首/尾
+        assert_eq!(reorder_vis(&vis, 2, 0), Some(vec![2, 0, 1, 3, 4]));
+        assert_eq!(reorder_vis(&vis, 2, 5), Some(vec![0, 1, 3, 4, 2]));
+        // 原地
+        assert_eq!(reorder_vis(&vis, 2, 2), None);
+        assert_eq!(reorder_vis(&vis, 2, 3), None);
+        // 越界
+        assert_eq!(reorder_vis(&vis, 5, 0), None);
+        assert_eq!(reorder_vis(&vis, 0, 6), None);
+    }
+
+    /// 列宽跟着列走:按位置存的宽度按新显示序搬到各列的新位置
+    #[test]
+    fn carry_by_vis_follows_columns() {
+        let vis: Vec<usize> = vec![0, 1, 2];
+        let ws = [100.0, 200.0, 300.0];
+        // 列 1 搬到末尾:显示序 [0, 2, 1]
+        let new_vis = reorder_vis(&vis, 1, 3).unwrap();
+        assert_eq!(carry_by_vis(&ws, &vis, &new_vis), Some(vec![100.0, 300.0, 200.0]));
+        // 列 0 搬到末尾:显示序 [1, 2, 0]
+        let new_vis = reorder_vis(&new_vis, 0, 3).unwrap();
+        assert_eq!(carry_by_vis(&ws, &vis, &new_vis), Some(vec![300.0, 200.0, 100.0]));
+        // 有列对不上(宽度数不符)= 不搬运
+        assert_eq!(carry_by_vis(&ws[..2], &vis, &new_vis), None);
     }
 
     /// 单元格显示值:待保存改动优先于原始值——包括"改成 NULL"(此前改成 NULL 后

@@ -6582,27 +6582,37 @@ fn col_order(h: &GridHarness<'_>) -> Vec<String> {
     t.col_order.clone()
 }
 
-/// 双击列缘:该列按适配宽重画(先手动拖宽制造差异,再双击收回)
+/// 双击列缘:边界左侧那列(拖动改宽的也是它)按内容宽重画——先手动拖宽制造差异,
+/// 再双击收回;别的列手拖的宽度不受影响。
+/// 此前这条测试是空转通过的:拖宽的是左列、自适应的是右列,断言的那列前后根本没变
 #[test]
 fn data_grid_double_click_edge_fits_column_width() {
     let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut h = keyboard_grid_harness(8);
     h.run_steps(4);
-    // 拖 id|role 边界(边界 1)向右 60:role 列被手动拖宽
-    let before: Vec<f32> = col_widths(&h);
-    let x0 = edge_x(&mut h, 1);
     let y = 300.0; // 表体中部(列缘手柄纵贯全表)
+    // 拖 id|role 边界(边界 1)向右 60:边界左侧的 id 列被手动拖宽
+    let before = data_geom(&h).0;
+    let x0 = edge_x(&h, 1);
     drag_at(&mut h, egui::pos2(x0, y), egui::pos2(x0 + 60.0, y));
-    let after_drag: Vec<f32> = col_widths(&h);
+    let after_drag = data_geom(&h).0;
+    assert_eq!(after_drag.len(), before.len(), "拖宽不改变列数");
     assert!(
-        after_drag.len() == before.len(),
-        "拖宽不改变列数: {:?} vs {:?}",
-        after_drag,
-        before
+        near(after_drag[1], before[1] + 60.0),
+        "id 列应被拖宽 60: {before:?} → {after_drag:?}"
     );
-    // 双击同一列缘:role 列收回到适配宽
+    // 拖 role|role_name 边界(边界 2)向右 30:role 列拖宽
+    let x2 = edge_x(&h, 2);
+    drag_at(&mut h, egui::pos2(x2, y), egui::pos2(x2 + 30.0, y));
+    let after_drag2 = data_geom(&h).0;
+    assert!(
+        near(after_drag2[2], after_drag[2] + 30.0),
+        "role 列应被拖宽 30: {after_drag:?} → {after_drag2:?}"
+    );
+
+    // 双击 id|role 边界:id 列收回到内容宽
     h.run_steps(40); // 隔开与拖动的双击间隔
-    let x1 = edge_x(&mut h, 1);
+    let x1 = edge_x(&h, 1);
     click_grid(&mut h, egui::pos2(x1, y));
     click_grid(&mut h, egui::pos2(x1, y));
     h.run_steps(6);
@@ -6611,27 +6621,42 @@ fn data_grid_double_click_edge_fits_column_width() {
         let t = app.tabs[2].table_data().unwrap();
         (t.rows.clone(), t.columns.clone())
     };
-    let fit = table_view::fit_width(&rows, &columns, 1);
-    let (order, role_w) = {
-        let app = h.state().borrow();
-        let t = app.tabs[2].table_data().unwrap();
-        let order: Vec<String> = if t.col_order.is_empty() {
-            t.columns.clone()
-        } else {
-            t.col_order.clone()
-        };
-        let tab_id = app.tabs[2].id.clone();
-        let ws_now = table_view::debug_data_geom(&h.ctx, &tab_id)
-            .expect("已渲染")
-            .0;
-        let role_pos = order.iter().position(|c| c == "role").expect("role 列在");
-        (order, ws_now[1 + role_pos])
-    };
+    let fit = table_view::fit_width(&rows, &columns, 0);
+    let ws = data_geom(&h).0;
     assert!(
-        (role_w - fit).abs() < 1.0,
-        "双击后 role 列宽应回到适配宽 {fit}:实际 {role_w}(拖宽后 {:?})",
+        near(ws[1], fit),
+        "双击后 id 列宽应回到内容宽 {fit}:实际 {}(拖宽后 {:?})",
+        ws[1],
         after_drag
     );
+    assert!(
+        near(ws[2], after_drag2[2]),
+        "自适应只动 id 列,role 列手拖的宽度保留: {after_drag2:?} → {ws:?}"
+    );
+}
+
+/// 列缘是列的把手:在列缘上拖宽不该拉出矩形选区;双击列缘只做自适应,不进编辑
+#[test]
+fn data_grid_edge_is_a_column_handle_only() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = keyboard_grid_harness(8);
+    h.run_steps(4);
+    let y = 300.0; // 表体中部(列缘手柄纵贯全表)
+    let before = data_geom(&h).0;
+    let x0 = edge_x(&h, 1);
+    drag_at(&mut h, egui::pos2(x0, y), egui::pos2(x0 + 60.0, y));
+    let after = data_geom(&h).0;
+    assert!(
+        near(after[1], before[1] + 60.0),
+        "id 列宽应已改变: {before:?} → {after:?}"
+    );
+    assert_eq!(selection(&h).1, None, "拖宽列缘是列操作,不该拉出矩形选区");
+    h.run_steps(40); // 隔开与拖动的双击间隔
+    let x1 = edge_x(&h, 1);
+    click_grid(&mut h, egui::pos2(x1, y));
+    click_grid(&mut h, egui::pos2(x1, y));
+    h.run_steps(3);
+    assert_eq!(snap(&h).editing, None, "双击列缘只做自适应,不该进入编辑");
 }
 
 /// 列头拖动重排:role 列拖到最后,列序持久(col_order)、复制跟随新位置;
@@ -6652,12 +6677,29 @@ fn data_grid_drag_header_reorders_columns() {
 
     // 从 role 列头(可视位置 1)拖到边界 3 之后:role 落在可视位置 2
     let hy = header_y(&mut h);
+    let ws_before = data_geom(&h).0;
     let src = edge_x(&mut h, 1) + 40.0; // role 列头中部
     let dst = edge_x(&mut h, 3) + 40.0;
     drag_at(&mut h, egui::pos2(src, hy), egui::pos2(dst, hy));
 
     let order = col_order(&h);
     assert!(!order.is_empty(), "拖动后应固化列顺序");
+    // 列宽跟着列走:显示序 [id, role_name, role, …],不该整排跳回内容宽
+    let ws_after = data_geom(&h).0;
+    let want = [
+        ws_before[0],
+        ws_before[1],
+        ws_before[3],
+        ws_before[2],
+        ws_before[4],
+        ws_before[5],
+    ];
+    for (k, w) in want.into_iter().enumerate() {
+        assert!(
+            near(ws_after[k], w),
+            "位置 {k} 的列宽应跟着列走: {ws_before:?} → {ws_after:?}(期望 {want:?})"
+        );
+    }
     assert_eq!(&order[0], "id", "其余列保持相对顺序: {order:?}");
     assert_eq!(&order[1], "role_name", "role 越过的列依次前移: {order:?}");
     assert_eq!(&order[2], "role", "role 落在可视位置 2: {order:?}");
@@ -6680,3 +6722,290 @@ fn data_grid_drag_header_reorders_columns() {
     assert_eq!(col_order(&h), before, "原地点击列头不重排");
 }
 
+
+// ---------------------------------------------------------------- 结果网格:双击列缘自适应 + 列头拖动重排
+
+/// 结果网格的边界 b 屏幕 x(边界 b 左侧是可视列 b)
+fn rg_edge_x(h: &ResultHarness<'_>, b: usize) -> f32 {
+    let (ws, left, _) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("网格已渲染");
+    let mut x = left + ws[0];
+    for k in 0..b {
+        x += ws[1 + k];
+    }
+    x
+}
+
+/// 结果网格表头底 y(表体首行顶)
+fn hb_of(h: &ResultHarness<'_>) -> f32 {
+    crate::grid::debug_geom(&h.ctx, RG_ID)
+        .expect("网格已渲染")
+        .2
+}
+
+/// 结果网格各数据列的实际宽度(去掉行号列与末尾占位列),按显示序
+fn rg_widths(h: &ResultHarness<'_>) -> Vec<f32> {
+    let (ws, ..) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("网格已渲染");
+    ws[1..ws.len().saturating_sub(1)].to_vec()
+}
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1.0
+}
+
+/// 双击列缘:先手动拖宽,双击收回内容宽;自适应只动这一列,别的列手拖的宽度保留
+#[test]
+fn result_grid_double_click_edge_fits_width() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = result_grid_harness(1100.0, 700.0, false);
+    h.run_steps(4);
+    let (ws, ..) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("网格已渲染");
+    let y = hb_of(&h) + crate::theme::row_h() * 3.5; // 表体第 4 行中部
+    // 拖 role|role_name 边界(边界 2)向右 60:边界左侧的 role 列被拖宽
+    // (egui_extras 的把手属于左列;此前测试按"右列变宽"写,拖完断言的那列根本没动)
+    let x_edge = rg_edge_x(&h, 2);
+    drag_at(&mut h, egui::pos2(x_edge, y), egui::pos2(x_edge + 60.0, y));
+    let ws2 = rg_widths(&h);
+    assert!(
+        near(ws2[1], ws[2] + 60.0),
+        "role 列应被拖宽 60: {:?} → {:?}",
+        ws,
+        ws2
+    );
+    // 拖 id|role 边界(边界 1)向左 30:id 列收窄
+    let x0b = rg_edge_x(&h, 1);
+    drag_at(&mut h, egui::pos2(x0b, y), egui::pos2(x0b - 30.0, y));
+    let ws2b = rg_widths(&h);
+    assert!(
+        near(ws2b[0], ws2[0] - 30.0) && near(ws2b[1], ws2[1]),
+        "id 收窄、role 不变: {:?} → {:?}",
+        ws2,
+        ws2b
+    );
+
+    // 双击 role|role_name 边界:role 列收回到内容宽
+    h.run_steps(40);
+    let x1 = rg_edge_x(&h, 2);
+    click_at(&mut h, egui::pos2(x1, y));
+    click_at(&mut h, egui::pos2(x1, y));
+    h.run_steps(6);
+    let (rows, columns, types) = {
+        let cell = h.state().borrow();
+        let q = cell.as_ref().unwrap();
+        let r = &q.results[q.active_set];
+        (r.rows.clone(), r.columns.clone(), r.column_types.clone())
+    };
+    let fit = crate::grid::fit_width(&rows, &columns, &types, 1);
+    let ws3 = rg_widths(&h);
+    assert!(
+        near(ws3[1], fit),
+        "双击后 role 列应回到内容宽 {fit}:实际 {}(拖宽后 {:?})",
+        ws3[1],
+        ws2
+    );
+    assert!(
+        near(ws3[0], ws2b[0]) && near(ws3[2], ws2b[2]) && near(ws3[3], ws2b[3]),
+        "自适应只动 role 列,其余列宽原样(id 手动收窄的 {:?} 不该被重置): {:?} → {:?}",
+        ws2b[0],
+        ws2b,
+        ws3
+    );
+}
+
+/// 列缘是列的把手:在列缘上拖宽不该拉出单元格选区;双击列缘只做自适应——
+/// 不该同时被当成"双击单元格"(可编辑网格进编辑、只读网格弹"完整内容")
+#[test]
+fn result_grid_edge_is_a_column_handle_only() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 只读:拖宽 + 双击
+    let mut h = result_grid_harness(1100.0, 700.0, false);
+    h.run_steps(4);
+    let (ws, ..) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("已渲染");
+    let y = hb_of(&h) + crate::theme::row_h() * 3.5;
+    let x_edge = rg_edge_x(&h, 2);
+    drag_at(&mut h, egui::pos2(x_edge, y), egui::pos2(x_edge + 60.0, y));
+    assert!(near(rg_widths(&h)[1], ws[2] + 60.0), "列宽应已改变");
+    assert_eq!(result_sel(&h), None, "拖宽列缘是列操作,不该拉出单元格选区");
+    h.run_steps(40);
+    let x_edge = rg_edge_x(&h, 2);
+    click_at(&mut h, egui::pos2(x_edge, y));
+    click_at(&mut h, egui::pos2(x_edge, y));
+    h.run_steps(3);
+    assert!(
+        !crate::grid::debug_view_open(&h.ctx, RG_ID),
+        "双击列缘只做自适应,不该弹出完整内容"
+    );
+    // 可编辑:双击列缘不进编辑
+    let mut h = result_grid_harness(1100.0, 700.0, true);
+    h.run_steps(4);
+    let x_edge = rg_edge_x(&h, 2);
+    let y = hb_of(&h) + crate::theme::row_h() * 3.5;
+    click_at(&mut h, egui::pos2(x_edge, y));
+    click_at(&mut h, egui::pos2(x_edge, y));
+    h.run_steps(3);
+    assert_eq!(q_snap(&h).editing, None, "双击列缘只做自适应,不该进入编辑");
+}
+
+/// 列头拖动重排:role 从可视位置 1 拖到 3 之后;落位后选区清空、列宽跟着列走;
+/// 在新位置编辑该列 → 待保存改动记的是自然列名 role(回写 SQL 落对列)
+#[test]
+fn result_grid_drag_header_reorders_and_edits_right_column() {
+    use egui_kittest::kittest::Queryable as _;
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let mut h = result_grid_harness(1100.0, 700.0, true);
+    h.run_steps(4);
+
+    // 先把 role 列手动收窄 60:重排后这份宽度必须跟着列走
+    let (ws, left, hb) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("已渲染");
+    let y = hb + crate::theme::row_h() * 3.5;
+    let x_edge = rg_edge_x(&mut h, 2);
+    drag_at(&mut h, egui::pos2(x_edge, y), egui::pos2(x_edge - 60.0, y));
+    let before = rg_widths(&h);
+    assert!(before[1] < ws[2] - 50.0, "role 应已收窄: {:?} → {:?}", ws, before);
+    let _ = left;
+
+    // role 列头(可视位置 1)中部拖到边界 3 之后
+    let hy = hb - crate::theme::data_header_h() / 2.0;
+    let src = rg_edge_x(&mut h, 1) + 40.0;
+    let dst = rg_edge_x(&mut h, 3) + 40.0;
+    drag_at(&mut h, egui::pos2(src, hy), egui::pos2(dst, hy));
+
+    let order = crate::grid::debug_cols(&h.ctx, RG_ID).order;
+    assert_eq!(
+        order,
+        vec![
+            "id".to_string(),
+            "role_name".to_string(),
+            "role".to_string(),
+            "status".to_string(),
+            "created".to_string()
+        ],
+        "role 应落在可视位置 2"
+    );
+    assert_eq!(result_sel(&h), None, "重排后可视坐标失效,选区清空");
+    // 列宽跟着列走:显示序 [id, role_name, role, status, created]
+    let after = rg_widths(&h);
+    let want = [before[0], before[2], before[1], before[3], before[4]];
+    for k in 0..want.len() {
+        assert!(
+            near(after[k], want[k]),
+            "位置 {k} 的列宽应跟着列走: {:?} → {:?}(期望 {:?})",
+            before,
+            after,
+            want
+        );
+    }
+
+    // 新位置 (0,2) = role 列第一行:回车编辑加 !,提交后改动记自然列名 role
+    click_cell(&mut h, 0, 2);
+    assert_eq!(result_sel(&h), Some(((0, 2), (0, 2))), "点击应选中新位置的格");
+    key_once(&mut h, egui::Key::Enter, plain);
+    assert_eq!(q_snap(&h).editing, Some((0, 2)));
+    type_into(&mut h, "!");
+    key_once(&mut h, egui::Key::Enter, plain);
+    let s = q_snap(&h);
+    assert_eq!(s.editing, None);
+    assert!(
+        s.changes.contains(&(0, "role".to_string(), Some("role_0!".to_string()))),
+        "改动应记自然列名 role: {:?}",
+        s.changes
+    );
+    // 右键菜单也在:重排后复制跟随新位置
+    let pos = cell_pos(&h, 0, 2);
+    right_click_at(&mut h, pos);
+    assert!(h.query_by_label("复制单元格").is_some(), "重排后右键菜单应打开");
+    {
+        let node = h.get_by_label("复制单元格");
+        node.simulate_click();
+    }
+    assert_eq!(drain_copies(&mut h, 6), vec!["role_0!".to_string()]);
+}
+
+/// 结果网格连续两次拖动:第二次重排建立在第一次的结果上,列序始终是"全部列的一个排列"
+#[test]
+fn result_grid_second_drag_builds_on_first() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = result_grid_harness(1100.0, 700.0, false);
+    h.run_steps(4);
+
+    let drag_header = |h: &mut ResultHarness<'_>, from: usize, to: usize| {
+        let hy = {
+            let (_, _, hb) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("已渲染");
+            hb - crate::theme::data_header_h() / 2.0
+        };
+        let src = rg_edge_x(h, from) + 40.0;
+        let dst = rg_edge_x(h, to) + 40.0;
+        drag_at(h, egui::pos2(src, hy), egui::pos2(dst, hy));
+    };
+    let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+    // 第一次:role(可视位置 1)拖到边界 3 之后
+    drag_header(&mut h, 1, 3);
+    assert_eq!(
+        crate::grid::debug_cols(&h.ctx, RG_ID).order,
+        names(&["id", "role_name", "role", "status", "created"])
+    );
+    // 第二次:此刻可视位置 0 的列(id)拖到边界 3 之后
+    drag_header(&mut h, 0, 3);
+    assert_eq!(
+        crate::grid::debug_cols(&h.ctx, RG_ID).order,
+        names(&["role_name", "role", "id", "status", "created"]),
+        "第二次重排必须建立在第一次的结果上"
+    );
+    // 第三次:往回拖——位置 4 的列(created)拖到首位
+    drag_header(&mut h, 4, 0);
+    assert_eq!(
+        crate::grid::debug_cols(&h.ctx, RG_ID).order,
+        names(&["created", "role_name", "role", "id", "status"])
+    );
+    // 复制跟随最终位置:可视位置 2 现在是 role 列
+    click_cell(&mut h, 0, 2);
+    let cmd = egui::Modifiers { command: true, ..Default::default() };
+    assert_eq!(key_once(&mut h, egui::Key::C, cmd), "role_0");
+}
+
+/// 连续两次拖动:第二次重排必须建立在第一次的结果上,列序始终是"全部列的一个排列"。
+/// 落位逻辑若把全序槽位当成列下标用,第一次(col_order 还是自然序)会侥幸正确,
+/// 第二次起就错乱/重复——这里专门盯第二次
+#[test]
+fn data_grid_second_drag_builds_on_first() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = keyboard_grid_harness(8);
+    h.run_steps(4);
+    let all: Vec<String> = {
+        let app = h.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        t.columns.clone()
+    };
+    let is_permutation = |o: &[String]| {
+        let mut a = o.to_vec();
+        let mut b = all.clone();
+        a.sort();
+        b.sort();
+        a == b
+    };
+
+    // 第一次:role(可视位置 1)拖到边界 3 之后
+    let (from, to) = (
+        egui::pos2(edge_x(&h, 1) + 40.0, header_y(&h)),
+        egui::pos2(edge_x(&h, 3) + 40.0, header_y(&h)),
+    );
+    drag_at(&mut h, from, to);
+    let first = col_order(&h);
+    assert!(is_permutation(&first), "第一次后应是全排列: {first:?}");
+    assert_eq!(&first[1], "role_name");
+    assert_eq!(&first[2], "role");
+
+    // 第二次:此刻可视位置 0 的列(id)拖到边界 3 之后
+    let (from, to) = (
+        egui::pos2(edge_x(&h, 0) + 40.0, header_y(&h)),
+        egui::pos2(edge_x(&h, 3) + 40.0, header_y(&h)),
+    );
+    drag_at(&mut h, from, to);
+    let second = col_order(&h);
+    assert!(is_permutation(&second), "第二次后列序必须仍是全排列(不重复不丢列): {second:?}");
+    // 第一次后可视序 [id, role_name, role, …];把位置 0 的 id 拖过两个列 → [role_name, role, id, …]
+    assert_eq!(&second[0], "role_name", "role_name 前移到首位: {second:?}");
+    assert_eq!(&second[1], "role", "{second:?}");
+    assert_eq!(&second[2], "id", "id 落在位置 2: {second:?}");
+}

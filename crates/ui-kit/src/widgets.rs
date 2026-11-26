@@ -520,17 +520,42 @@ pub fn fitted_widths_typed(
     column_types: &[String],
     available: f32,
 ) -> Vec<f32> {
-    let mut base = suggested_widths(rows, columns);
-    for (i, w) in base.iter_mut().enumerate() {
-        // 类型小字 10px:ASCII 约 5.4pt/字,CJK 约 10pt/字
-        let tw: f32 = type_at(column_types, i)
-            .chars()
-            .take(40)
-            .map(|c| if c.is_ascii() { 5.4 } else { 10.0 })
-            .sum();
-        *w = w.max(84.0).max(tw + 16.0);
-    }
-    fitted_from_base(base, available)
+    fitted_from_base(base_widths_typed(rows, columns, column_types), available)
+}
+
+/// 结果网格各列的内容宽度(列名/数据采样 + 类型小字放得下),不摊派富余空间。
+/// "按内容自适应"用这个;`fitted_widths_typed` 是它再按可用宽度摊开的结果
+pub fn base_widths_typed(
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+    column_types: &[String],
+) -> Vec<f32> {
+    (0..columns.len())
+        .map(|i| base_width_at(rows, columns, column_types, i))
+        .collect()
+}
+
+/// 结果网格第 `i` 列的内容宽度(同 `base_widths_typed` 的第 i 项);自适应单列时只算这一列
+pub fn base_width_at(
+    rows: &[Vec<Option<String>>],
+    columns: &[String],
+    column_types: &[String],
+    i: usize,
+) -> f32 {
+    let head = columns.get(i).map_or(0.0, |c| text_width(c));
+    let data = rows
+        .iter()
+        .take(80)
+        .filter_map(|r| r.get(i).and_then(|v| v.as_deref()))
+        .map(text_width)
+        .fold(0.0_f32, f32::max);
+    // 类型小字 10px:ASCII 约 5.4pt/字,CJK 约 10pt/字
+    let tw: f32 = type_at(column_types, i)
+        .chars()
+        .take(40)
+        .map(|c| if c.is_ascii() { 5.4 } else { 10.0 })
+        .sum();
+    (head.max(data) + 26.0).clamp(72.0, 720.0).max(84.0).max(tw + 16.0)
 }
 
 // ---------------------------------------------------------------- 工具栏按钮
@@ -612,4 +637,39 @@ pub fn tiny_field(ui: &mut egui::Ui, val: &mut String, ph: &str, enabled: bool, 
             .text_color(color)
             .interactive(enabled),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 内容宽不随可用宽度变:摊派函数会把富余空间分给各列(顶到 720),
+    /// "按内容自适应"要的是没摊派的那份;单列取的必须是该列自己的数据
+    #[test]
+    fn base_widths_are_content_only() {
+        let cols = ["id", "note"].map(String::from);
+        let rows = vec![vec![
+            Some("1".to_string()),
+            Some("a fairly long piece of text".to_string()),
+        ]];
+        let types = vec!["int4".to_string(), "text".to_string()];
+        let base = base_widths_typed(&rows, &cols, &types);
+        assert!(
+            base[1] > base[0] + 100.0,
+            "note 列内容更长应更宽: {base:?}"
+        );
+        assert_eq!(
+            fitted_widths_typed(&rows, &cols, &types, 10_000.0),
+            vec![720.0; 2],
+            "摊派函数在超大可用宽度下会顶到上限"
+        );
+        for (i, w) in base.iter().enumerate() {
+            assert_eq!(base_width_at(&rows, &cols, &types, i), *w);
+        }
+        // 类型数组可以缺
+        assert_eq!(
+            base_width_at(&rows, &cols, &[], 1),
+            (text_width("a fairly long piece of text") + 26.0).max(84.0)
+        );
+    }
 }
