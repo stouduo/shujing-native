@@ -668,6 +668,22 @@ pub fn draw_query_view(
 
             // 结果集元信息 + 切换
             let r = &q.results[q.active_set.min(q.results.len().saturating_sub(1))];
+            // 回写判定:单表 SELECT + 主键齐全 + 非只读连接
+            let read_only = conns
+                .iter()
+                .find(|c| c.id == q.conn_id)
+                .map(|c| c.read_only)
+                .unwrap_or(false);
+            let editable = !read_only
+                && q.result_table.is_some()
+                && q.pk_checked
+                && !q.result_pk.is_empty()
+                && q.result_pk.iter().all(|p| r.columns.contains(p))
+                // 改动属于别的结果集时本集只读(行号跨集无意义,防错行 UPDATE)
+                && (q.q_changes.is_empty() || q.q_changes_set == q.active_set);
+            // 结果网格持焦时按 Esc 把焦点交回 SQL 编辑器(点选结果格后接着写 SQL 不用再点编辑器)
+            let editor_focus = egui::Id::new(format!("sql-editor-{tab_id}"));
+            let grid_id = format!("query-results-{tab_id}");
             ui.horizontal(|ui| {
                 if q.results.len() > 1 {
                     let mut go: Option<usize> = None;
@@ -730,16 +746,47 @@ pub fn draw_query_view(
                         .size(theme::fs_px(11.5))
                         .color(p.text2),
                     );
+                    // 右侧:结果网格的选中提示 + 按键提示(选中态由网格按自己的 id 存,
+                    // 这里读的是上一帧的——点选后下一帧就出来)
+                    let sel = grid::selection(ui.ctx(), &grid_id, (r.rows.len(), r.columns.len()));
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 20.0),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let hint = if editable {
+                                ui_kit::t!(
+                                    "Enter edit · ⌘V paste · ⌘C copy · right-click for more",
+                                    "回车编辑 · ⌘V 粘贴 · ⌘C 复制 · 右键更多"
+                                )
+                            } else {
+                                ui_kit::t!(
+                                    "Click a cell, then ⌘C to copy · right-click for more",
+                                    "点选单元格后 ⌘C 复制 · 右键更多"
+                                )
+                            };
+                            ui.label(
+                                RichText::new(hint)
+                                    .size(theme::fs_px(11.0))
+                                    .color(p.muted),
+                            );
+                            if let Some(((r1, c1), (r2, c2))) = sel {
+                                let picked = if (r1, c1) == (r2, c2) {
+                                    format!("R{} · {}", r1 + 1, r.columns[c1])
+                                } else {
+                                    format!("{} × {}", r2 - r1 + 1, c2 - c1 + 1)
+                                };
+                                ui.label(
+                                    RichText::new(picked)
+                                        .size(theme::fs_px(11.5))
+                                        .color(p.accent),
+                                );
+                            }
+                        },
+                    );
                 }
             });
             ui.add_space(6.0);
             if !r.columns.is_empty() {
-                // 回写判定:单表 SELECT + 主键齐全 + 非只读连接
-                let read_only = conns
-                    .iter()
-                    .find(|c| c.id == q.conn_id)
-                    .map(|c| c.read_only)
-                    .unwrap_or(false);
                 // 字段血缘(完整版):解析 SELECT 清单,JOIN/别名消解/函数/星号全覆盖;
                 // CTE/子查询/UNION 诚实降级(core/lineage.rs 返回原因)
                 match shujing_core::lineage::analyze(&q.sql) {
@@ -790,13 +837,6 @@ pub fn draw_query_view(
                     }
                     Ok(_) => {}
                 }
-                let editable = !read_only
-                    && q.result_table.is_some()
-                    && q.pk_checked
-                    && !q.result_pk.is_empty()
-                    && q.result_pk.iter().all(|p| r.columns.contains(p))
-                    // 改动属于别的结果集时本集只读(行号跨集无意义,防错行 UPDATE)
-                    && (q.q_changes.is_empty() || q.q_changes_set == q.active_set);
                 if editable {
                     if !q.q_changes.is_empty() {
                         ui.horizontal(|ui| {
@@ -823,9 +863,9 @@ pub fn draw_query_view(
                         });
                         ui.add_space(4.0);
                     }
-                    let (start, commit) = grid::result_rows_editable(
+                    let (start, commits) = grid::result_rows_editable(
                         ui,
-                        &format!("query-results-{tab_id}"),
+                        &grid_id,
                         &r.columns,
                         &r.column_types,
                         &r.rows,
@@ -833,16 +873,22 @@ pub fn draw_query_view(
                         &mut q.q_editing,
                         &mut q.q_draft,
                         &mut q.q_frozen,
+                        Some(editor_focus),
                     );
                     if let Some((ri, ci, old)) = start {
                         q.q_editing = Some((ri, ci));
                         q.q_draft = old;
                     }
-                    if let Some((ri, ci, val)) = commit {
-                        let col = r.columns[ci].clone();
-                        let orig = r.rows[ri][ci].clone();
+                    // 逐格写入(粘贴块/批量填充会一次给出多格);与原值相同的不记
+                    for (ri, ci, val) in commits {
+                        let Some((col, orig)) =
+                            r.columns.get(ci).zip(r.rows.get(ri).and_then(|row| row.get(ci)))
+                        else {
+                            continue;
+                        };
                         let new_v = if val.is_empty() { None } else { Some(val) };
-                        if new_v != orig {
+                        if new_v != *orig {
+                            let col = col.clone();
                             q.q_changes.retain(|(r2, c2, _)| !(*r2 == ri && c2 == &col));
                             q.q_changes.push((ri, col, new_v));
                         }
@@ -852,11 +898,12 @@ pub fn draw_query_view(
                 } else {
                     grid::result_rows(
                         ui,
-                        &format!("query-results-{tab_id}"),
+                        &grid_id,
                         &r.columns,
                         &r.column_types,
                         &r.rows,
                         &mut q.q_frozen,
+                        Some(editor_focus),
                     );
                 }
             }
@@ -1075,6 +1122,7 @@ pub fn draw_optimize_modal(
                                     &plan.column_types,
                                     &plan.rows,
                                     &mut plan_frozen,
+                                    None,
                                 );
                                 plan_frozen_out = plan_frozen;
                             });

@@ -313,6 +313,7 @@ pub fn draw_kafka_view(
                 &col_types,
                 &k.msgs_grid(),
                 &mut frozen,
+                None,
             );
             k.frozen = frozen;
         });

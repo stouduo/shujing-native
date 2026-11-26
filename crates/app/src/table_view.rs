@@ -5,6 +5,10 @@ use crate::app::{BgEvent, ConnModal, RedisOp, ShujingApp, TabKind, TableTab};
 use crate::net;
 use crate::query;
 use crate::structure;
+use crate::grid::{
+    key_motion, move_cell, norm_range, parse_clipboard, range_tint, GridMotion,
+    EDIT_FOCUS_KEYS, GRID_FOCUS_KEYS,
+};
 use crate::{icons, theme};
 use egui::{Align, Color32, Layout, RichText, Sense};
 use egui_extras::Column;
@@ -3015,108 +3019,6 @@ fn centered_state(ui: &mut egui::Ui, loading: bool, msg: Option<&str>) {
 
 /// 数据表(TableBuilder):表头粘顶 + 行发丝线,由水平 ScrollArea 包裹
 #[allow(clippy::too_many_arguments)]
-/// 选区浸染色(强调色低透明)
-fn range_tint(accent: Color32) -> Color32 {
-    Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 30)
-}
-
-/// 选区两端归一化为(左上,右下)
-/// 键盘移动网格选中格的方式
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GridMotion {
-    Rows(isize),
-    Cols(isize),
-    /// Tab:逐格右移(负 = 左移),行尾折到下一行行首、行首折到上一行行尾
-    Tab(isize),
-    /// PageUp/PageDown:移动一屏的行数
-    Page(isize),
-    FirstCol,
-    LastCol,
-    FirstRow,
-    LastRow,
-}
-
-impl GridMotion {
-    /// 翻页/首尾跳转:落点离原格很远,滚入视野时居中而不是贴边
-    fn is_jump(self) -> bool {
-        matches!(
-            self,
-            GridMotion::Page(_) | GridMotion::FirstRow | GridMotion::LastRow
-        )
-    }
-}
-
-/// 按键 → (移动方式, 是否按着 Shift 扩展选区)。⌘+方向键 = 跳到行/列的首尾。
-/// 返回 None = 不是导航键,或带 ⌥/⌃(留给别的用途)
-pub(crate) fn key_motion(key: egui::Key, m: egui::Modifiers) -> Option<(GridMotion, bool)> {
-    if m.alt || m.ctrl {
-        return None;
-    }
-    let extend = m.shift;
-    let (dc, dr) = match key {
-        egui::Key::ArrowLeft => (-1, 0),
-        egui::Key::ArrowRight => (1, 0),
-        egui::Key::ArrowUp => (0, -1),
-        egui::Key::ArrowDown => (0, 1),
-        egui::Key::Tab => return Some((GridMotion::Tab(if extend { -1 } else { 1 }), false)),
-        egui::Key::PageUp => return Some((GridMotion::Page(-1), extend)),
-        egui::Key::PageDown => return Some((GridMotion::Page(1), extend)),
-        egui::Key::Home if !m.command => return Some((GridMotion::FirstCol, extend)),
-        egui::Key::End if !m.command => return Some((GridMotion::LastCol, extend)),
-        _ => return None,
-    };
-    Some((
-        if m.command {
-            match (dc, dr) {
-                (-1, _) => GridMotion::FirstCol,
-                (1, _) => GridMotion::LastCol,
-                (_, -1) => GridMotion::FirstRow,
-                _ => GridMotion::LastRow,
-            }
-        } else if dr != 0 {
-            GridMotion::Rows(dr)
-        } else {
-            GridMotion::Cols(dc)
-        },
-        extend,
-    ))
-}
-
-/// 从当前格出发按移动方式落到的新格(越界夹取;Tab 在行内折返)。
-/// `bounds` = (行数, 可见列数);`page_rows` = 一屏能放下的行数(翻页用)
-pub(crate) fn move_cell(
-    cur: (usize, usize),
-    motion: GridMotion,
-    bounds: (usize, usize),
-    page_rows: usize,
-) -> (usize, usize) {
-    let (rows, cols) = (bounds.0.max(1), bounds.1.max(1));
-    let (r, c) = cur;
-    let clamp = |v: isize, max: usize| v.clamp(0, max as isize - 1) as usize;
-    match motion {
-        GridMotion::Rows(d) => (clamp(r as isize + d, rows), c),
-        GridMotion::Cols(d) => (r, clamp(c as isize + d, cols)),
-        GridMotion::Tab(d) => {
-            let nc = c as isize + d;
-            if nc < 0 {
-                (r.saturating_sub(1), cols - 1)
-            } else if nc as usize >= cols {
-                ((r + 1).min(rows - 1), 0)
-            } else {
-                (r, nc as usize)
-            }
-        }
-        GridMotion::Page(d) => (
-            clamp(r as isize + d * page_rows.max(1) as isize, rows),
-            c,
-        ),
-        GridMotion::FirstCol => (r, 0),
-        GridMotion::LastCol => (r, cols - 1),
-        GridMotion::FirstRow => (0, c),
-        GridMotion::LastRow => (rows - 1, c),
-    }
-}
-
 /// 把一个格子记为改动(空串 = 置 NULL)。与原值相同不记改动;写主键列前先快照
 /// 整行原始主键(保存时的 WHERE 用)。`col` 是全量列下标
 pub(crate) fn stage_cell(
@@ -3194,40 +3096,6 @@ pub(crate) fn paste_block(
     last
 }
 
-/// 剪贴板文本 → 行 × 列(换行分行、制表符分列;去掉首尾空行与行尾 \r)
-pub(crate) fn parse_clipboard(text: &str) -> Vec<Vec<String>> {
-    text.trim_matches('\n')
-        .split('\n')
-        .map(|line| {
-            line.trim_end_matches('\r')
-                .split('\t')
-                .map(str::to_string)
-                .collect()
-        })
-        .collect()
-}
-
-/// 网格持焦点时,这些键留给网格(不给 egui 做焦点遍历)
-const GRID_FOCUS_KEYS: egui::EventFilter = egui::EventFilter {
-    tab: true,
-    horizontal_arrows: true,
-    vertical_arrows: true,
-    escape: true,
-};
-
-/// 单元格编辑框持焦点时,Tab 留给网格(提交后移到下一格)
-const EDIT_FOCUS_KEYS: egui::EventFilter = egui::EventFilter {
-    tab: true,
-    horizontal_arrows: true,
-    vertical_arrows: true,
-    escape: false,
-};
-
-fn norm_range(r: ((usize, usize), (usize, usize))) -> ((usize, usize), (usize, usize)) {
-    let ((r1, c1), (r2, c2)) = r;
-    ((r1.min(r2), c1.min(c2)), (r1.max(r2), c1.max(c2)))
-}
-
 /// 冻结列覆盖层需要的渲染几何(每帧由 draw_data_table 填充)
 #[derive(Default)]
 pub(crate) struct FrozenGeom {
@@ -3295,6 +3163,8 @@ fn draw_data_table(
     });
     let pointer_pos_dv = ui.input(|i| i.pointer.latest_pos());
     let (pointer_cmd_dv, pointer_shift_dv) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+    // body 闭包里外层 ui 被 builder 借用,context 先取出来
+    let pointer_ctx = ui.ctx().clone();
     // 按压点必须在本网格层(模态/菜单在其上层,几何命中需手动避让)
     let pointer_on_grid_layer = pointer_pos_dv
         .map(|pt| {
@@ -3545,7 +3415,14 @@ fn draw_data_table(
                             multi_sel.clear();
                         }
                     }
-                    if resp.double_clicked() && !pk_cols.is_empty() {
+                    if resp.clicked() &&
+                        !pk_cols.is_empty() &&
+                        crate::grid::cell_double_clicked(
+                            ui,
+                            egui::Id::new(("rowno-dbl", tab_id)),
+                            (ri, 0),
+                        )
+                    {
                         *detail = true;
                     }
                 });
@@ -3832,6 +3709,13 @@ fn draw_data_table(
                         if *sel_range != Some(next) {
                             *sel_range = Some(next);
                         }
+                        if next.0 != next.1 {
+                            // 拖出了多格选区:起点那一下不再算双击的前半程
+                            crate::grid::reset_double_click(
+                                &pointer_ctx,
+                                egui::Id::new(("cell-dbl", tab_id)),
+                            );
+                        }
                     }
                 }
             }
@@ -4059,7 +3943,10 @@ fn draw_frozen_overlay(
                     multi_sel.clear();
                 }
             }
-            if resp.double_clicked() && !pk_cols.is_empty() {
+            if resp.clicked() &&
+                !pk_cols.is_empty() &&
+                crate::grid::cell_double_clicked(ui, egui::Id::new(("rowno-dbl", tab_id)), (ri, 0))
+            {
                 *detail = true;
             }
         }
@@ -4543,7 +4430,10 @@ fn draw_data_cell(
         *new_selection = Some(Some((ri, ci)));
         *detail = true; // 点击行数据:左侧拉起详情页
     }
-    if has_pk && resp.double_clicked() {
+    // 双击要落在同一格:egui 自带判定只看间隔不看位置,快速连点两格的第二下会直接进编辑
+    if has_pk && resp.clicked() &&
+        crate::grid::cell_double_clicked(ui, egui::Id::new(("cell-dbl", tab_id)), (ri, ci))
+    {
         *editing = Some((ri, ci));
         *draft = v.as_deref().unwrap_or("").to_string();
     }
@@ -7096,59 +6986,6 @@ mod export_tests {
 #[cfg(test)]
 mod grid_keys_tests {
     use super::*;
-
-    #[test]
-    fn key_motion_maps_navigation_keys() {
-        use egui::{Key, Modifiers};
-        let m = Modifiers::NONE;
-        assert_eq!(key_motion(Key::ArrowDown, m), Some((GridMotion::Rows(1), false)));
-        assert_eq!(key_motion(Key::ArrowLeft, m), Some((GridMotion::Cols(-1), false)));
-        // Shift = 扩展选区;Shift+Tab = 反向移动(不是扩展)
-        let shift = Modifiers { shift: true, ..Default::default() };
-        assert_eq!(key_motion(Key::ArrowRight, shift), Some((GridMotion::Cols(1), true)));
-        assert_eq!(key_motion(Key::Tab, m), Some((GridMotion::Tab(1), false)));
-        assert_eq!(key_motion(Key::Tab, shift), Some((GridMotion::Tab(-1), false)));
-        assert_eq!(key_motion(Key::Home, m), Some((GridMotion::FirstCol, false)));
-        assert_eq!(key_motion(Key::End, m), Some((GridMotion::LastCol, false)));
-        assert_eq!(key_motion(Key::PageUp, m), Some((GridMotion::Page(-1), false)));
-        // ⌘+方向 = 跳到行/列首尾
-        let cmd = Modifiers { command: true, ..Default::default() };
-        assert_eq!(key_motion(Key::ArrowDown, cmd), Some((GridMotion::LastRow, false)));
-        assert_eq!(key_motion(Key::ArrowLeft, cmd), Some((GridMotion::FirstCol, false)));
-        // ⌘+Home/End 不是导航;回车/删除/字母都不是(⌥/⌃ 组合留给别的用途)
-        assert_eq!(key_motion(Key::Home, cmd), None);
-        assert_eq!(key_motion(Key::Enter, m), None);
-        assert_eq!(key_motion(Key::Delete, m), None);
-        assert_eq!(key_motion(Key::ArrowUp, Modifiers { alt: true, ..Default::default() }), None);
-    }
-
-    #[test]
-    fn move_cell_clamps_and_tab_wraps() {
-        let bounds = (8, 6);
-        assert_eq!(move_cell((0, 0), GridMotion::Rows(-1), bounds, 10), (0, 0));
-        assert_eq!(move_cell((7, 5), GridMotion::Cols(1), bounds, 10), (7, 5));
-        // Tab:行尾折到下一行行首;最后一格停在原地;行首折到上一行行尾
-        assert_eq!(move_cell((2, 5), GridMotion::Tab(1), bounds, 10), (3, 0));
-        assert_eq!(move_cell((7, 5), GridMotion::Tab(1), bounds, 10), (7, 0));
-        assert_eq!(move_cell((2, 0), GridMotion::Tab(-1), bounds, 10), (1, 5));
-        // 翻页按一屏行数走,越界夹取
-        assert_eq!(move_cell((1, 1), GridMotion::Page(1), bounds, 3), (4, 1));
-        assert_eq!(move_cell((6, 1), GridMotion::Page(1), bounds, 3), (7, 1));
-        assert_eq!(move_cell((6, 1), GridMotion::Page(-1), bounds, 3), (3, 1));
-        assert_eq!(move_cell((6, 2), GridMotion::LastCol, bounds, 3), (6, 5));
-        assert_eq!(move_cell((6, 2), GridMotion::FirstRow, bounds, 3), (0, 2));
-    }
-
-    #[test]
-    fn clipboard_parses_rows_and_cells() {
-        assert_eq!(
-            parse_clipboard("a\tb\nc\td\r\n"),
-            vec![vec!["a", "b"], vec!["c", "d"]]
-        );
-        assert_eq!(parse_clipboard("单格"), vec![vec!["单格"]]);
-        // 空单元格保留(贴进去 = 置 NULL),不塌成少一列
-        assert_eq!(parse_clipboard("\tb\n\n"), vec![vec!["", "b"]]);
-    }
 
     /// 字面量 → 粘贴块(行 × 列)
     fn blk(v: &[&[&str]]) -> Vec<Vec<String>> {

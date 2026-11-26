@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// 主题是全局状态;测试并行执行会互相覆盖,渲染全部串行化
-static RENDER_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static RENDER_LOCK: Mutex<()> = Mutex::new(());
 
 /// 走真实 eframe::App::update 路径的测试:顶部应用工具栏把其下所有内容下推的高度。
 /// 这些测试里的点击坐标一律写成"原逻辑坐标 + CHROME_TOP"(弹窗居中、不随面板移动的除外);
@@ -5693,3 +5693,840 @@ fn grid_keyboard_scrolls_selection_into_view() {
     let hx = table_view::LAST_HSCROLL_X.load(std::sync::atomic::Ordering::Relaxed);
     assert!(hx > 0, "End 到最右列后横向滚动条应离开原点,实际 {hx}");
 }
+
+// ---------------------------------------------------------------- 查询结果网格:选中 / 复制 / 键盘 / 右键菜单 / 编辑
+
+type ResultHarness<'a> = egui_kittest::Harness<'a, std::cell::RefCell<Option<QueryTab>>>;
+
+const RG_ID: &str = "query-results-q1";
+/// 查询结果网格夹具:5 列(id/role/role_name/status/created)× 24 行,role_name 每 4 行一个 NULL。
+/// `editable` = 单表带主键的结果集,网格可回写
+fn result_grid_harness(w: f32, h: f32, editable: bool) -> ResultHarness<'static> {
+    let (mut q, conns, dbs) = query_view_fixture();
+    if editable {
+        q.result_table = Some("backend_role_privilege".into());
+        q.pk_checked = true;
+        q.result_pk = vec!["id".into()];
+    }
+    let cell = std::cell::RefCell::new(Some(q));
+    let setup_done = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(w, h))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, cell: &mut std::cell::RefCell<Option<QueryTab>>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = cell.borrow_mut();
+                let q = b.as_mut().unwrap();
+                let _ = query::draw_query_view(
+                    &conns,
+                    ctx,
+                    "q1",
+                    q,
+                    &[],
+                    &dbs,
+                    true,
+                    &[],
+                    &Default::default(),
+                    None,
+                    false,
+                );
+            },
+            cell,
+        );
+    harness.run_steps(8);
+    harness
+}
+
+fn result_sel(h: &ResultHarness<'_>) -> Option<((usize, usize), (usize, usize))> {
+    crate::grid::selection(&h.ctx, RG_ID, result_shape(h))
+}
+
+/// 结果集当前的真实形状(行数, 列数)
+fn result_shape(h: &ResultHarness<'_>) -> (usize, usize) {
+    let cell = h.state().borrow();
+    let q = cell.as_ref().expect("query tab");
+    let r = &q.results[q.active_set.min(q.results.len().saturating_sub(1))];
+    (r.rows.len(), r.columns.len())
+}
+
+/// 单元格中心的逻辑坐标:按网格上一帧的真实列宽算(窗口宽度、密度变了都跟着对)
+fn cell_pos(h: &ResultHarness<'_>, r: usize, c: usize) -> egui::Pos2 {
+    let (ws, left, body_top) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("网格已渲染");
+    let mut x = left + ws[0];
+    for w in &ws[1..=c] {
+        x += w;
+    }
+    egui::pos2(
+        x + ws[1 + c] / 2.0,
+        body_top + crate::theme::row_h() * (r as f32 + 0.5),
+    )
+}
+
+/// 行号列中心
+fn rowno_pos(h: &ResultHarness<'_>, r: usize) -> egui::Pos2 {
+    let (_, left, body_top) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("网格已渲染");
+    egui::pos2(
+        left + crate::theme::ROWNO_W / 2.0,
+        body_top + crate::theme::row_h() * (r as f32 + 0.5),
+    )
+}
+
+/// 点/拖/右键/双击单元格(坐标在函数内算好,免得借用打架)
+fn click_cell(h: &mut ResultHarness<'_>, r: usize, c: usize) {
+    let pos = cell_pos(h, r, c);
+    click_at(h, pos);
+}
+
+fn click_cell_with(h: &mut ResultHarness<'_>, r: usize, c: usize, m: egui::Modifiers) {
+    let pos = cell_pos(h, r, c);
+    click_at_with(h, pos, m);
+}
+
+fn drag_cells(h: &mut ResultHarness<'_>, a: (usize, usize), b: (usize, usize)) {
+    let (from, to) = (cell_pos(h, a.0, a.1), cell_pos(h, b.0, b.1));
+    drag_at(h, from, to);
+}
+
+fn right_click_cell(h: &mut ResultHarness<'_>, r: usize, c: usize) {
+    let pos = cell_pos(h, r, c);
+    right_click_at(h, pos);
+}
+
+fn double_click_cell(h: &mut ResultHarness<'_>, r: usize, c: usize) {
+    let pos = cell_pos(h, r, c);
+    double_click_at(h, pos);
+}
+
+/// 选区收拢成单格时的那个格(键盘导航断言用);多格选区返回 None
+fn result_cur(h: &ResultHarness<'_>) -> Option<(usize, usize)> {
+    result_sel(h).filter(|(a, b)| a == b).map(|(a, _)| a)
+}
+
+/// 结果网格当前的横向滚动偏移
+fn result_hscroll(h: &ResultHarness<'_>) -> f32 {
+    crate::grid::debug_hscroll(&h.ctx, RG_ID)
+}
+
+/// 网格里的状态快照(借用结束后再断言)
+struct QSnap {
+    editing: Option<(usize, usize)>,
+    draft: String,
+    changes: Vec<(usize, String, Option<String>)>,
+    sql: String,
+}
+
+fn q_snap(h: &ResultHarness<'_>) -> QSnap {
+    let cell = h.state().borrow();
+    let q = cell.as_ref().expect("query tab");
+    QSnap {
+        editing: q.q_editing,
+        draft: q.q_draft.clone(),
+        changes: q.q_changes.clone(),
+        sql: q.sql.clone(),
+    }
+}
+
+/// 这一帧应用写进剪贴板的文本
+fn copied_text<S>(h: &egui_kittest::Harness<'_, S>) -> String {
+    h.output()
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 完整的一次按键;返回按键那一帧写进剪贴板的文本
+fn key_once<S>(h: &mut egui_kittest::Harness<'_, S>, key: egui::Key, m: egui::Modifiers) -> String {
+    h.input_mut().modifiers = m;
+    h.input_mut().events.push(egui::Event::Key {
+        key,
+        pressed: true,
+        repeat: false,
+        modifiers: m,
+        physical_key: None,
+    });
+    h.step();
+    let copied = copied_text(h);
+    h.input_mut().modifiers = Default::default();
+    h.step();
+    copied
+}
+
+fn pointer_button<S>(
+    h: &mut egui_kittest::Harness<'_, S>,
+    pos: egui::Pos2,
+    button: egui::PointerButton,
+    pressed: bool,
+) {
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: Default::default(),
+    });
+}
+
+/// 单击(完整的按下/释放)
+fn click_at<S>(h: &mut egui_kittest::Harness<'_, S>, pos: egui::Pos2) {
+    h.input_mut().events.push(egui::Event::PointerMoved(pos));
+    h.step();
+    pointer_button(h, pos, egui::PointerButton::Primary, true);
+    h.step();
+    pointer_button(h, pos, egui::PointerButton::Primary, false);
+    h.step();
+    h.step();
+}
+
+/// 双击(第二次按下落在系统双击间隔内)
+fn double_click_at<S>(h: &mut egui_kittest::Harness<'_, S>, pos: egui::Pos2) {
+    h.input_mut().events.push(egui::Event::PointerMoved(pos));
+    h.step();
+    for _ in 0..2 {
+        pointer_button(h, pos, egui::PointerButton::Primary, true);
+        h.step();
+        pointer_button(h, pos, egui::PointerButton::Primary, false);
+        h.step();
+    }
+    h.run_steps(3);
+}
+
+/// 右键(按下/释放 → 弹出右键菜单)
+fn right_click_at<S>(h: &mut egui_kittest::Harness<'_, S>, pos: egui::Pos2) {
+    h.input_mut().events.push(egui::Event::PointerMoved(pos));
+    h.step();
+    pointer_button(h, pos, egui::PointerButton::Secondary, true);
+    h.step();
+    pointer_button(h, pos, egui::PointerButton::Secondary, false);
+    h.step();
+    h.run_steps(3);
+}
+
+/// 按住左键从 from 拖到 to(分 4 步移动)
+fn drag_at<S>(h: &mut egui_kittest::Harness<'_, S>, from: egui::Pos2, to: egui::Pos2) {
+    h.input_mut().events.push(egui::Event::PointerMoved(from));
+    h.step();
+    pointer_button(h, from, egui::PointerButton::Primary, true);
+    h.step();
+    for k in 1..=4 {
+        let pos = egui::pos2(
+            from.x + (to.x - from.x) * k as f32 / 4.0,
+            from.y + (to.y - from.y) * k as f32 / 4.0,
+        );
+        h.input_mut().events.push(egui::Event::PointerMoved(pos));
+        h.step();
+    }
+    pointer_button(h, to, egui::PointerButton::Primary, false);
+    h.step();
+    h.run_steps(2);
+}
+
+fn type_into<S>(h: &mut egui_kittest::Harness<'_, S>, s: &str) {
+    h.input_mut().events.push(egui::Event::Text(s.to_string()));
+    h.step();
+    h.step();
+}
+
+/// 跑若干帧,收集期间所有写进剪贴板的文本
+fn drain_copies<S>(h: &mut egui_kittest::Harness<'_, S>, steps: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for _ in 0..steps {
+        h.step();
+        out.extend(
+            h.output()
+                .platform_output
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                    _ => None,
+                }),
+        );
+    }
+    out
+}
+
+/// 带修饰键的单击(⇧ 点选 = 以原锚点扩展选区)
+fn click_at_with<S>(h: &mut egui_kittest::Harness<'_, S>, pos: egui::Pos2, m: egui::Modifiers) {
+    h.input_mut().events.push(egui::Event::PointerMoved(pos));
+    h.step();
+    h.input_mut().modifiers = m;
+    pointer_button(h, pos, egui::PointerButton::Primary, true);
+    h.step();
+    pointer_button(h, pos, egui::PointerButton::Primary, false);
+    h.step();
+    h.input_mut().modifiers = Default::default();
+    h.step();
+}
+
+/// 数据行下方的空白处(点它不应改变选区):第 6 行的位置,结果集得不足 6 行
+fn blank_pos(h: &ResultHarness<'_>) -> egui::Pos2 {
+    let (_, left, body_top) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("网格已渲染");
+    egui::pos2(left + 300.0, body_top + crate::theme::row_h() * 6.5)
+}
+
+fn cmd() -> egui::Modifiers {
+    egui::Modifiers {
+        command: true,
+        ..Default::default()
+    }
+}
+
+fn shift() -> egui::Modifiers {
+    egui::Modifiers {
+        shift: true,
+        ..Default::default()
+    }
+}
+
+/// 结果网格此前连单元格都复制不了:点格没反应、⌘C 无效。
+/// 现在:点选 → ⌘C 原样复制(NULL 写成 "NULL",徽章列复制原始值);点行号选整行
+#[test]
+fn result_grid_click_selects_and_copies_cell() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = result_grid_harness(1100.0, 700.0, false);
+    assert_eq!(result_sel(&h), None, "没点过之前没有选区");
+    assert_eq!(
+        key_once(&mut h, egui::Key::C, cmd()),
+        "",
+        "没有选区时 ⌘C 不写剪贴板"
+    );
+
+    click_cell(&mut h, 0, 1);
+    assert_eq!(result_sel(&h), Some(((0, 1), (0, 1))), "点选 role 列第一行");
+    assert_eq!(key_once(&mut h, egui::Key::C, cmd()), "role_0");
+
+    // NULL 格:复制成 "NULL" 文本(此前静默不复制)
+    click_cell(&mut h, 0, 2);
+    assert_eq!(key_once(&mut h, egui::Key::C, cmd()), "NULL");
+
+    // 状态徽章列:复制的是原始值,不是徽章上的花体字
+    click_cell(&mut h, 0, 3);
+    assert_eq!(key_once(&mut h, egui::Key::C, cmd()), "1");
+
+    // 点行号 = 选中整行,⌘C 得到整行 TSV
+    {
+        let pos = rowno_pos(&h, 1);
+        click_at(&mut h, pos);
+    }
+    assert_eq!(result_sel(&h), Some(((1, 0), (1, 4))));
+    assert_eq!(
+        key_once(&mut h, egui::Key::C, cmd()),
+        "2\trole_1\t角色 1\t2\t1731383330"
+    );
+
+    // 结果集换成 3 行(形状变了,旧选区作废);点表尾空白不动选区,⌘C 仍可用
+    h.state().borrow_mut().as_mut().unwrap().results[0]
+        .rows
+        .truncate(3);
+    h.run_steps(3);
+    assert_eq!(result_sel(&h), None, "结果集变了旧选区作废");
+    click_cell(&mut h, 1, 1);
+    assert_eq!(result_sel(&h), Some(((1, 1), (1, 1))));
+    {
+        let pos = blank_pos(&h);
+        click_at(&mut h, pos);
+    }
+    assert_eq!(result_sel(&h), Some(((1, 1), (1, 1))), "点空白不动选区");
+    assert_eq!(key_once(&mut h, egui::Key::C, cmd()), "role_1");
+}
+
+/// 拖选矩形 / ⇧ 点选扩展 / ⌘A 全选:⌘C 得到 行×列 的 TSV。
+/// 按住数据格拖动不再是横向平移
+#[test]
+fn result_grid_drag_shift_and_select_all_copy_tsv() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 窄窗口:列宽超出视口,拖动若还平移就会体现在横向偏移上
+    let mut h = result_grid_harness(900.0, 700.0, false);
+    assert_eq!(result_hscroll(&h), 0.0);
+
+    // 从 role 第 1 行拖到 role_name 第 3 行
+    drag_cells(&mut h, (0, 1), (2, 2));
+    assert_eq!(result_sel(&h), Some(((0, 1), (2, 2))), "拖出矩形选区");
+    assert_eq!(result_hscroll(&h), 0.0, "拖选不应平移网格");
+    assert_eq!(
+        key_once(&mut h, egui::Key::C, cmd()),
+        "role_0\tNULL\nrole_1\t角色 1\nrole_2\t角色 2"
+    );
+
+    // ⇧ 点选:锚点不动,选区扩到新格
+    click_cell(&mut h, 0, 1);
+    click_cell_with(&mut h, 1, 3, shift());
+    assert_eq!(result_sel(&h), Some(((0, 1), (1, 3))), "⇧ 点选以原锚点扩展");
+
+    // ⌘A 全选整个结果集
+    assert_eq!(key_once(&mut h, egui::Key::A, cmd()), "");
+    assert_eq!(result_sel(&h), Some(((0, 0), (23, 4))));
+    let all = key_once(&mut h, egui::Key::C, cmd());
+    let lines: Vec<&str> = all.lines().collect();
+    assert_eq!(lines.len(), 24, "{all}");
+    assert!(lines.iter().all(|l| l.split('\t').count() == 5), "{all}");
+    assert_eq!(lines[0], "1\trole_0\tNULL\t1\t1731383330");
+    assert_eq!(lines[23], "24\trole_23\t角色 23\t2\t1731383330");
+}
+
+/// 键盘导航:方向键/Tab/Home/End/翻页/⌘+方向,Shift 扩展;选中格滚入视野(纵向 + 横向)
+#[test]
+fn result_grid_keyboard_moves_selection_and_scrolls_into_view() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let (cmd, shift) = (cmd(), shift());
+    // 900 宽:5 列放不下,created 列在视口外
+    let mut h = result_grid_harness(900.0, 700.0, false);
+    use egui::Key::*;
+    // 没点过:第一次按导航键落到左上角
+    key_once(&mut h, ArrowDown, plain);
+    assert_eq!(result_sel(&h), Some(((0, 0), (0, 0))));
+    key_once(&mut h, ArrowRight, plain);
+    assert_eq!(result_cur(&h), Some((0, 1)));
+    key_once(&mut h, ArrowDown, plain);
+    assert_eq!(result_cur(&h), Some((1, 1)));
+    key_once(&mut h, ArrowUp, plain);
+    assert_eq!(result_cur(&h), Some((0, 1)));
+    key_once(&mut h, ArrowLeft, plain);
+    key_once(&mut h, ArrowUp, plain);
+    assert_eq!(result_sel(&h), Some(((0, 0), (0, 0))), "顶边/左边不越界");
+
+    // Shift+方向:以原格为锚点扩展矩形选区
+    key_once(&mut h, ArrowDown, shift);
+    assert_eq!(result_sel(&h), Some(((0, 0), (1, 0))));
+    key_once(&mut h, ArrowRight, plain);
+    assert_eq!(
+        result_sel(&h),
+        Some(((1, 1), (1, 1))),
+        "不带 Shift 收拢为单格"
+    );
+
+    // End 到最后一列:列宽超出视口,要横向滚进视野;Home 回到第一列滚回原点
+    key_once(&mut h, End, plain);
+    assert_eq!(result_cur(&h), Some((1, 4)));
+    let hx = result_hscroll(&h);
+    assert!(hx > 0.0, "End 到最右列后应横向滚入视野,实际偏移 {hx}");
+    key_once(&mut h, Home, plain);
+    assert_eq!(result_cur(&h), Some((1, 0)));
+    assert_eq!(result_hscroll(&h), 0.0, "Home 回到第一列应滚回原点");
+
+    // Tab 逐格右移;⌘+方向跳首尾;翻页越界夹取
+    key_once(&mut h, Tab, plain);
+    assert_eq!(result_cur(&h), Some((1, 1)));
+    key_once(&mut h, ArrowRight, cmd);
+    assert_eq!(result_cur(&h), Some((1, 4)));
+    key_once(&mut h, ArrowLeft, cmd);
+    assert_eq!(result_cur(&h), Some((1, 0)));
+    key_once(&mut h, ArrowDown, cmd);
+    assert_eq!(result_cur(&h), Some((23, 0)));
+    key_once(&mut h, ArrowUp, cmd);
+    assert_eq!(result_cur(&h), Some((0, 0)));
+
+    // 翻到看不见的行:网格要跟着滚。先量一帧,翻两页后数据区应整片变化
+    h.input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(40.0, 680.0)));
+    h.step();
+    let before = h.render().expect("render").into_raw();
+    key_once(&mut h, PageDown, plain);
+    key_once(&mut h, PageDown, plain);
+    let row = result_sel(&h).unwrap().0 .0;
+    assert!(row >= 12, "两次翻页后应到第 {row} 行之后");
+    let after = h.render().expect("render").into_raw();
+    // 数据区:避开侧栏/表头/滚动条,逻辑坐标 y 430..660 × 全宽(×2)
+    let (w, _) = (1800usize, 1400usize);
+    let moved = diff_pixels(&before, &after, w, (40, 860, 1760, 1320));
+    assert!(moved > 100_000, "翻页后数据区应滚动了,差异像素 {moved}");
+}
+
+/// 点选结果格后网格持焦;Esc 把焦点交回 SQL 编辑器——接着打字进的是编辑器,
+/// 方向键也归编辑器(选区不再动)
+#[test]
+fn result_grid_escape_hands_focus_back_to_editor() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let mut h = result_grid_harness(1100.0, 700.0, false);
+    let sql0 = q_snap(&h).sql;
+
+    click_cell(&mut h, 0, 1);
+    key_once(&mut h, egui::Key::ArrowDown, plain);
+    assert_eq!(
+        result_sel(&h),
+        Some(((1, 1), (1, 1))),
+        "网格持焦时方向键移动选区"
+    );
+
+    key_once(&mut h, egui::Key::Escape, plain);
+    assert_eq!(result_sel(&h), Some(((1, 1), (1, 1))), "Esc 不动选区");
+    type_into(&mut h, "X");
+    let sql1 = q_snap(&h).sql;
+    assert!(
+        sql1.contains('X') && sql1.len() == sql0.len() + 1,
+        "打字应进 SQL 编辑器: {sql1:?}"
+    );
+
+    let before = result_sel(&h);
+    key_once(&mut h, egui::Key::ArrowDown, plain);
+    assert_eq!(result_sel(&h), before, "编辑器持焦后方向键归编辑器");
+}
+
+/// 双击 / 回车 = 查看完整内容(长文本被列宽截断时用);Esc 关闭后画面回到原样
+#[test]
+fn result_grid_double_click_and_enter_open_full_content() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let mut h = result_grid_harness(1100.0, 700.0, false);
+
+    // 先点选一次(让"关掉弹窗后的画面"有选区可比),再隔开双击间隔
+    let at = cell_pos(&h, 1, 2);
+    click_at(&mut h, at);
+    let _ = &at;
+    assert_eq!(result_sel(&h), Some(((1, 2), (1, 2))));
+    h.run_steps(40);
+    let before = h.render().expect("render").into_raw();
+
+    double_click_at(&mut h, at);
+    let open = h.render().expect("render").into_raw();
+    let dark = diff_pixels(&before, &open, 2200, (0, 0, 2200, 1400));
+    assert!(dark > 300_000, "双击应打开弹窗(整幅压暗),差异像素 {dark}");
+
+    key_once(&mut h, egui::Key::Escape, plain);
+    let closed = h.render().expect("render").into_raw();
+    assert_eq!(closed, before, "Esc 关闭弹窗后应回到原样");
+
+    // 回车同样打开
+    key_once(&mut h, egui::Key::Enter, plain);
+    let open2 = h.render().expect("render").into_raw();
+    assert!(
+        diff_pixels(&closed, &open2, 2200, (0, 0, 2200, 1400)) > 300_000,
+        "回车也应打开弹窗"
+    );
+    key_once(&mut h, egui::Key::Escape, plain);
+    assert_eq!(h.render().expect("render").into_raw(), before);
+}
+
+/// 右键菜单:右键改选该格;复制整行 / 复制选区(带列名)/ 复制单元格。
+/// 右键落在多格选区内时保留选区,菜单作用于整个选区
+#[test]
+fn result_grid_context_menu_copies_row_and_selection() {
+    use egui_kittest::kittest::Queryable as _;
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = result_grid_harness(1100.0, 700.0, false);
+
+    // 右键 role 列第 2 行 → 菜单 → 复制整行
+    right_click_cell(&mut h, 1, 1);
+    assert_eq!(result_sel(&h), Some(((1, 1), (1, 1))), "右键改选该格");
+    assert!(
+        h.query_by_label("复制整行 (TSV)").is_some(),
+        "右键菜单应打开"
+    );
+    {
+        let node = h.get_by_label("复制整行 (TSV)");
+        node.simulate_click();
+    }
+    assert_eq!(
+        drain_copies(&mut h, 6),
+        vec!["2\trole_1\t角色 1\t2\t1731383330".to_string()]
+    );
+
+    // 拖出 2×2 选区后在其中右键:选区保留,菜单给"复制选区"
+    drag_cells(&mut h, (0, 1), (1, 2));
+    assert_eq!(result_sel(&h), Some(((0, 1), (1, 2))));
+    right_click_cell(&mut h, 1, 2);
+    assert_eq!(
+        result_sel(&h),
+        Some(((0, 1), (1, 2))),
+        "右键落在选区内不改变选区"
+    );
+    assert!(
+        h.query_by_label("复制选区(带列名)").is_some(),
+        "多格选区的菜单应有带列名复制"
+    );
+    {
+        let node = h.get_by_label("复制选区(带列名)");
+        node.simulate_click();
+    }
+    assert_eq!(
+        drain_copies(&mut h, 6),
+        vec!["role\trole_name\nrole_0\tNULL\nrole_1\t角色 1".to_string()]
+    );
+
+    // 菜单用完焦点还回网格:方向键接着能用(此前菜单按钮把焦点拿走,键盘导航就此失效)
+    assert!(h.query_by_label("复制选区").is_none(), "动作后菜单应关闭");
+    // 选区当前格在第 2 行的 role_name:按 ↓ 收拢并移到第 3 行
+    key_once(&mut h, egui::Key::ArrowDown, egui::Modifiers::NONE);
+    assert_eq!(
+        result_sel(&h),
+        Some(((2, 2), (2, 2))),
+        "菜单关了之后方向键应移动选区"
+    );
+
+    // Esc 关掉菜单(没点任何项)后,键盘同样可用
+    right_click_cell(&mut h, 2, 1);
+    assert!(h.query_by_label("复制单元格").is_some(), "菜单应再次打开");
+    key_once(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(h.query_by_label("复制单元格").is_none(), "Esc 关闭菜单");
+    key_once(&mut h, egui::Key::ArrowRight, egui::Modifiers::NONE);
+    assert_eq!(
+        result_sel(&h),
+        Some(((2, 2), (2, 2))),
+        "Esc 关掉菜单后方向键应移动选区"
+    );
+}
+
+/// 可编辑结果集(单表带主键):回车编辑、提交后移到下一行、直接打字即编辑、Esc 取消、
+/// Delete 置 NULL(暂存)、⌘V 整块粘贴。都只是暂存改动,保存前不碰数据库
+#[test]
+fn query_grid_edit_by_keyboard_and_paste() {
+    use egui_kittest::kittest::Queryable as _;
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let mut h = result_grid_harness(1100.0, 700.0, true);
+    assert!(q_snap(&h).changes.is_empty());
+
+    // 点选后回车进入编辑,编辑框带着原值
+    click_cell(&mut h, 0, 1);
+    key_once(&mut h, egui::Key::Enter, plain);
+    let s = q_snap(&h);
+    assert_eq!(s.editing, Some((0, 1)));
+    assert_eq!(s.draft, "role_0");
+    type_into(&mut h, "!");
+    assert_eq!(q_snap(&h).draft, "role_0!");
+    // 再回车:提交,选中格移到下一行
+    key_once(&mut h, egui::Key::Enter, plain);
+    let s = q_snap(&h);
+    assert_eq!(s.editing, None);
+    assert_eq!(
+        s.changes,
+        vec![(0, "role".to_string(), Some("role_0!".to_string()))]
+    );
+    assert_eq!(result_sel(&h), Some(((1, 1), (1, 1))), "回车后移到下一行");
+
+    // 直接打字 = 从选中格开始编辑,首字符就是打的内容;Esc 取消,不留改动
+    type_into(&mut h, "Z");
+    let s = q_snap(&h);
+    assert_eq!(s.editing, Some((1, 1)));
+    assert_eq!(s.draft, "Z");
+    key_once(&mut h, egui::Key::Escape, plain);
+    let s = q_snap(&h);
+    assert_eq!(s.editing, None);
+    assert_eq!(s.changes.len(), 1, "Esc 不提交");
+
+    // Esc 之后网格继续接管键盘:Delete 把选中格置 NULL(暂存)。
+    // 此前"改成 NULL"后网格里仍显示旧值,只有底色提示
+    key_once(&mut h, egui::Key::Delete, plain);
+    let s = q_snap(&h);
+    assert!(
+        s.changes.contains(&(1, "role".to_string(), None)),
+        "{:?}",
+        s.changes
+    );
+    // 显示值确实是 NULL:右键 → 复制单元格 得到 "NULL"
+    right_click_cell(&mut h, 1, 1);
+    {
+        let node = h.get_by_label("复制单元格");
+        node.simulate_click();
+    }
+    assert_eq!(drain_copies(&mut h, 6), vec!["NULL".to_string()]);
+
+    // Tab 到右边一格;⌘V 把 2×2 的块贴到以它为左上角的位置
+    key_once(&mut h, egui::Key::Tab, plain);
+    assert_eq!(result_sel(&h), Some(((1, 2), (1, 2))));
+    h.input_mut()
+        .events
+        .push(egui::Event::Paste("甲\t乙\n丙\t丁".to_string()));
+    h.step();
+    h.step();
+    let s = q_snap(&h);
+    for (r, col, v) in [
+        (1, "role_name", "甲"),
+        (1, "status", "乙"),
+        (2, "role_name", "丙"),
+        (2, "status", "丁"),
+    ] {
+        assert!(
+            s.changes
+                .contains(&(r, col.to_string(), Some(v.to_string()))),
+            "({r}, {col}) = {v}:{:?}",
+            s.changes
+        );
+    }
+    assert_eq!(result_sel(&h), Some(((1, 2), (2, 3))), "贴完选中贴入的区域");
+    assert_eq!(
+        s.changes.len(),
+        6,
+        "贴入的 4 格都与原值不同:{:?}",
+        s.changes
+    );
+    assert_eq!(s.editing, None);
+
+    // 贴进与原值相同的值:不记改动(第 4 行的 status 原本就是 1)
+    click_cell(&mut h, 3, 3);
+    h.input_mut()
+        .events
+        .push(egui::Event::Paste("1".to_string()));
+    h.step();
+    h.step();
+    assert_eq!(q_snap(&h).changes.len(), 6, "与原值相同的格不记改动");
+}
+
+/// 只读结果集(没有回写资格):打字/Delete/⌘V 都不产生改动,也不进编辑
+#[test]
+fn read_only_result_grid_ignores_edit_keys() {
+    use egui_kittest::kittest::Queryable as _;
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let mut h = result_grid_harness(1100.0, 700.0, false);
+    click_cell(&mut h, 0, 1);
+    type_into(&mut h, "x");
+    key_once(&mut h, egui::Key::Delete, plain);
+    h.input_mut()
+        .events
+        .push(egui::Event::Paste("a\tb".to_string()));
+    h.step();
+    h.step();
+    let s = q_snap(&h);
+    assert!(
+        s.changes.is_empty() && s.editing.is_none(),
+        "只读结果集不应有改动"
+    );
+    // 右键菜单里没有"编辑此格"
+    right_click_cell(&mut h, 0, 1);
+    assert!(
+        h.query_by_label("编辑此格").is_none(),
+        "只读结果集的菜单不应有编辑项"
+    );
+}
+
+/// 快速连点两个不同的格不算双击:egui 自带的双击判定只看间隔不看位置,
+/// 照它的话"快点两格选一选"就会弹出"查看完整内容"
+#[test]
+fn result_grid_fast_clicks_on_different_cells_are_not_double_click() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = result_grid_harness(1100.0, 700.0, false);
+
+    click_cell(&mut h, 0, 1);
+    click_cell(&mut h, 1, 2);
+    click_cell(&mut h, 2, 3);
+    assert_eq!(result_sel(&h), Some(((2, 3), (2, 3))), "每次点击都改选新格");
+    // 弹窗的"关闭"按钮只在弹窗里出现
+    assert!(
+        h.query_by_label("关闭").is_none(),
+        "连点三个不同的格不应弹窗"
+    );
+
+    // 拖选完马上点回起点也不算双击
+    drag_cells(&mut h, (3, 1), (4, 2));
+    click_cell(&mut h, 3, 1);
+    assert_eq!(result_sel(&h), Some(((3, 1), (3, 1))));
+    assert!(h.query_by_label("关闭").is_none(), "拖选后点回起点不应弹窗");
+
+    // 可编辑结果集同理:连点两格不该进编辑
+    let mut h = result_grid_harness(1100.0, 700.0, true);
+    click_cell(&mut h, 0, 1);
+    click_cell(&mut h, 1, 2);
+    assert_eq!(q_snap(&h).editing, None, "连点两格不应进入编辑");
+}
+
+/// 双击要落在同一格上:egui 自带的双击判定只看间隔不看位置,照它的话"快速连点两格"
+/// 的第二下就会直接进入编辑
+#[test]
+fn cell_double_click_needs_same_cell() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = keyboard_grid_harness(8);
+    // 先点 role 列第一行,紧接着点同列第二行
+    click_grid(&mut h, egui::pos2(380.0, 182.0));
+    assert_eq!(selection(&h).0, Some((0, 1)));
+    click_grid(&mut h, egui::pos2(380.0, 212.0));
+    assert_eq!(selection(&h).0, Some((1, 1)));
+    assert_eq!(snap(&h).editing, None, "连点两个不同的格不应进入编辑");
+
+    // 隔开双击间隔后,同一格连点两下:进入编辑
+    h.run_steps(40);
+    let at = egui::pos2(380.0, 182.0);
+    click_grid(&mut h, at);
+    click_grid(&mut h, at);
+    assert_eq!(snap(&h).editing, Some((0, 1)), "同一格双击应进入编辑");
+}
+
+/// 横向滚轮:指针停在网格上,滚 `dx` 后移开
+fn wheel_x(h: &mut ResultHarness<'_>, dx: f32) {
+    h.input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(640.0, 620.0)));
+    h.step();
+    h.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-dx, 0.0),
+        modifiers: Default::default(),
+    });
+    h.step();
+    h.step();
+    h.input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
+    h.step();
+    h.step();
+}
+
+/// 冻结列 + 横向滚动后,钉住的列盖在滚动区上面:点它选中的是钉住的那格(不是底下滚到
+/// 同一位置的别的列),⌘C 复制它的值;点行号选整行;冻结区右侧仍是滚动区
+#[test]
+fn result_grid_frozen_overlay_keeps_selection_semantics() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let filler = "value-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    let mut h = result_grid_harness(1280.0, 780.0, false);
+    {
+        let mut cell = h.state().borrow_mut();
+        let q = cell.as_mut().unwrap();
+        q.results[0] = shujing_core::ExecResult {
+            columns: (0..6).map(|i| format!("col_{i}")).collect(),
+            rows: (0..14)
+                .map(|i| (0..6).map(|_| Some(format!("{filler}-{i}"))).collect())
+                .collect(),
+            affected: 0,
+            truncated: false,
+            elapsed_ms: 12,
+            column_types: vec![],
+        };
+        q.q_frozen = 1;
+    }
+    h.run_steps(4);
+    wheel_x(&mut h, 1000.0);
+    // 滚轮后滚动还有一小段尾巴,等它停稳再量
+    h.run_steps(30);
+    assert!(result_hscroll(&h) > 0.5, "应已横向滚动,冻结覆盖层出现");
+
+    let (ws, left, body_top) = crate::grid::debug_geom(&h.ctx, RG_ID).expect("网格已渲染");
+    let row_y = |r: usize| body_top + crate::theme::row_h() * (r as f32 + 0.5);
+    // 钉住的第 0 列第 2 行
+    let pinned = egui::pos2(left + ws[0] + ws[1] / 2.0, row_y(1));
+    click_at(&mut h, pinned);
+    assert_eq!(result_sel(&h), Some(((1, 0), (1, 0))), "点到的是钉住的那格");
+    assert_eq!(key_once(&mut h, egui::Key::C, cmd()), format!("{filler}-1"));
+
+    // 钉住的行号:选中整行(6 列)
+    let at = egui::pos2(left + crate::theme::ROWNO_W / 2.0, row_y(2));
+    click_at(&mut h, at);
+    assert_eq!(result_sel(&h), Some(((2, 0), (2, 5))));
+
+    // 冻结区右侧:滚动区里的列(按点击当下的偏移反推是第几列)
+    let off = result_hscroll(&h);
+    let col = ((ws[1] + 40.0 + off) / ws[2]) as usize;
+    assert!(col >= 1, "冻结区右侧不该再是第 0 列");
+    let scrolled = egui::pos2(left + ws[0] + ws[1] + 40.0, row_y(3));
+    click_at(&mut h, scrolled);
+    assert_eq!(result_sel(&h), Some(((3, col), (3, col))));
+    assert_eq!(key_once(&mut h, egui::Key::C, cmd()), format!("{filler}-3"));
+}
+
+

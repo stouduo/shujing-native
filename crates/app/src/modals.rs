@@ -3587,6 +3587,7 @@ pub fn draw_parquet_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         &preview.column_types,
                         &preview.rows,
                         &mut frozen,
+                        None,
                     );
                 });
             if preview.truncated {
