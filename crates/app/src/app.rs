@@ -35,6 +35,9 @@ enum SessionTab {
         /// 冻结的前 N 个可见列(旧档缺省 0)
         #[serde(default)]
         frozen: usize,
+        /// 列头拖动重排的列顺序(旧档缺省 = 自然顺序)
+        #[serde(default)]
+        col_order: Vec<String>,
     },
     Structure {
         conn: String,
@@ -4321,6 +4324,7 @@ impl ShujingApp {
                     table: x.table.clone(),
                     database: x.database.clone(),
                     frozen: x.frozen_vis,
+                    col_order: x.col_order.clone(),
                 }),
                 TabKind::Structure(x) => tabs.push(SessionTab::Structure {
                     conn: x.conn_id.clone(),
@@ -4416,9 +4420,11 @@ impl ShujingApp {
                     table,
                     database,
                     frozen,
+                    col_order,
                 } => {
                     let mut tab = TableTab::new(conn.clone(), table.clone(), database.clone());
                     tab.frozen_vis = *frozen;
+                    tab.col_order = col_order.clone();
                     let id = format!("t{}", rand_suffix());
                     self.tabs.push(Tab {
                         id: id.clone(),

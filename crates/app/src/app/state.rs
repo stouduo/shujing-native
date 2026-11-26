@@ -117,6 +117,19 @@ pub struct TableTab {
     /// 初始列宽缓存(列数变化才重算):启发式采样每帧重算是纯浪费,
     /// 且该值只作 Column::initial 的首帧值,行数据变化不影响
     pub base_widths: Vec<f32>,
+    /// 列顺序(列头拖动重排;空 = 自然顺序)。存全量列名排列,隐藏列过滤在 vis_idx,
+    /// schema 新增列不在其中时排尾部
+    pub col_order: Vec<String>,
+    /// 列头拖拽进行中:(源可视列下标, 指针相对列左缘的偏移)。画插入指示线,松开落位
+    pub col_drag: Option<(usize, f32)>,
+    /// 重排落位后整排按适配宽重画一帧(egui_extras 的宽度按位置存,拖宽值不跟列走;
+    /// 一次性全部按内容重排最可预期),用后即清
+    pub col_refit: bool,
+    /// 列缘双击自适应:下一帧该列按适配宽画一帧(Column::exact 会把宽度写进
+    /// egui_extras 的状态持久化),用后即清
+    pub col_autofit: Option<usize>,
+    /// 列缘双击判定:上一次按在哪个列缘(边界下标, 时刻, 指针 x——双击要落在同一位置)
+    pub edge_click: Option<(usize, f64, f32)>,
 }
 
 impl TableTab {
@@ -157,6 +170,11 @@ impl TableTab {
             orig_pks: Default::default(),
             rows_gen: 0,
             base_widths: vec![],
+            col_order: vec![],
+            col_drag: None,
+            col_refit: false,
+            col_autofit: None,
+            edge_click: None,
             filter_bar_open: false,
             filter_mode: 0,
             conds: vec![],

@@ -6531,3 +6531,152 @@ fn result_grid_frozen_overlay_keeps_selection_semantics() {
 }
 
 
+
+// ---------------------------------------------------------------- 数据页:双击列缘自适应 + 列头拖动重排
+
+fn data_geom(h: &GridHarness<'_>) -> (Vec<f32>, f32, f32) {
+    let tab_id = {
+        let app = h.state().borrow();
+        app.tabs[2].id.clone()
+    };
+    let (ws, left, top) =
+        table_view::debug_data_geom(&h.ctx, &tab_id).expect("数据页已渲染");
+    (ws, left, top.expect("表头顶已知"))
+}
+
+/// 列缘中心 x(边界 b 左侧是可视列 b)
+fn edge_x(h: &GridHarness<'_>, b: usize) -> f32 {
+    let (ws, left, _) = data_geom(h);
+    let mut x = left + if ws.first().is_some() { ws[0] } else { 0.0 };
+    for k in 0..b {
+        x += ws[1 + k];
+    }
+    x
+}
+
+/// 表头带中心 y
+fn header_y(h: &GridHarness<'_>) -> f32 {
+    let (_, _, top) = data_geom(h);
+    top + crate::theme::data_header_h() / 2.0
+}
+
+/// 数据页单元格中心的逻辑坐标(按上一帧真实布局算)
+fn data_cell(h: &GridHarness<'_>, r: usize, c: usize) -> egui::Pos2 {
+    let (ws, left, top) = data_geom(h);
+    let mut x = left + ws[0];
+    for k in 0..c {
+        x += ws[1 + k];
+    }
+    egui::pos2(x + ws[1 + c] / 2.0, top + crate::theme::data_header_h() + crate::theme::row_h() * (r as f32 + 0.5))
+}
+
+fn col_widths(h: &GridHarness<'_>) -> Vec<f32> {
+    let app = h.state().borrow();
+    let t = app.tabs[2].table_data().unwrap();
+    t.base_widths.clone()
+}
+
+fn col_order(h: &GridHarness<'_>) -> Vec<String> {
+    let app = h.state().borrow();
+    let t = app.tabs[2].table_data().unwrap();
+    t.col_order.clone()
+}
+
+/// 双击列缘:该列按适配宽重画(先手动拖宽制造差异,再双击收回)
+#[test]
+fn data_grid_double_click_edge_fits_column_width() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = keyboard_grid_harness(8);
+    h.run_steps(4);
+    // 拖 id|role 边界(边界 1)向右 60:role 列被手动拖宽
+    let before: Vec<f32> = col_widths(&h);
+    let x0 = edge_x(&mut h, 1);
+    let y = 300.0; // 表体中部(列缘手柄纵贯全表)
+    drag_at(&mut h, egui::pos2(x0, y), egui::pos2(x0 + 60.0, y));
+    let after_drag: Vec<f32> = col_widths(&h);
+    assert!(
+        after_drag.len() == before.len(),
+        "拖宽不改变列数: {:?} vs {:?}",
+        after_drag,
+        before
+    );
+    // 双击同一列缘:role 列收回到适配宽
+    h.run_steps(40); // 隔开与拖动的双击间隔
+    let x1 = edge_x(&mut h, 1);
+    click_grid(&mut h, egui::pos2(x1, y));
+    click_grid(&mut h, egui::pos2(x1, y));
+    h.run_steps(6);
+    let (rows, columns) = {
+        let app = h.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        (t.rows.clone(), t.columns.clone())
+    };
+    let fit = table_view::fit_width(&rows, &columns, 1);
+    let (order, role_w) = {
+        let app = h.state().borrow();
+        let t = app.tabs[2].table_data().unwrap();
+        let order: Vec<String> = if t.col_order.is_empty() {
+            t.columns.clone()
+        } else {
+            t.col_order.clone()
+        };
+        let tab_id = app.tabs[2].id.clone();
+        let ws_now = table_view::debug_data_geom(&h.ctx, &tab_id)
+            .expect("已渲染")
+            .0;
+        let role_pos = order.iter().position(|c| c == "role").expect("role 列在");
+        (order, ws_now[1 + role_pos])
+    };
+    assert!(
+        (role_w - fit).abs() < 1.0,
+        "双击后 role 列宽应回到适配宽 {fit}:实际 {role_w}(拖宽后 {:?})",
+        after_drag
+    );
+}
+
+/// 列头拖动重排:role 列拖到最后,列序持久(col_order)、复制跟随新位置;
+/// 拖动是列操作,不改变选区语义(落位后可视坐标失效,选区清空)
+#[test]
+fn data_grid_drag_header_reorders_columns() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let cmd = egui::Modifiers { command: true, ..Default::default() };
+    let mut h = keyboard_grid_harness(8);
+    h.run_steps(4);
+
+    // 基线:role 列在第 2 位,复制得到 admin(该列第一行的值)
+    let pos = data_cell(&h, 0, 1);
+    click_grid(&mut h, pos);
+    assert_eq!(selection(&h).0, Some((0, 1)));
+    assert_eq!(key_once(&mut h, egui::Key::C, cmd), "admin");
+
+    // 从 role 列头(可视位置 1)拖到边界 3 之后:role 落在可视位置 2
+    let hy = header_y(&mut h);
+    let src = edge_x(&mut h, 1) + 40.0; // role 列头中部
+    let dst = edge_x(&mut h, 3) + 40.0;
+    drag_at(&mut h, egui::pos2(src, hy), egui::pos2(dst, hy));
+
+    let order = col_order(&h);
+    assert!(!order.is_empty(), "拖动后应固化列顺序");
+    assert_eq!(&order[0], "id", "其余列保持相对顺序: {order:?}");
+    assert_eq!(&order[1], "role_name", "role 越过的列依次前移: {order:?}");
+    assert_eq!(&order[2], "role", "role 落在可视位置 2: {order:?}");
+    // 落位后可视坐标失效,选区清空
+    assert_eq!(selection(&h), (None, None), "重排后选区清空");
+
+    // 复制跟随新位置:role 现在是可视位置 2
+    let pos = data_cell(&h, 0, 2);
+    click_grid(&mut h, pos);
+    assert_eq!(key_once(&mut h, egui::Key::C, cmd), "admin", "复制跟随重排后的列");
+
+    // 无位移的列头点击仍走排序(拖拽状态原地清掉,不产生重排)
+    let hy2 = header_y(&mut h);
+    let before = col_order(&h);
+    {
+        let (ws, left, _) = data_geom(&h);
+        let x = left + ws[0] + ws[1] + ws[2] / 2.0;
+        click_at(&mut h, egui::pos2(x, hy2));
+    }
+    assert_eq!(col_order(&h), before, "原地点击列头不重排");
+}
+
