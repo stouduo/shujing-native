@@ -139,7 +139,6 @@ pub enum TabAction {
         tab_id: String,
         values: Vec<(String, String)>,
     },
-    ToggleTheme,
     SaveDesigner {
         tab_id: String,
     },
@@ -243,7 +242,6 @@ pub enum TabAction {
         text: String,
         toast: String,
     },
-    OpenSettings,
     PreviewParquet,
     OpenTransfer {
         conn_id: String,
@@ -443,7 +441,6 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
     let mut activate: Option<usize> = None;
     let mut close: Option<usize> = None;
     let mut close_set: Vec<usize> = Vec::new();
-    let mut new_query = false;
     // 拖拽排序:(拖拽标签索引, 累计水平位移)
     let mut drag: Option<(usize, f32)> =
         ctx.memory(|m| m.data.get_temp::<(usize, f32)>(egui::Id::new("tab-drag")));
@@ -481,7 +478,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
             // 标签再多也能直接点到,不需要先滚到末尾。
             let bar_h = theme::tabbar_h() - 1.0;
             let full_w = ui.available_width();
-            let controls_w = 92.0 + 30.0 + 8.0;
+            let controls_w = 92.0 + 8.0;
             let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(full_w, bar_h), Sense::hover());
             let tabs_rect = egui::Rect::from_min_size(
                 bar_rect.min,
@@ -739,7 +736,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 active_rect = Some(tab_rect);
                             }
                         }
-                        // 全部标签/＋固定到右侧(见下方 controls_ui),不再放在滚动内容里
+                        // “全部标签”固定到右侧(见下方 controls_ui),不放在滚动内容里
                     });
                     if active_changed {
                         if let Some(rect) = active_rect {
@@ -767,20 +764,13 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                 scroll_out.content_size.x > scroll_out.inner_rect.width() + 0.5,
                 std::sync::atomic::Ordering::Relaxed,
             );
-            // 固定右侧控件:＋ 和“全部标签”
+            // 固定右侧控件:“全部标签”。新建查询只有顶部工具栏那一个入口(⌘T),
+            // 这里原来的 ＋ 是重复的
             let mut controls_ui = ui.new_child(
                 egui::UiBuilder::new()
                     .max_rect(controls_rect)
                     .layout(Layout::right_to_left(Align::Center)),
             );
-            let (prect, presp) =
-                controls_ui.allocate_exact_size(egui::vec2(28.0, bar_h), Sense::click());
-            let pcol = if presp.hovered() { p.text } else { p.muted };
-            icons::paint_plus(controls_ui.painter(), prect.center(), 6.5, pcol);
-            presp.clone().on_hover_text(ui_kit::t!("New query tab (⌘T)", "新建查询标签 (⌘T)"));
-            if presp.clicked() {
-                new_query = true;
-            }
             controls_ui.menu_button(
                 RichText::new(ui_kit::t!("▾ All tabs", "▾ 全部标签")).size(theme::fs_px(11.0)).color(p.text2),
                 |ui| {
@@ -883,9 +873,6 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
     }
     if let Some(i) = activate {
         app.active_tab = i;
-    }
-    if new_query {
-        app.open_query_tab(None);
     }
 }
 
@@ -1163,6 +1150,8 @@ pub(crate) fn draw_table_view(
 
     let mut toolbar_copy: Option<String> = None;
     let mut toolbar_menu: Option<TabAction> = None;
+    // 页面工具栏「导出」菜单选中的格式(0 CSV / 1 Excel / 2 SQL)
+    let mut export: Option<u8> = None;
     // ---- 内容头(34pt,DBX 式面包屑):连接 / 库 › 表 · 字段数与状态;右侧 表结构 / 编辑表结构
     egui::TopBottomPanel::top("table_head")
         .show_separator_line(false)
@@ -1209,10 +1198,11 @@ pub(crate) fn draw_table_view(
                         }
                         None => ui_kit::t!("Read-only", "只读").to_string(),
                     }
-                } else if tab.pk_loaded {
-                    ui_kit::t!("Double-click to edit · PK", "双击编辑 · 有主键").to_string()
-                } else {
+                } else if !tab.pk_loaded {
                     ui_kit::t!("Loading structure…", "读取结构中…").to_string()
+                } else {
+                    // 可编辑是常态,不写出来(以前这里常驻"双击编辑 · 有主键")
+                    String::new()
                 };
                 ui.label(
                     RichText::new(format!(
@@ -1223,7 +1213,7 @@ pub(crate) fn draw_table_view(
                     .size(theme::fs_px(11.5))
                     .color(p.muted),
                 );
-                if !compact_head {
+                if !compact_head && !state.is_empty() {
                     ui.label(RichText::new(format!("· {state}")).size(theme::fs_px(11.5)).color(p.muted));
                 }
                 if let Some(err) = &tab.error {
@@ -1236,8 +1226,9 @@ pub(crate) fn draw_table_view(
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    // 这两个入口以前只在侧栏右键菜单里:表页直达(对齐 DBX 的"编辑表结构")
-                    if theme::ghost_button(ui, ui_kit::t!("Edit Structure", "编辑表结构")).clicked() {
+                    // 这两个入口以前只在侧栏右键菜单里:表页直达。文案与侧栏右键菜单统一叫
+                    // "设计表"(此前这里叫"编辑表结构"、结构页叫"设计",同一功能三种叫法)
+                    if theme::ghost_button(ui, ui_kit::t!("Design Table", "设计表")).clicked() {
                         actions.push(TabAction::OpenDesigner {
                             conn_id: tab.conn_id.clone(),
                             table: tab.table.clone(),
@@ -1361,11 +1352,11 @@ pub(crate) fn draw_table_view(
                     let conn_is_mongo = conns
                         .iter()
                         .any(|c| c.id == tab.conn_id && c.db_type == shujing_core::DbType::Mongo);
-                    let conn_is_sqlite = conns
-                        .iter()
-                        .any(|c| c.id == tab.conn_id && c.db_type == shujing_core::DbType::Sqlite);
                     let more =
                         ui.menu_button(RichText::new("···").size(theme::fs_px(15.0)).color(p.text2), |ui| {
+                            // 这里只放"这一页怎么看":列显隐与复制格式。全局功能(数据传输/对比、
+                            // 外观、设置)在顶部应用工具栏,导出在页面工具栏的「导出」,整行详情在
+                            // 单元格右键菜单——此前各有一份,是重复入口
                             ui.set_min_width(180.0);
                             if compact {
                                 if ui.button(ui_kit::t!("＋ Add Row", "＋ 新增行")).clicked() {
@@ -1377,93 +1368,7 @@ pub(crate) fn draw_table_view(
                                     );
                                     ui.close_menu();
                                 }
-                                let adv_label = if tab.filter_bar_open {
-                                    ui_kit::t!("Hide Advanced Filter", "收起高级筛选")
-                                } else if tab.applied_where.is_some() {
-                                    ui_kit::t!("Advanced Filter (applied)…", "高级筛选(已应用)…")
-                                } else {
-                                    ui_kit::t!("Advanced Filter…", "高级筛选…")
-                                };
-                                if ui.button(adv_label).clicked() {
-                                    tab.filter_bar_open = !tab.filter_bar_open;
-                                    ui.close_menu();
-                                }
                                 ui.separator();
-                            }
-                            if ui
-                                .button(ui_kit::t!("View Row Details", "查看整行详情"))
-                                .clicked()
-                            {
-                                tab.detail = true;
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button(ui_kit::t!("Export CSV", "导出 CSV")).clicked() {
-                                actions.push(TabAction::ExportCsv {
-                                    tab_id: tab_id_s.clone(),
-                                });
-                                ui.close_menu();
-                            }
-                            if ui
-                                .button(ui_kit::t!("Export Excel (.xlsx)", "导出 Excel(.xlsx)"))
-                                .clicked()
-                            {
-                                actions.push(TabAction::ExportXlsx {
-                                    suggest: format!("{}.xlsx", tab.table),
-                                    columns: tab.columns.clone(),
-                                    rows: tab.rows.clone(),
-                                });
-                                ui.close_menu();
-                            }
-                            if ui.button(ui_kit::t!("Export SQL", "导出 SQL")).clicked() {
-                                actions.push(TabAction::ExportSql {
-                                    tab_id: tab_id_s.clone(),
-                                });
-                                ui.close_menu();
-                            }
-                            if ui
-                                .button(ui_kit::t!("Preview Parquet File…", "预览 Parquet 文件…"))
-                                .clicked()
-                            {
-                                toolbar_menu = Some(TabAction::PreviewParquet);
-                                ui.close_menu();
-                            }
-                            if !conn_is_mongo && !conn_is_sqlite {
-                                if ui
-                                    .button(ui_kit::t!("Transfer Data to…", "数据传输到…"))
-                                    .clicked()
-                                {
-                                    actions.push(TabAction::OpenTransfer {
-                                        conn_id: tab.conn_id.clone(),
-                                        db: tab.database.clone(),
-                                        table: tab.table.clone(),
-                                    });
-                                    ui.close_menu();
-                                }
-                            }
-                            if !conn_is_mongo {
-                                if ui
-                                    .button(ui_kit::t!("Compare Data…", "数据对比…"))
-                                    .clicked()
-                                {
-                                    actions.push(TabAction::OpenDataDiff {
-                                        conn_id: tab.conn_id.clone(),
-                                        db: tab.database.clone(),
-                                        table: tab.table.clone(),
-                                    });
-                                    ui.close_menu();
-                                }
-                            }
-                            if ui
-                                .button(ui_kit::t!("Compare Structure…", "结构对比…"))
-                                .clicked()
-                            {
-                                actions.push(TabAction::OpenSchemaDiff {
-                                    conn_id: tab.conn_id.clone(),
-                                    db: tab.database.clone(),
-                                    table: tab.table.clone(),
-                                });
-                                ui.close_menu();
                             }
                             // Mongo 文档操作(只读浏览之外的 v2 编辑)
                             if conn_is_mongo {
@@ -1533,7 +1438,7 @@ pub(crate) fn draw_table_view(
                                 }
                             }
                             ui.separator();
-                            if ui.button(ui_kit::t!("Copy as TSV", "复制为 TSV")).clicked() {
+                            if ui.button(ui_kit::t!("Copy page as TSV", "复制本页为 TSV")).clicked() {
                                 toolbar_copy = Some(export_rows_text(
                                     tab.columns.as_slice(),
                                     tab.rows.as_slice(),
@@ -1542,7 +1447,7 @@ pub(crate) fn draw_table_view(
                                 ui.close_menu();
                             }
                             if ui
-                                .button(ui_kit::t!("Copy as Markdown", "复制为 Markdown"))
+                                .button(ui_kit::t!("Copy page as Markdown", "复制本页为 Markdown"))
                                 .clicked()
                             {
                                 toolbar_copy = Some(export_rows_markdown(
@@ -1552,7 +1457,7 @@ pub(crate) fn draw_table_view(
                                 ui.close_menu();
                             }
                             if ui
-                                .button(ui_kit::t!("Copy as JSON", "复制为 JSON"))
+                                .button(ui_kit::t!("Copy page as JSON", "复制本页为 JSON"))
                                 .clicked()
                             {
                                 toolbar_copy = Some(export_rows_json(
@@ -1562,7 +1467,7 @@ pub(crate) fn draw_table_view(
                                 ui.close_menu();
                             }
                             if ui
-                                .button(ui_kit::t!("Copy as INSERT", "复制为 INSERT 语句"))
+                                .button(ui_kit::t!("Copy page as INSERT", "复制本页为 INSERT 语句"))
                                 .clicked()
                             {
                                 toolbar_copy = Some(export_rows_inserts(
@@ -1614,30 +1519,44 @@ pub(crate) fn draw_table_view(
                                     tab.editing = None;
                                 }
                             }
-                            ui.separator();
-                            if ui
-                                .button(if theme::is_dark() {
-                                    ui_kit::t!("Light Appearance", "浅色外观")
-                                } else {
-                                    ui_kit::t!("Dark Appearance", "深色外观")
-                                })
-                                .clicked()
-                            {
-                                actions.push(TabAction::ToggleTheme);
-                                ui.close_menu();
-                            }
-                            if ui
-                                .button(ui_kit::t!("Settings…", "设置…"))
-                                .clicked()
-                            {
-                                // 经动作中转(draw_table_view 无 self)
-                                toolbar_menu = Some(TabAction::OpenSettings);
-                                ui.close_menu();
-                            }
                             // 每页行数已移至底栏快捷设置
                         });
                     more.response
                         .on_hover_text(ui_kit::t!("More actions", "更多操作"));
+
+                    // 导出:页面工具栏这一处(原先底栏和 ··· 菜单各有一份)
+                    ui.menu_button(
+                        RichText::new(format!("{} ▾", ui_kit::t!("Export", "导出")))
+                            .size(theme::fs_px(12.0))
+                            .color(p.text2),
+                        |ui| {
+                            ui.set_min_width(170.0);
+                            if ui.button(ui_kit::t!("Export CSV", "导出 CSV")).clicked() {
+                                export = Some(0);
+                                ui.close_menu();
+                            }
+                            if ui
+                                .button(ui_kit::t!("Export Excel (.xlsx)", "导出 Excel(.xlsx)"))
+                                .clicked()
+                            {
+                                export = Some(1);
+                                ui.close_menu();
+                            }
+                            if ui.button(ui_kit::t!("Export SQL", "导出 SQL")).clicked() {
+                                export = Some(2);
+                                ui.close_menu();
+                            }
+                            if ui
+                                .button(ui_kit::t!("Preview Parquet File…", "预览 Parquet 文件…"))
+                                .clicked()
+                            {
+                                toolbar_menu = Some(TabAction::PreviewParquet);
+                                ui.close_menu();
+                            }
+                        },
+                    )
+                    .response
+                    .on_hover_text(ui_kit::t!("Export", "导出"));
 
                     if !tab.loading
                         && icons::refresh(ui, p.text2)
@@ -1681,7 +1600,6 @@ pub(crate) fn draw_table_view(
     // ---- 底部状态栏(34pt):共 N 行 | 已筛选 | 耗时;右侧翻页
     let mut clear_filter = false;
     let mut page_reload = false;
-    let mut export: Option<u8> = None;
     egui::TopBottomPanel::bottom("table_pager")
         .show_separator_line(false)
         .exact_height(theme::footer_h())
@@ -1796,24 +1714,10 @@ pub(crate) fn draw_table_view(
                     let ((r1, c1), (r2, c2)) = norm_range(r);
                     if r2 > r1 || c2 > c1 {
                         theme::vsep(ui);
-                        let msg = if compact_footer {
-                            if ui_kit::i18n::is_english() {
-                                format!("Selected {}×{}", r2 - r1 + 1, c2 - c1 + 1)
-                            } else {
-                                format!("已选 {}×{}", r2 - r1 + 1, c2 - c1 + 1)
-                            }
-                        } else if ui_kit::i18n::is_english() {
-                            format!(
-                                "Selected {}×{} · Type and press Enter to fill · ⌘C copy · ⌘V paste · Delete for NULL",
-                                r2 - r1 + 1,
-                                c2 - c1 + 1
-                            )
+                        let msg = if ui_kit::i18n::is_english() {
+                            format!("Selected {}×{}", r2 - r1 + 1, c2 - c1 + 1)
                         } else {
-                            format!(
-                                "已选 {}×{} · 输入值回车填充 · ⌘C 复制 · ⌘V 粘贴 · Delete 置 NULL",
-                                r2 - r1 + 1,
-                                c2 - c1 + 1
-                            )
+                            format!("已选 {}×{}", r2 - r1 + 1, c2 - c1 + 1)
                         };
                         ui.label(RichText::new(msg).size(theme::fs_px(11.5)).color(p.accent))
                             .on_hover_text(ui_kit::t!(
@@ -1823,63 +1727,19 @@ pub(crate) fn draw_table_view(
                     }
                 } else if tab.multi_sel.len() > 1 {
                     theme::vsep(ui);
-                    let msg = if compact_footer {
-                        if ui_kit::i18n::is_english() {
-                            format!("Selected {} rows", tab.multi_sel.len())
-                        } else {
-                            format!("已选 {} 行", tab.multi_sel.len())
-                        }
-                    } else if ui_kit::i18n::is_english() {
-                        format!(
-                            "Selected {} rows · ⌘C copy · right-click a row for batch delete",
-                            tab.multi_sel.len()
-                        )
+                    let msg = if ui_kit::i18n::is_english() {
+                        format!("Selected {} rows", tab.multi_sel.len())
                     } else {
-                        format!("已选 {} 行 · ⌘C 复制 · 行右键批量删除", tab.multi_sel.len())
+                        format!("已选 {} 行", tab.multi_sel.len())
                     };
                     ui.label(RichText::new(msg).size(theme::fs_px(11.5)).color(p.accent))
                         .on_hover_text(ui_kit::t!(
                             "⌘C copy · right-click a row for batch delete",
                             "⌘C 复制 · 行右键批量删除"
                         ));
-                } else if tab.selected.is_some() && !compact_footer {
-                    // 单格选中:轻提示键盘操作。用灰色,不像选区提示那样抢眼
-                    theme::vsep(ui);
-                    ui.label(
-                        RichText::new(ui_kit::t!(
-                            "Arrows move · Enter edits · ⌘C copy · ⌘V paste",
-                            "方向键移动 · 回车编辑 · ⌘C 复制 · ⌘V 粘贴"
-                        ))
-                        .size(theme::fs_px(11.5))
-                        .color(p.muted),
-                    );
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    // 导出(DBX 式底栏直达;··· 菜单里仍有同名项)
-                    ui.menu_button(
-                        RichText::new(format!("{} ▾", ui_kit::t!("Export", "导出")))
-                            .size(theme::fs_px(11.5))
-                            .color(p.text2),
-                        |ui| {
-                            ui.set_min_width(150.0);
-                            if ui.button(ui_kit::t!("Export CSV", "导出 CSV")).clicked() {
-                                export = Some(0);
-                                ui.close_menu();
-                            }
-                            if ui
-                                .button(ui_kit::t!("Export Excel (.xlsx)", "导出 Excel(.xlsx)"))
-                                .clicked()
-                            {
-                                export = Some(1);
-                                ui.close_menu();
-                            }
-                            if ui.button(ui_kit::t!("Export SQL", "导出 SQL")).clicked() {
-                                export = Some(2);
-                                ui.close_menu();
-                            }
-                        },
-                    );
                     let total_pages = tab
                         .total
                         .map(|t| (t.div_ceil(tab.page_size as u64) as usize).max(1));
@@ -5249,10 +5109,6 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
         TabAction::OpenSchemaDiff { conn_id, db, table } => {
             app.open_schema_diff(&conn_id, db.as_deref(), &table)
         }
-        TabAction::ToggleTheme => {
-            let dark = !theme::is_dark();
-            app.set_theme_dark(ctx, dark);
-        }
         TabAction::OpenDesigner {
             conn_id,
             table,
@@ -5550,7 +5406,6 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             ctx.copy_text(text);
             app.toast_error(toast);
         }
-        TabAction::OpenSettings => app.settings_open = true,
         TabAction::ReloadDdl { tab_id } => app.load_ddl(&tab_id),
         TabAction::ClearFilterBar { tab_id } => app.clear_filter_bar(&tab_id),
         TabAction::SaveQueryChanges { tab_id } => {
@@ -6983,8 +6838,8 @@ pub(crate) fn draw_empty_state(ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.label(
             RichText::new(ui_kit::t!(
-                "Select a table on the left to start browsing\nor press ⌘T for a new query tab · ⌘⇧L to toggle appearance",
-                "在左侧选择一个表开始浏览\n或按 ⌘T 新建查询标签 · ⌘⇧L 切换外观"
+                "Select a table on the left to start browsing,\nor click \"New Query\" in the toolbar",
+                "在左侧选择一个表开始浏览,或点击顶部「新建查询」"
             ))
             .size(theme::fs_px(12.0))
             .color(p.muted),

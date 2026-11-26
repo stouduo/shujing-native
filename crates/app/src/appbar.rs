@@ -1,7 +1,8 @@
 //! 顶部应用工具栏(40pt,对齐 DBX):应用名 + 主功能直达(新建连接 / 新建查询 / 数据传输 /
 //! 数据对比 / 结构对比 / 插件管理 / 更多),右侧 外观切换 / 设置。
 //!
-//! 此前这些入口散落在侧栏右键菜单、表页 ··· 菜单里——没开标签时连"设置"都点不到。
+//! 全局功能只在这里有一份入口(此前散落在侧栏右键菜单、表页 ··· 菜单里的重复项已删):
+//! 一个功能一个入口,入口放在它作用的层级——对象操作在侧栏右键菜单,页面操作在页面工具栏。
 
 use crate::app::{ShujingApp, TabKind};
 use crate::icons;
@@ -84,10 +85,6 @@ impl ShujingApp {
                             ui.set_min_width(250.0);
                             for (label, a) in [
                                 (
-                                    ui_kit::t!("Settings…", "设置…"),
-                                    7u8,
-                                ),
-                                (
                                     ui_kit::t!(
                                         "Import Connections (DBeaver/Navicat)…",
                                         "导入连接(DBeaver/Navicat)…"
@@ -143,14 +140,15 @@ impl ShujingApp {
         match act {
             Some(0) => self.conn_modal = Some(crate::app::ConnModal::new()),
             Some(1) => self.open_query_tab(None),
-            // 传输/对比需要一张源连接:沿用当前标签(或第一个在线连接)的上下文,表留给弹窗里选
+            // 传输/对比沿用当前标签(或第一个在线连接)的上下文;当前标签是表页时连表名
+            // 一起带上——表页 ··· 菜单里那几个重复入口删掉后,预选表的便利由这里接住
             Some(2..=4) => {
-                if let Some((cid, db)) = ctx_conn {
+                if let Some((cid, db, table)) = ctx_conn {
                     let db = db.unwrap_or_default();
                     match act {
-                        Some(2) => self.open_transfer(&cid, Some(&db), ""),
-                        Some(3) => self.open_data_diff(&cid, Some(&db), ""),
-                        _ => self.open_schema_diff(&cid, Some(&db), ""),
+                        Some(2) => self.open_transfer(&cid, Some(&db), &table),
+                        Some(3) => self.open_data_diff(&cid, Some(&db), &table),
+                        _ => self.open_schema_diff(&cid, Some(&db), &table),
                     }
                 }
             }
@@ -164,12 +162,13 @@ impl ShujingApp {
         }
     }
 
-    /// 全局动作的上下文连接:当前标签的连接优先,否则第一个在线连接(带它展开的库)
-    fn toolbar_ctx(&self) -> Option<(String, Option<String>)> {
+    /// 全局动作的上下文:(连接, 库, 表)。当前标签优先(表页/结构页带表名),否则第一个
+    /// 在线连接(带它展开的库,表名为空)
+    fn toolbar_ctx(&self) -> Option<(String, Option<String>, String)> {
         let tab_ctx = self.tabs.get(self.active_tab).and_then(|t| match &t.kind {
-            TabKind::Table(x) => Some((x.conn_id.clone(), x.database.clone())),
-            TabKind::Query(q) => Some((q.conn_id.clone(), q.database.clone())),
-            TabKind::Structure(s) => Some((s.conn_id.clone(), s.database.clone())),
+            TabKind::Table(x) => Some((x.conn_id.clone(), x.database.clone(), x.table.clone())),
+            TabKind::Query(q) => Some((q.conn_id.clone(), q.database.clone(), String::new())),
+            TabKind::Structure(s) => Some((s.conn_id.clone(), s.database.clone(), s.table.clone())),
             _ => None,
         });
         tab_ctx.or_else(|| {
@@ -180,6 +179,7 @@ impl ShujingApp {
                     (
                         c.id.clone(),
                         self.trees.get(&c.id).and_then(|t| t.expanded_db.clone()),
+                        String::new(),
                     )
                 })
         })

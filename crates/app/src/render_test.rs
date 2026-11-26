@@ -563,6 +563,105 @@ fn render_full_light() {
     });
 }
 
+/// 真实整帧:顶部应用工具栏 + 侧栏 + 标签栏 + 内容。其余"全窗口"快照为了让测试坐标
+/// 不随工具栏变而不画它(坐标按"原逻辑坐标 + CHROME_TOP"写),和用户实际看到的差一排——
+/// 审视觉、做前后对比以这组为准
+fn draw_shell(app: &mut ShujingApp, ctx: &egui::Context) {
+    app.draw_app_toolbar(ctx);
+    draw_app(app, ctx);
+}
+
+/// 整帧夹具:表页按真实加载后的样子补上列类型/注释(表头第二行的小字、悬停注释),
+/// 并回到中性状态(不预置多选行和已应用的筛选)
+fn shell_app(which: &str) -> ShujingApp {
+    let mut app = full_app(which);
+    for tab in app.tabs.iter_mut() {
+        let TabKind::Table(t) = &mut tab.kind else {
+            continue;
+        };
+        let cols: &[(&str, &str, &str)] = if t.table == "backend_role_privilege" {
+            &[
+                ("id", "int unsigned", ""),
+                ("role", "varchar(64)", "角色编码"),
+                ("role_name", "varchar(128)", "角色名称"),
+                ("access_urls", "text", "可访问路径,逗号分隔"),
+                ("status", "tinyint", "1启用 2禁用"),
+                ("created_at", "bigint", "创建时间戳"),
+            ]
+        } else {
+            &[
+                ("campaign", "varchar(128)", "投放计划"),
+                ("channel", "varchar(32)", "渠道"),
+                ("impressions", "bigint unsigned", "曝光"),
+                ("clicks", "bigint unsigned", "点击"),
+                ("ctr", "decimal(6,4)", "点击率"),
+                ("cost_cents", "bigint", "花费(分)"),
+            ]
+        };
+        for (c, ty, cm) in cols {
+            t.col_types.insert((*c).to_string(), (*ty).to_string());
+            if !cm.is_empty() {
+                t.col_comments.insert((*c).to_string(), (*cm).to_string());
+            }
+        }
+        t.multi_sel.clear();
+        t.active_filter = None;
+        t.filter.clear();
+        t.sel_range = None;
+    }
+    app
+}
+
+#[test]
+fn render_shell_dark() {
+    let app = std::cell::RefCell::new(shell_app("role"));
+    render("shell_dark", 1440.0, 900.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_shell(&mut b, ctx);
+    });
+}
+
+#[test]
+fn render_shell_light() {
+    let app = std::cell::RefCell::new(shell_app("campaign"));
+    render("shell_light", 1440.0, 900.0, false, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_shell(&mut b, ctx);
+    });
+}
+
+#[test]
+fn render_shell_query() {
+    let (q, ..) = query_view_fixture();
+    let app = std::cell::RefCell::new(test_app(
+        vec![Tab {
+            id: "q1".into(),
+            title: "查询".into(),
+            kind: TabKind::Query(q),
+        }],
+        0,
+    ));
+    render("shell_query", 1440.0, 900.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_shell(&mut b, ctx);
+    });
+}
+
+#[test]
+fn render_shell_empty() {
+    let app = std::cell::RefCell::new(test_app(vec![], 0));
+    render("shell_empty", 1440.0, 900.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        b.draw_app_toolbar(ctx);
+        draw_app(&mut b, ctx);
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(crate::theme::c().bg))
+            .show(ctx, |ui| {
+                table_view::draw_empty_state(ui);
+            });
+    });
+}
+
 #[test]
 fn render_data_table() {
     let mut tab = role_tab();
@@ -2650,6 +2749,177 @@ fn appbar_buttons_open_modals() {
         harness.state().borrow().settings_open,
         "点击齿轮应打开设置(此前设置只能从表页 ··· 菜单进)"
     );
+}
+
+/// 入口唯一:一个功能一个入口,放在它作用的层级(全局=顶栏,对象=侧栏右键菜单,
+/// 页面=页工具栏,状态栏只放状态)。此前切换外观 4 处、设置 3 处、导入导出连接 3 处、
+/// 数据传输/对比 2 处、导出 2 处、新建查询 5 处——新入口加上去时旧的没删。
+/// 这条测试盯住删掉的重复入口不回来
+#[test]
+fn entry_points_are_unique() {
+    use egui_kittest::kittest::Queryable as _;
+    type H<'a> = egui_kittest::Harness<'a, std::cell::RefCell<ShujingApp>>;
+    fn has(h: &H<'_>, label: &str) -> bool {
+        h.query_by_label(label).is_some()
+    }
+    fn open_menu(h: &mut H<'_>, label: &str) {
+        {
+            h.get_by_label(label).simulate_click();
+        }
+        h.run_steps(3);
+    }
+
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let cell = std::cell::RefCell::new(shell_app("role"));
+    let setup_done = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_shell(&mut b, ctx);
+            },
+            cell,
+        );
+    h.run_steps(6);
+
+    // 顶栏「更多」:只有连接的导入导出;设置由右侧齿轮进
+    open_menu(&mut h, "更多 ▾");
+    for keep in [
+        "导入连接(DBeaver/Navicat)…",
+        "导出连接(加密备份)…",
+        "导入连接(加密备份)…",
+    ] {
+        assert!(has(&h, keep), "「更多」应保留:{keep}");
+    }
+    assert!(!has(&h, "设置…"), "「更多」里不该再有设置(右侧齿轮是唯一入口)");
+    key_once(&mut h, egui::Key::Escape, plain);
+    assert!(!has(&h, "导入连接(DBeaver/Navicat)…"), "Esc 应关掉菜单");
+
+    // 表页「···」:只留"这一页怎么看"(列显隐、复制格式、Mongo 文档操作)
+    open_menu(&mut h, "···");
+    for keep in ["显示列", "显示全部列", "复制本页为 TSV", "复制本页为 INSERT 语句"] {
+        assert!(has(&h, keep), "表页 ··· 应保留:{keep}");
+    }
+    for gone in [
+        "设置…",
+        "浅色外观",
+        "深色外观",
+        "数据传输到…",
+        "查看整行详情",
+        "导出 CSV",
+        "导出 Excel(.xlsx)",
+        "导出 SQL",
+        "高级筛选…",
+    ] {
+        assert!(!has(&h, gone), "表页 ··· 不该再有:{gone}(别处已有唯一入口)");
+    }
+    // 与顶栏按钮同名的两项:菜单开着时全窗口也只能各有一个(就是顶栏那个)
+    for dup in ["数据对比…", "结构对比…"] {
+        let n = h.query_all_by_label(dup).count();
+        assert_eq!(n, 1, "「{dup}」应只有顶栏这一个入口,实际找到 {n} 个");
+    }
+    key_once(&mut h, egui::Key::Escape, plain);
+
+    // 导出只有页面工具栏这一处
+    open_menu(&mut h, "导出 ▾");
+    for keep in ["导出 CSV", "导出 Excel(.xlsx)", "导出 SQL"] {
+        assert!(has(&h, keep), "工具栏「导出」应包含:{keep}");
+    }
+    key_once(&mut h, egui::Key::Escape, plain);
+
+    // 顶栏的传输/对比带上当前标签的表:表页 ··· 里的重复入口删掉后,预选表的便利不丢
+    {
+        h.get_by_label("数据传输…").simulate_click();
+    }
+    h.run_steps(3);
+    let src = h.state().borrow().transfer.as_ref().map(|t| t.src_table.clone());
+    assert_eq!(src.as_deref(), Some("backend_role_privilege"));
+}
+
+/// 侧栏右键菜单按层级分工:连接节点才有"新建查询""导入 SQL 文件",库节点是建表/ER 图/
+/// 导出库 SQL,表节点是表自己的操作。此前"新建查询"在连接/库/表三级菜单里各有一份、
+/// "导入 SQL 文件"在连接和库两级各有一份,调用的还都是同一个不带库参数的函数
+#[test]
+fn sidebar_context_menus_are_layered() {
+    use egui_kittest::kittest::Queryable as _;
+    type H<'a> = egui_kittest::Harness<'a, std::cell::RefCell<ShujingApp>>;
+    fn menu_has(h: &H<'_>, label: &str) -> bool {
+        h.query_by_label(label).is_some()
+    }
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let cell = std::cell::RefCell::new(shell_app("role"));
+    let setup_done = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_shell(&mut b, ctx);
+            },
+            cell,
+        );
+    h.run_steps(6);
+
+    // 行位置(shell_app 夹具、标准密度):侧栏没有头部行,搜索框与标签栏同行
+    let (conn_row, db_row, table_row) = (
+        egui::pos2(150.0, 102.0),
+        egui::pos2(150.0, 130.0),
+        egui::pos2(150.0, 230.0),
+    );
+    // 表节点
+    right_click_at(&mut h, table_row);
+    for keep in ["表结构", "设计表", "复制表名", "删除表…"] {
+        assert!(menu_has(&h, keep), "表节点右键菜单应有:{keep}");
+    }
+    assert!(!menu_has(&h, "新建查询"), "表节点右键菜单不该有新建查询(与连接节点重复)");
+    key_once(&mut h, egui::Key::Escape, plain);
+    assert!(!menu_has(&h, "复制表名"), "Esc 应关掉菜单");
+
+    // 库节点
+    right_click_at(&mut h, db_row);
+    for keep in ["新建表…", "查看 ER 图", "导出数据库 SQL(结构+数据)"] {
+        assert!(menu_has(&h, keep), "库节点右键菜单应有:{keep}");
+    }
+    for gone in ["新建查询", "导入 SQL 文件…"] {
+        assert!(
+            !menu_has(&h, gone),
+            "库节点右键菜单不该有:{gone}(与连接节点是同一个调用)"
+        );
+    }
+    key_once(&mut h, egui::Key::Escape, plain);
+
+    // 连接节点:点在行内空白处(名字右侧)——整行都可右键,与库行/表行一致
+    right_click_at(&mut h, conn_row);
+    for keep in ["新建查询", "导入 SQL 文件…", "编辑连接…"] {
+        assert!(menu_has(&h, keep), "连接节点右键菜单应有:{keep}");
+    }
+    key_once(&mut h, egui::Key::Escape, plain);
+    assert!(!menu_has(&h, "编辑连接…"), "Esc 应关掉菜单");
+    // 正好点在名字上也一样出菜单(名字是行内上层控件,菜单只挂整行时这里会点不出来)
+    right_click_at(&mut h, egui::pos2(60.0, 102.0));
+    for keep in ["新建查询", "导入 SQL 文件…", "编辑连接…"] {
+        assert!(menu_has(&h, keep), "右键点在连接名上应出同一个菜单,缺:{keep}");
+    }
+    key_once(&mut h, egui::Key::Escape, plain);
 }
 
 /// 71 批重排过的弹窗底栏按钮:此前只看过渲染图,没点过。

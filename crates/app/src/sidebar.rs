@@ -8,6 +8,67 @@ use crate::{icons, theme};
 use egui::{Align, Color32, Layout, RichText, Sense, Vec2};
 
 
+/// 连接节点的右键菜单:只回动作名(动作在菜单外执行——这样同一份菜单能同时挂在
+/// 整行和名字两个控件上)。"新建查询""导入 SQL 文件"是连接级的:库里/表里那些同名项
+/// 调用的是同一个不带库参数的函数,已作为重复入口删掉
+fn conn_context_menu(
+    ui: &mut egui::Ui,
+    online: bool,
+    db_type: shujing_core::DbType,
+) -> Option<&'static str> {
+    let mut act = None;
+    let mut item = |ui: &mut egui::Ui, key: &'static str, label: &str| {
+        if ui.button(label).clicked() {
+            act = Some(key);
+            ui.close_menu();
+        }
+    };
+    item(
+        ui,
+        "toggle",
+        if online {
+            ui_kit::t!("Disconnect", "断开连接")
+        } else {
+            ui_kit::t!("Connect", "连接")
+        },
+    );
+    if online {
+        // 会话面板/数据字典仅 SQL 型(MySQL/PG 优先实现;其余 SQL 型只给数据字典)
+        let sql_dict = matches!(
+            db_type,
+            shujing_core::DbType::MySql
+                | shujing_core::DbType::Postgres
+                | shujing_core::DbType::Sqlite
+                | shujing_core::DbType::Mssql
+                | shujing_core::DbType::ClickHouse
+        );
+        let sessions_ok = matches!(
+            db_type,
+            shujing_core::DbType::MySql | shujing_core::DbType::Postgres
+        );
+        if sessions_ok {
+            item(ui, "sessions", ui_kit::t!("Sessions Panel…", "会话面板…"));
+        }
+        if sql_dict {
+            item(
+                ui,
+                "dict",
+                ui_kit::t!("Export Data Dictionary (Markdown)…", "导出数据字典(Markdown)…"),
+            );
+        }
+        item(ui, "query", ui_kit::t!("New Query", "新建查询"));
+        item(ui, "dbfilter", ui_kit::t!("Filter Databases…", "筛选显示的库…"));
+        item(ui, "refresh", ui_kit::t!("Refresh", "刷新"));
+        item(ui, "backup", ui_kit::t!("Backup Database…", "备份数据库…"));
+        item(ui, "importsql", ui_kit::t!("Import SQL File…", "导入 SQL 文件…"));
+        ui.separator();
+    }
+    item(ui, "edit", ui_kit::t!("Edit Connection…", "编辑连接…"));
+    ui.separator();
+    item(ui, "delete", ui_kit::t!("Delete Connection…", "删除连接…"));
+    act
+}
+
 impl ShujingApp {
     pub fn draw_sidebar_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("sidebar")
@@ -95,136 +156,10 @@ impl ShujingApp {
         let p = theme::c();
         let w = ui.available_width();
 
-        // 头部:与标签栏同一水平带(高度 = 标签高度)。左:导入/导出(连接的三条导入导出
-        // 通道,原 ＋ 右键菜单里的项);右:新建连接 ＋。应用名与主功能入口在顶部应用工具栏
-        let head_h = theme::tabbar_h() - 1.0;
-        ui.allocate_ui_with_layout(
-            egui::vec2(w, head_h),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                let imp_exp = format!("{} ▾", ui_kit::t!("Import / Export", "导入/导出"));
-                ui.menu_button(RichText::new(imp_exp).size(theme::fs_px(12.0)).color(p.text2), |ui| {
-                    ui.set_min_width(240.0);
-                    for (label, key) in [
-                        (
-                            ui_kit::t!("Import Connections (DBeaver/Navicat)…", "导入连接(DBeaver/Navicat)…"),
-                            "sidebar-import-conns",
-                        ),
-                        (
-                            ui_kit::t!("Export Connections (Encrypted Backup)…", "导出连接(加密备份)…"),
-                            "sidebar-export-enc",
-                        ),
-                        (
-                            ui_kit::t!("Import Connections (Encrypted Backup)…", "导入连接(加密备份)…"),
-                            "sidebar-import-enc",
-                        ),
-                    ] {
-                        if ui.button(label).clicked() {
-                            ui.ctx()
-                                .memory_mut(|m| m.data.insert_temp(egui::Id::new(key), true));
-                            ui.close_menu();
-                        }
-                    }
-                });
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    // 新建连接:26px 可点圆面(hover 提亮)+ 7px 加号,此前 24px 裸 +
-                    // 视觉过弱且无命中反馈
-                    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
-                    if resp.hovered() {
-                        ui.painter().circle_filled(
-                            rect.center(),
-                            13.0,
-                            p.hover,
-                        );
-                    }
-                    icons::paint_plus(
-                        ui.painter(),
-                        rect.center(),
-                        7.0,
-                        if resp.hovered() { p.text } else { p.accent },
-                    );
-                    resp.clone().on_hover_text(ui_kit::t!(
-                        "New Connection (right-click: import DBeaver/Navicat connections)",
-                        "新建连接(右键:导入 DBeaver/Navicat 连接)"
-                    ));
-                    if resp.clicked() {
-                        self.conn_modal = Some(ConnModal::new());
-                    }
-                    resp.context_menu(|ui| {
-                        if ui
-                            .button(ui_kit::t!(
-                                "Import Connections (DBeaver/Navicat)…",
-                                "导入连接(DBeaver/Navicat)…"
-                            ))
-                            .clicked()
-                        {
-                            ui.ctx()
-                                .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-import-conns"), true));
-                            ui.close_menu();
-                        }
-                        if ui
-                            .button(ui_kit::t!(
-                                "Export Connections (Encrypted Backup)…",
-                                "导出连接(加密备份)…"
-                            ))
-                            .clicked()
-                        {
-                            ui.ctx()
-                                .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-export-enc"), true));
-                            ui.close_menu();
-                        }
-                        if ui
-                            .button(ui_kit::t!(
-                                "Import Connections (Encrypted Backup)…",
-                                "导入连接(加密备份)…"
-                            ))
-                            .clicked()
-                        {
-                            ui.ctx()
-                                .memory_mut(|m| m.data.insert_temp(egui::Id::new("sidebar-import-enc"), true));
-                            ui.close_menu();
-                        }
-                    });
-                    for (temp_key, method) in [
-                        ("sidebar-import-conns", 0u8),
-                        ("sidebar-export-enc", 1u8),
-                        ("sidebar-import-enc", 2u8),
-                    ] {
-                        let hit = ui.ctx().memory(|m| {
-                            m.data
-                                .get_temp::<bool>(egui::Id::new(temp_key))
-                                .unwrap_or(false)
-                        });
-                        if hit {
-                            ui.ctx().memory_mut(|m| {
-                                m.data.remove_temp::<bool>(egui::Id::new(temp_key))
-                            });
-                            match method {
-                                0 => self.import_connections_file(),
-                                1 => self.export_connections_encrypted(),
-                                _ => self.import_connections_encrypted(),
-                            }
-                        }
-                    }
-                    if ui
-                        .ctx()
-                        .memory(|m| {
-                            m.data
-                                .get_temp::<bool>(egui::Id::new("sidebar-import-conns"))
-                                .unwrap_or(false)
-                        })
-                    {
-                        ui.ctx().memory_mut(|m| {
-                            m.data
-                                .remove_temp::<bool>(egui::Id::new("sidebar-import-conns"))
-                        });
-                        self.import_connections_file();
-                    }
-                });
-            },
-        );
-        ui.add_space(5.0);
+        // 侧栏不再有头部行:新建连接在顶部应用工具栏,连接的导入/导出在它的"更多"菜单里
+        // (以前这两样在这里各有一份,是重复入口,还让侧栏顶上看着像第二条工具栏)。
+        // 搜索框落在标签栏那一行,和标签垂直居中对齐
+        ui.add_space(((theme::tabbar_h() - 28.0) / 2.0).max(0.0));
 
         // 表搜索(原型常驻)
         theme::search_box(
@@ -315,8 +250,8 @@ impl ShujingApp {
                     ui.add_space(20.0);
                     ui.label(
                         RichText::new(ui_kit::t!(
-                            "No connections yet\nClick ＋ at the top right to add a database",
-                            "还没有连接\n点击右上角 ＋ 添加数据库"
+                            "No connections yet\nClick \"New Connection\" in the toolbar to add one",
+                            "还没有连接\n点击顶部「新建连接」添加数据库"
                         ))
                             .size(theme::fs_px(12.0))
                             .color(p.muted),
@@ -324,7 +259,7 @@ impl ShujingApp {
                 }
             });
 
-        // 底部栏:版本号 + 黑白主题切换
+        // 底部栏:版本号(有新版时变成可点的下载入口)。外观切换只在顶部工具栏
         ui.add_space(3.0);
         ui.horizontal(|ui| {
             // 版本号;有新版时变为可点链接(打开 Release 页)
@@ -346,24 +281,6 @@ impl ShujingApp {
                         .color(p.muted),
                 );
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let (rect, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
-                let glyph = if theme::is_dark() { "☀" } else { "☾" };
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    glyph,
-                    egui::FontId::proportional(theme::fs_px(15.0)),
-                    if resp.hovered() { p.text } else { p.text2 },
-                );
-                resp.clone().on_hover_text(ui_kit::t!(
-                    "Toggle light/dark appearance",
-                    "切换深浅外观"
-                ));
-                if resp.clicked() {
-                    self.theme_toggle_requested = true;
-                }
-            });
         });
     }
 
@@ -371,7 +288,9 @@ impl ShujingApp {
         let p = theme::c();
         let online = self.trees.get(&c.id).map(|t| t.online).unwrap_or(false);
         let w = ui.available_width();
-        let (rect, row_resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::hover());
+        // 整行可点(为了整行右键出菜单:egui 只给可点控件报 secondary_clicked);
+        // 行内空白处左键不做任何事
+        let (rect, row_resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::click());
         let painter = ui.painter().clone();
         // 标识色:在线时状态点与名称用连接色;未设置用默认语义色
         let accent = c.color.as_ref().and_then(|hex| {
@@ -477,95 +396,23 @@ impl ShujingApp {
             self.toggle_connect(c);
         }
 
-        // 连接操作收进名称的右键菜单(作用在名称上,不是整行空白)
-        let mut menu_act: Option<&str> = None;
-        let _ = name_resp.clone().context_menu(|ui| {
-            let conn_label = if online {
-                ui_kit::t!("Disconnect", "断开连接")
-            } else {
-                ui_kit::t!("Connect", "连接")
-            };
-            if ui.button(conn_label).clicked() {
-                menu_act = Some("toggle");
-                ui.close_menu();
-            }
-            if online {
-                // 会话面板/数据字典仅 SQL 型(MySQL/PG 优先实现;其余 SQL 型只给数据字典)
-                let sql_dict = matches!(
-                    c.db_type,
-                    shujing_core::DbType::MySql
-                        | shujing_core::DbType::Postgres
-                        | shujing_core::DbType::Sqlite
-                        | shujing_core::DbType::Mssql
-                        | shujing_core::DbType::ClickHouse
-                );
-                let sessions_ok = matches!(
-                    c.db_type,
-                    shujing_core::DbType::MySql | shujing_core::DbType::Postgres
-                );
-                if sessions_ok
-                    && ui.button(ui_kit::t!("Sessions Panel…", "会话面板…")).clicked()
-                {
-                    self.open_sessions(&c.id);
-                    ui.close_menu();
+        // 连接操作的右键菜单同时挂在整行和名字上:名字是行内上层控件,只挂行的话正好
+        // 点在名字上反而不出菜单;只挂名字则点到行内空白没反应(此前就是这样,与库行/
+        // 表行也不一致)。菜单只回动作名,动作在菜单外执行
+        let act = std::cell::Cell::new(None);
+        for resp in [row_resp.clone(), name_resp.clone()] {
+            let _ = resp.context_menu(|ui| {
+                if let Some(a) = conn_context_menu(ui, online, c.db_type) {
+                    act.set(Some(a));
                 }
-                if sql_dict
-                    && ui
-                        .button(ui_kit::t!("Export Data Dictionary (Markdown)…", "导出数据字典(Markdown)…"))
-                        .clicked()
-                {
-                    self.export_dictionary_for(&c.id);
-                    ui.close_menu();
-                }
-                if ui.button(ui_kit::t!("New Query", "新建查询")).clicked() {
-                    menu_act = Some("query");
-                    ui.close_menu();
-                }
-                if ui
-                    .button(ui_kit::t!("Filter Databases…", "筛选显示的库…"))
-                    .clicked()
-                {
-                    menu_act = Some("dbfilter");
-                    ui.close_menu();
-                }
-                if ui.button(ui_kit::t!("Refresh", "刷新")).clicked() {
-                    menu_act = Some("refresh");
-                    ui.close_menu();
-                }
-                if ui
-                    .button(ui_kit::t!("Backup Database…", "备份数据库…"))
-                    .clicked()
-                {
-                    self.open_backup(conn_id);
-                    ui.close_menu();
-                }
-                if ui
-                    .button(ui_kit::t!("Import SQL File…", "导入 SQL 文件…"))
-                    .clicked()
-                {
-                    menu_act = Some("importsql");
-                    ui.close_menu();
-                }
-                ui.separator();
-            }
-            if ui
-                .button(ui_kit::t!("Edit Connection…", "编辑连接…"))
-                .clicked()
-            {
-                menu_act = Some("edit");
-                ui.close_menu();
-            }
-            ui.separator();
-            if ui
-                .button(ui_kit::t!("Delete Connection…", "删除连接…"))
-                .clicked()
-            {
-                menu_act = Some("delete");
-                ui.close_menu();
-            }
-        });
+            });
+        }
+        let menu_act: Option<&'static str> = act.get();
         match menu_act {
             Some("toggle") => self.toggle_connect(c),
+            Some("sessions") => self.open_sessions(&c.id),
+            Some("dict") => self.export_dictionary_for(&c.id),
+            Some("backup") => self.open_backup(conn_id),
             Some("query") => self.open_query_tab(Some(conn_id.to_string())),
             Some("dbfilter") => self.open_db_filter(conn_id),
             Some("refresh") => {
@@ -1116,7 +963,6 @@ impl ShujingApp {
         }
         let mut new_table = false;
         let mut er = false;
-        let mut import_sql = false;
         let mut export_full = false;
         let mut export_schema = false;
         let mut refresh_tables = false;
@@ -1125,22 +971,11 @@ impl ShujingApp {
                 new_table = true;
                 ui.close_menu();
             }
-            if ui.button(ui_kit::t!("New Query", "新建查询")).clicked() {
-                self.open_query_tab(Some(conn_id.to_string()));
-                ui.close_menu();
-            }
             if ui
                 .button(ui_kit::t!("View ER Diagram", "查看 ER 图"))
                 .clicked()
             {
                 er = true;
-                ui.close_menu();
-            }
-            if ui
-                .button(ui_kit::t!("Import SQL File…", "导入 SQL 文件…"))
-                .clicked()
-            {
-                import_sql = true;
                 ui.close_menu();
             }
             ui.separator();
@@ -1174,9 +1009,6 @@ impl ShujingApp {
         });
         if er {
             self.open_er(conn_id, Some(db.to_string()));
-        }
-        if import_sql {
-            self.import_sql_file(conn_id);
         }
         if export_full {
             self.export_database_sql_file(conn_id, db, true);
@@ -1265,7 +1097,6 @@ impl ShujingApp {
         }
         let mut new_table = false;
         let mut er = false;
-        let mut import_sql = false;
         let mut export_full = false;
         let mut export_schema = false;
         let _ = resp.clone().context_menu(|ui| {
@@ -1273,22 +1104,11 @@ impl ShujingApp {
                 new_table = true;
                 ui.close_menu();
             }
-            if ui.button(ui_kit::t!("New Query", "新建查询")).clicked() {
-                self.open_query_tab(Some(conn_id.to_string()));
-                ui.close_menu();
-            }
             if ui
                 .button(ui_kit::t!("View ER Diagram", "查看 ER 图"))
                 .clicked()
             {
                 er = true;
-                ui.close_menu();
-            }
-            if ui
-                .button(ui_kit::t!("Import SQL File…", "导入 SQL 文件…"))
-                .clicked()
-            {
-                import_sql = true;
                 ui.close_menu();
             }
             ui.separator();
@@ -1319,9 +1139,6 @@ impl ShujingApp {
         }
         if er {
             self.open_er(conn_id, Some(db.to_string()));
-        }
-        if import_sql {
-            self.import_sql_file(conn_id);
         }
         if export_full {
             self.export_database_sql_file(conn_id, db, true);
@@ -1613,11 +1430,6 @@ impl ShujingApp {
                     .memory_mut(|m| m.data.insert_temp(menu_id, "design".to_string()));
                 ui.close_menu();
             }
-            if ui.button(ui_kit::t!("New Query", "新建查询")).clicked() {
-                ui.ctx()
-                    .memory_mut(|m| m.data.insert_temp(menu_id, "query".to_string()));
-                ui.close_menu();
-            }
             ui.separator();
             if ui.button(ui_kit::t!("Copy Table Name", "复制表名")).clicked() {
                 ui.ctx().copy_text(name.to_string());
@@ -1707,7 +1519,6 @@ impl ShujingApp {
                 "import" => self.open_import(conn_id, db, name),
                 "struct" => self.open_structure(conn_id, name, Some(db.to_string())),
                 "design" => self.open_designer(conn_id, Some(name), Some(db.to_string())),
-                "query" => self.open_query_tab(Some(conn_id.to_string())),
                 "insname" => self.insert_name_to_query(conn_id, name),
                 "exportsql" => self.export_table_sql(conn_id, db, name),
                 "copytable" => {

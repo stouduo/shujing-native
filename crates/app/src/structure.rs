@@ -82,7 +82,7 @@ pub fn draw_structure_view(
                     if !s.loading
                         && theme::button(
                             ui,
-                            ui_kit::t!("Design", "设计"),
+                            ui_kit::t!("Design Table", "设计表"),
                             theme::BtnKind::Secondary,
                         )
                         .clicked()

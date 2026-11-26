@@ -746,97 +746,70 @@ pub fn draw_query_view(
                         .size(theme::fs_px(11.5))
                         .color(p.text2),
                     );
-                    // 右侧:结果网格的选中提示 + 按键提示(选中态由网格按自己的 id 存,
-                    // 这里读的是上一帧的——点选后下一帧就出来)
+                    // 右侧:结果网格的选中位置(选中态由网格按自己的 id 存,这里读的是上一帧的)
+                    // 与字段来源摘要。原先常驻的按键提示("点选后 ⌘C 复制 · 右键更多")去掉了:
+                    // 说明放悬停提示,不占画面
                     let sel = grid::selection(ui.ctx(), &grid_id, (r.rows.len(), r.columns.len()));
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), 20.0),
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            let hint = if editable {
-                                ui_kit::t!(
-                                    "Enter edit · ⌘V paste · ⌘C copy · right-click for more",
-                                    "回车编辑 · ⌘V 粘贴 · ⌘C 复制 · 右键更多"
+                    // 字段来源(完整版):解析 SELECT 清单,JOIN/别名消解/函数/星号全覆盖;
+                    // CTE/子查询/UNION 诚实降级(core/lineage.rs 返回原因)。降级时没有可展示
+                    // 的信息,不再常驻一行"未追踪"
+                    let lineage = match shujing_core::lineage::analyze(&q.sql) {
+                        Ok(cols) if !cols.is_empty() => {
+                            let pair = |c: &shujing_core::lineage::ColLineage| {
+                                format!("{} ← {}", c.output, c.source)
+                            };
+                            let items: Vec<String> = cols.iter().map(&pair).collect();
+                            let summary = if items.len() <= 3 {
+                                format!(
+                                    "{} · {}",
+                                    ui_kit::t!("lineage", "字段来源"),
+                                    icons::clip(&items.join(" · "), 80)
                                 )
                             } else {
-                                ui_kit::t!(
-                                    "Click a cell, then ⌘C to copy · right-click for more",
-                                    "点选单元格后 ⌘C 复制 · 右键更多"
+                                format!(
+                                    "{} · {} {}",
+                                    ui_kit::t!("lineage", "字段来源"),
+                                    items.len(),
+                                    ui_kit::t!("cols", "列")
                                 )
                             };
-                            ui.label(
-                                RichText::new(hint)
-                                    .size(theme::fs_px(11.0))
-                                    .color(p.muted),
-                            );
-                            if let Some(((r1, c1), (r2, c2))) = sel {
-                                let picked = if (r1, c1) == (r2, c2) {
-                                    format!("R{} · {}", r1 + 1, r.columns[c1])
-                                } else {
-                                    format!("{} × {}", r2 - r1 + 1, c2 - c1 + 1)
-                                };
-                                ui.label(
-                                    RichText::new(picked)
-                                        .size(theme::fs_px(11.5))
-                                        .color(p.accent),
-                                );
-                            }
-                        },
-                    );
+                            Some((summary, items.join("\n")))
+                        }
+                        _ => None,
+                    };
+                    if sel.is_some() || lineage.is_some() {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 20.0),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if let Some((summary, detail)) = lineage {
+                                    ui.label(
+                                        RichText::new(summary)
+                                            .size(theme::fs_px(11.0))
+                                            .color(p.muted),
+                                    )
+                                    .on_hover_text(detail);
+                                }
+                                if let Some(((r1, c1), (r2, c2))) = sel {
+                                    let picked = if (r1, c1) == (r2, c2) {
+                                        format!("R{} · {}", r1 + 1, r.columns[c1])
+                                    } else {
+                                        format!("{} × {}", r2 - r1 + 1, c2 - c1 + 1)
+                                    };
+                                    ui.label(
+                                        RichText::new(picked)
+                                            .size(theme::fs_px(11.5))
+                                            .color(p.accent),
+                                    );
+                                }
+                            },
+                        );
+                    }
                 }
             });
-            ui.add_space(6.0);
+            ui.add_space(4.0);
+            // 结果网格:可编辑结果集(单表 + 主键)走回写通道,其余只读
             if !r.columns.is_empty() {
-                // 字段血缘(完整版):解析 SELECT 清单,JOIN/别名消解/函数/星号全覆盖;
-                // CTE/子查询/UNION 诚实降级(core/lineage.rs 返回原因)
-                match shujing_core::lineage::analyze(&q.sql) {
-                    Ok(cols) if !cols.is_empty() => {
-                        let pair = |c: &shujing_core::lineage::ColLineage| {
-                            format!("{} ← {}", c.output, c.source)
-                        };
-                        let summary = if cols.len() <= 3 {
-                            cols.iter().map(|c| pair(c)).collect::<Vec<_>>().join(" · ")
-                        } else {
-                            format!(
-                                "{} {}",
-                                cols.len(),
-                                ui_kit::t!("columns traced (hover for details)", "列已追踪(悬停看明细)")
-                            )
-                        };
-                        let detail = cols
-                            .iter()
-                            .map(|c| pair(c))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let resp = ui.label(
-                            RichText::new(format!(
-                                "● {}: {}",
-                                ui_kit::t!("lineage", "字段来源"),
-                                icons::clip(&summary, 120)
-                            ))
-                                .size(theme::fs_px(10.5))
-                                .color(p.muted),
-                        );
-                        resp.on_hover_text(detail);
-                    }
-                    Err(e) => {
-                        let resp = ui.label(
-                            RichText::new(format!(
-                                "● {}: {}({})",
-                                ui_kit::t!("lineage", "字段来源"),
-                                ui_kit::t!("not traced", "未追踪"),
-                                e.0
-                            ))
-                                .size(theme::fs_px(10.5))
-                                .color(p.muted),
-                        );
-                        resp.on_hover_text(ui_kit::t!(
-                            "Column lineage v1 does not trace CTEs/subqueries/UNION — sources stay honest",
-                            "字段血缘 v1 不追踪 CTE/子查询/UNION,保持诚实降级"
-                        ));
-                    }
-                    Ok(_) => {}
-                }
                 if editable {
                     if !q.q_changes.is_empty() {
                         ui.horizontal(|ui| {

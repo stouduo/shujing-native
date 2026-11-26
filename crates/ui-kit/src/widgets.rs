@@ -575,6 +575,14 @@ pub fn bar_button(ui: &mut egui::Ui, icon: IconFn, label: &str, tip: &str) -> bo
     };
     let w = 8.0 + 14.0 + g.as_ref().map_or(0.0, |g| 6.0 + g.size().x) + 8.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::click());
+    // 文字是手绘的:补无障碍标签,读屏与 kittest 才找得到按钮(窄窗口只剩图标时用提示语)
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            if label.is_empty() { tip } else { label }.to_owned(),
+        )
+    });
     if resp.hovered() {
         ui.painter()
             .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), crate::theme::tint(p.text, 16));
@@ -599,6 +607,9 @@ pub fn bar_button(ui: &mut egui::Ui, icon: IconFn, label: &str, tip: &str) -> bo
 pub fn icon_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
     let p = crate::theme::c();
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip.to_owned())
+    });
     if resp.hovered() {
         ui.painter()
             .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), crate::theme::tint(p.text, 16));
