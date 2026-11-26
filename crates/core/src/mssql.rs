@@ -480,6 +480,45 @@ mod tests {
     }
 }
 
+/// 本库全部外键(一列一行,复合外键按 constraint_column_id 顺序展开)。
+/// 结构页 FK 区自己按表过滤。跨库走三段式名前缀,与 structure 同一纪律
+pub async fn foreign_keys(
+    st: &mut crate::model::MssqlState,
+    database: Option<&str>,
+) -> Result<Vec<crate::schema::FkMeta>, String> {
+    let mut client = Backend::mssql_client(st).await?;
+    let db = database
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|d| crate::edits::quote(d, false));
+    let cat = db.as_ref().map(|d| format!("{d}.")).unwrap_or_default();
+    let sql = format!(
+        "SELECT OBJECT_NAME(fkc.parent_object_id) AS pt, pc.name AS pcol, \
+         OBJECT_NAME(fkc.referenced_object_id) AS rt, rc.name AS rcol \
+         FROM {cat}sys.foreign_keys fk \
+         JOIN {cat}sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id \
+         JOIN {cat}sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id \
+         JOIN {cat}sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id \
+         ORDER BY fk.name, fkc.constraint_column_id"
+    );
+    let rows = client
+        .simple_query(&sql)
+        .await
+        .map_err(|e| format!("SQL Server: {e}"))?
+        .into_first_result()
+        .await
+        .map_err(|e| format!("SQL Server: {e}"))?;
+    Ok(rows
+        .iter()
+        .map(|r| crate::schema::FkMeta {
+            table: r.get::<&str, _>(0).unwrap_or_default().to_string(),
+            column: r.get::<&str, _>(1).unwrap_or_default().to_string(),
+            ref_table: r.get::<&str, _>(2).unwrap_or_default().to_string(),
+            ref_column: r.get::<&str, _>(3).unwrap_or_default().to_string(),
+        })
+        .collect())
+}
+
 pub async fn count(
     st: &mut crate::model::MssqlState,
     table: &str,

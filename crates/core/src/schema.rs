@@ -1023,7 +1023,7 @@ async fn resolve_mysql_db(
             Backend::Plugin(_) => Ok(vec![]),
             #[cfg(feature = "heavy-mw")]
             Backend::Mongo(_) => Ok(vec![]),
-            Backend::Mssql(_) => Ok(vec![]),
+            Backend::Mssql(st) => crate::mssql::foreign_keys(st, database).await,
             Backend::ClickHouse(_) => Ok(vec![]),
             #[cfg(feature = "heavy-mw")]
             Backend::Kafka(_) => Ok(vec![]),
@@ -1031,7 +1031,6 @@ async fn resolve_mysql_db(
             #[cfg(feature = "heavy-mw")]
             Backend::Mqtt(_) => Ok(vec![]),
             Backend::Kv(_) => Ok(vec![]),
-        Backend::Rabbit(_) => Ok(vec![]),
         }
     }
 }

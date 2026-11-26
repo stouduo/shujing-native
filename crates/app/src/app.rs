@@ -535,6 +535,8 @@ pub struct ShotState {
     pub frames: u32,
     pub ready_at: Option<u32>,
     pub sent: bool,
+    /// 墙钟起点:帧数不等于时间(重绘循环远快于 60fps),兜底必须按时间算
+    pub started: std::time::Instant,
 }
 
 /// settings.json 里密度皮肤(标准 / 紧凑)的键:保存与启动恢复共用同一个名字
@@ -697,6 +699,7 @@ impl ShujingApp {
                     frames: 0,
                     ready_at: None,
                     sent: false,
+                    started: std::time::Instant::now(),
                 }),
         };
         app.restore_session();
@@ -964,8 +967,8 @@ impl ShujingApp {
         let _ = std::fs::write(path, json.to_string());
     }
 
-    /// 自截图:每帧驱动重绘;表数据就绪后延时 20 帧(字体/布局稳定)请求截图,
-    /// Event::Screenshot 回来后写 TGA 并关窗。10 秒兜底强制截。
+    /// 自截图:每帧驱动重绘;所有标签都拿到数据(或报错)后延时 20 帧(布局稳定)
+    /// 请求截图,Event::Screenshot 回来后写 TGA 并关窗。墙钟 15 秒兜底强制截。
     pub fn screenshot_tick(&mut self, ctx: &egui::Context) {
         let Some(shot) = &mut self.shot else { return };
         ctx.request_repaint();
@@ -987,20 +990,22 @@ impl ShujingApp {
             return;
         }
         shot.frames += 1;
-        // 数据就绪按"标签真的拿到了数据"算:帧数不等于墙钟时间(重绘循环远快于
-        // 60fps,600 帧兜底可能一两秒就烧完),结构页会话此前只能靠兜底,总在
-        // 连接完成前就把截图拍了
-        let data_ready = self.tabs.iter().any(|t| match &t.kind {
-            TabKind::Table(tt) => !tt.rows.is_empty(),
-            TabKind::Structure(st) => st.data.is_some(),
-            _ => false,
-        });
+        // 数据就绪 = 每个标签都真的拿到了数据。启动恢复的标签会在连接完成前先失败
+        // 一轮("连接未建立"),那个错误是瞬态的(连接建立即自愈重载),不算就绪。
+        // 帧数不等于墙钟时间(重绘循环远快于 60fps):帧数兜底曾在连接完成前就烧完,
+        // 现在按墙钟 15 秒算
+        let data_ready = !self.tabs.is_empty()
+            && self.tabs.iter().all(|t| match &t.kind {
+                TabKind::Table(tt) => !tt.rows.is_empty(),
+                TabKind::Structure(st) => st.data.is_some(),
+                _ => true,
+            });
         if data_ready && shot.ready_at.is_none() {
             shot.ready_at = Some(shot.frames);
         }
         let should_send = match shot.ready_at {
-            Some(r) => shot.frames > r + 60,
-            None => shot.frames > 600,
+            Some(r) => shot.frames > r + 20,
+            None => shot.started.elapsed().as_secs() >= 15,
         };
         if should_send && !shot.sent {
             shot.sent = true;

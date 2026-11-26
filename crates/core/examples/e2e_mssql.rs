@@ -89,6 +89,16 @@ async fn main() {
              (N'李四', 34, 88.25, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
              (N'王五', NULL, 72.0, 1, 'C', NULL, NULL, NULL, NULL, NULL, NULL), \
              (N'赵六', 19, 95.75, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+            "CREATE TABLE e2e_mssql.dbo.dept (id INT PRIMARY KEY, dname NVARCHAR(40) NULL)",
+            // 被引用表先建:CREATE TABLE 里的外键不校验顺序,但引用不存在的表直接报错
+            "CREATE TABLE e2e_mssql.dbo.badge2 (code VARCHAR(10) NOT NULL, dept INT NOT NULL, \
+             CONSTRAINT PK_badge2 PRIMARY KEY CLUSTERED (code, dept))",
+            "CREATE TABLE e2e_mssql.dbo.emp (\
+             id INT PRIMARY KEY, \
+             dept_id INT NOT NULL REFERENCES e2e_mssql.dbo.dept(id), \
+             badge VARCHAR(10), \
+             dept_code INT, \
+             FOREIGN KEY (badge, dept_code) REFERENCES e2e_mssql.dbo.badge2(code, dept))",
             "CREATE TABLE e2e_mssql2.dbo.marker (id INT PRIMARY KEY, val NVARCHAR(20))",
             "INSERT INTO e2e_mssql2.dbo.marker VALUES (1, N'跨库值')",
         ] {
@@ -473,6 +483,31 @@ async fn main() {
     match service.count_rows("e2e-mssql", "users").await {
         Ok(4) => pass("count_after_delete", "4"),
         other => fail("count_after_delete", &format!("{other:?}")),
+    }
+
+    // 14b) 外键列表:单列外键 + 复合外键都列出来,列序按约束定义
+    match service.list_foreign_keys("e2e-mssql", db.clone()).await {
+        Ok(fks) => {
+            let find = |t: &str, c: &str| {
+                fks.iter()
+                    .find(|f| f.table == t && f.column == c)
+                    .map(|f| (f.ref_table.as_str(), f.ref_column.as_str()))
+            };
+            let problems: Vec<String> = [
+                (find("emp", "dept_id") != Some(("dept", "id")), format!("dept_id={:?}", find("emp", "dept_id"))),
+                (find("emp", "badge") != Some(("badge2", "code")), format!("badge={:?}", find("emp", "badge"))),
+                (find("emp", "dept_code") != Some(("badge2", "dept")), format!("dept_code={:?}", find("emp", "dept_code"))),
+            ]
+            .into_iter()
+            .filter(|(bad, _)| *bad)
+            .map(|(_, msg)| msg)
+            .collect();
+            if !problems.is_empty() {
+                fail("foreign_keys", &format!("{};全部: {:?}", problems.join("; "), fks));
+            }
+            pass("foreign_keys", "单列与复合外键都列出,引用列正确");
+        }
+        Err(e) => fail("foreign_keys", &e),
     }
 
     // 15a) 另一个库里的表:结构走三段式名,不改连接的默认库
