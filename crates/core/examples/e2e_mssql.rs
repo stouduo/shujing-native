@@ -1,5 +1,5 @@
 //! SQL Server 全链路 E2E(直调 Service):连接/库/表/视图/结构(主键、nvarchar
-//! 字符数、多索引列不重复)/计数/查询(各类型的值文本、列类型、NULL、空结果集
+//! 字符数、多索引列不重复、索引列表、拼装 DDL 改名回建逐项比对)/计数/查询(各类型的值文本、列类型、NULL、空结果集
 //! 列头、截断、多语句取首集、错误上报、写语句影响行数)/单元格回写(中文、置
 //! NULL、新增、删除、出错回滚且不留悬挂事务)/跨库限定回写。
 //! 运行:先起本机容器(见 crates/core/src/exec.rs 的 live_mssql 测试注释),然后
@@ -192,6 +192,83 @@ async fn main() {
             pass("structure", "12 cols, pk=id, nvarchar 按字符数, 多索引列不重复");
         }
         Err(e) => fail("structure", &e),
+    }
+
+    // 4b) 索引列表:三个索引(PK + 两个普通),键列按序、唯一性正确
+    // 4c) 建表语句:拼装 DDL 必须可执行——全文改名回建,再和原表逐项比对列与索引
+    match service.get_table_structure("e2e-mssql", "users", db.clone()).await {
+        Ok(orig) => {
+            let find = |n: &str| orig.indexes.iter().find(|ix| ix.name == n).map(|ix| ix.columns.as_str());
+            let pk = orig.indexes.iter().find(|ix| ix.name.starts_with("PK__users"));
+            let problems: Vec<String> = [
+                (orig.indexes.len() != 3, format!("indexes={:?}", orig.indexes)),
+                (find("ix_users_age") != Some("age"), format!("ix_users_age={:?}", find("ix_users_age"))),
+                (find("ix_users_id_age") != Some("id, age"), format!("ix_users_id_age={:?}", find("ix_users_id_age"))),
+                (pk.map(|ix| (ix.unique, ix.columns.as_str())) != Some((true, "id")), "PK 索引应为 unique(id)".into()),
+                (!orig.ddl.contains("CREATE TABLE [users] ("), "DDL 缺 CREATE TABLE".into()),
+                (!orig.ddl.contains("[id] int NOT NULL,"), "DDL 缺 id 列".into()),
+                (!orig.ddl.contains("[name] nvarchar(64) NULL,"), "DDL 缺 name 列".into()),
+                (!orig.ddl.contains("[active] bit NOT NULL DEFAULT "), "DDL 缺默认值".into()),
+                (!orig.ddl.contains("PRIMARY KEY CLUSTERED ([id])"), "DDL 缺主键约束".into()),
+                (!orig.ddl.contains("CREATE INDEX [ix_users_age] ON [users] ([age]);"), "DDL 缺 ix_users_age".into()),
+                (!orig.ddl.contains("CREATE INDEX [ix_users_id_age] ON [users] ([id], [age]);"), "DDL 缺 ix_users_id_age".into()),
+            ]
+            .into_iter()
+            .filter(|(bad, _)| *bad)
+            .map(|(_, msg)| msg)
+            .collect();
+            if !problems.is_empty() {
+                fail("structure_indexes", &format!("{};DDL={}索引={:?}",
+                    problems.join("; "), orig.ddl, orig.indexes));
+            }
+            pass("structure_indexes", "3 个索引(PK unique[id] + 2 普通),键列按序");
+
+            // 改名回建:拼出来的 DDL 当真执行(users → users_ddl_copy,连主键约束名一起换)
+            let copy = orig.ddl.replace("users", "users_ddl_copy");
+            if let Err(e) = service.run_sql("e2e-mssql", copy, None).await {
+                fail("ddl_executable", &format!("回建失败: {e}"));
+            }
+            match service.get_table_structure("e2e-mssql", "users_ddl_copy", db.clone()).await {
+                Ok(c) => {
+                    // 列逐项一致(拼装边界:IDENTITY 不进 DDL,extra 两边都是空)
+                    let cols_same = orig.columns.len() == c.columns.len()
+                        && orig.columns.iter().zip(&c.columns).all(|(a, b)| {
+                            a.name == b.name
+                                && a.data_type == b.data_type
+                                && a.nullable == b.nullable
+                                && a.default == b.default
+                                && a.key == b.key
+                        });
+                    // 索引:PK 换了名,只比唯一性与键列;普通索引名与列都要一致
+                    fn find_ix<'a>(
+                        st: &'a shujing_core::TableStructure,
+                        n: &str,
+                    ) -> Option<&'a shujing_core::IndexDef> {
+                        st.indexes.iter().find(|ix| ix.name == n)
+                    }
+                    // 索引名被全文改名(users → users_ddl_copy),按改名后的名字查
+                    let ix_same = c.indexes.len() == orig.indexes.len()
+                        && find_ix(&c, "ix_users_ddl_copy_age").map(|ix| (&ix.columns, ix.unique))
+                            == Some((&"age".to_string(), false))
+                        && find_ix(&c, "ix_users_ddl_copy_id_age").map(|ix| (&ix.columns, ix.unique))
+                            == Some((&"id, age".to_string(), false))
+                        && c.indexes.iter().filter(|ix| ix.unique).count()
+                            == orig.indexes.iter().filter(|ix| ix.unique).count();
+                    if !cols_same {
+                        fail("ddl_executable", &format!("回建后列不一致:\n{:?}\n{:?}", orig.columns, c.columns));
+                    }
+                    if !ix_same {
+                        fail("ddl_executable", &format!("回建后索引不一致:\n{:?}\n{:?}", orig.indexes, c.indexes));
+                    }
+                    pass("ddl_executable", "拼装 DDL 回建成功,列/索引逐项一致");
+                }
+                Err(e) => fail("ddl_executable", &format!("回建后查不到结构: {e}")),
+            }
+            if let Err(e) = service.run_sql("e2e-mssql", "DROP TABLE users_ddl_copy".into(), None).await {
+                fail("ddl_cleanup", &e);
+            }
+        }
+        Err(e) => fail("structure_indexes", &e),
     }
 
     // 5) 计数
@@ -408,7 +485,10 @@ async fn main() {
             if s.columns[1].data_type != "nvarchar(20)" {
                 fail("structure_other_db", &format!("val={:?}", s.columns[1].data_type));
             }
-            pass("structure_other_db", "id=PRI, val=nvarchar(20)");
+            if !s.ddl.contains("CREATE TABLE [marker] (") || !s.ddl.contains("PRIMARY KEY") {
+                fail("structure_other_db", &format!("marker DDL={}", s.ddl));
+            }
+            pass("structure_other_db", "id=PRI, val=nvarchar(20), DDL 带主键");
         }
         Err(e) => fail("structure_other_db", &e),
     }

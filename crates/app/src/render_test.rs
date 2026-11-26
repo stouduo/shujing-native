@@ -1343,8 +1343,9 @@ fn render_designer_edit() {
 
 
 /// 交互验证:整页滚动到底后,长 DDL 应自然展开(不再被 320px 内嵌滚动区压缩)
-/// 结构页没有索引/建表语句时的两种口径:数据源不提供(SQL Server/ClickHouse)
-/// 与 真的没有(如 SQLite 的无索引表)。都不能画成空框或"索引 0"
+/// 结构页没有索引/建表语句时的两种口径:数据源不提供(ClickHouse 暂未做;
+/// SQL Server 批次 78 起已支持)与 真的没有(如 SQLite 的无索引表)。
+/// 都不能画成空框或"索引 0"
 #[test]
 fn render_structure_empty_states() {
     use shujing_core::{ColumnDef, TableStructure};
@@ -1368,7 +1369,7 @@ fn render_structure_empty_states() {
     render("structure_unsupported", 900.0, 420.0, true, move |ctx| {
         let mut b = cell.borrow_mut();
         let s = b.as_mut().unwrap();
-        let _ = structure::draw_structure_view(ctx, "s2", s, Some(shujing_core::DbType::Mssql));
+        let _ = structure::draw_structure_view(ctx, "s2", s, Some(shujing_core::DbType::ClickHouse));
     });
     let cell = std::cell::RefCell::new(Some(mk()));
     render("structure_no_index", 900.0, 420.0, true, move |ctx| {

@@ -51,8 +51,8 @@ pub struct Capabilities {
     pub sessions: bool,
     /// 中间件型(走专属控制台,无 SQL/表结构语义)
     pub middleware: bool,
-    /// 结构页能列出索引(目前 MySQL / PG / SQLite;其余返回空,界面要说"不提供"
-    /// 而不是"没有索引")
+    /// 结构页能列出索引(MySQL / PG / SQLite / SQL Server;其余返回空,界面要说
+    /// "不提供"而不是"没有索引")
     pub indexes: bool,
     /// 能生成建表语句(DDL)
     pub ddl: bool,
@@ -99,8 +99,11 @@ impl DbType {
                 save_result: true,
                 ..SQL_DB
             },
-            // 有 SQL 和表结构,但还没做索引列表与建表语句
-            DbType::Mssql | DbType::ClickHouse => Capabilities {
+            DbType::Mssql => Capabilities {
+                ..SQL_DB
+            },
+            // 有 SQL 和表结构;索引列表与建表语句还缺的只剩 ClickHouse
+            DbType::ClickHouse => Capabilities {
                 indexes: false,
                 ddl: false,
                 ..SQL_DB

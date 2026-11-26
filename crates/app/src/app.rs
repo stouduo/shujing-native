@@ -987,10 +987,14 @@ impl ShujingApp {
             return;
         }
         shot.frames += 1;
-        let data_ready = self
-            .tabs
-            .iter()
-            .any(|t| matches!(&t.kind, TabKind::Table(tt) if !tt.rows.is_empty()));
+        // 数据就绪按"标签真的拿到了数据"算:帧数不等于墙钟时间(重绘循环远快于
+        // 60fps,600 帧兜底可能一两秒就烧完),结构页会话此前只能靠兜底,总在
+        // 连接完成前就把截图拍了
+        let data_ready = self.tabs.iter().any(|t| match &t.kind {
+            TabKind::Table(tt) => !tt.rows.is_empty(),
+            TabKind::Structure(st) => st.data.is_some(),
+            _ => false,
+        });
         if data_ready && shot.ready_at.is_none() {
             shot.ready_at = Some(shot.frames);
         }
