@@ -1313,7 +1313,7 @@ pub(crate) fn draw_table_view(
                     ui,
                     "table-filter",
                     &mut tab.filter,
-                    ui_kit::t!("Filter rows", "筛选行"),
+                    ui_kit::t!("Filter rows (⌘F)", "筛选行 (⌘F)"),
                     if compact { 150.0 } else { 220.0 },
                 );
                 fresp.clone().on_hover_text(ui_kit::t!(

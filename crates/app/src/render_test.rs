@@ -3015,15 +3015,26 @@ fn modal_footer_buttons_work() {
         let mut app = full_app("role");
         app.settings_open = true;
         // 高视口让整份设置内容可见:插件区在 720 下已滚出 ScrollArea,模拟点不到
-        let mut h = harness_with(app, crate::modals::draw_settings_modal, 1400.0);
-        click(&mut h, "插件管理…");
+        // (加了快捷键速查节后内容更高,2200 才放得下;ScrollArea 会把视口外
+        // 的控件剔除,kittest 点不到视口外的节点)
+        let mut h = harness_with(app, crate::modals::draw_settings_modal, 2200.0);
+        {
+            use egui_kittest::kittest::Queryable as _;
+            let n = h.get_by_label("插件管理…");
+            n.click(); // accesskit 语义点击(不依赖几何位置)
+        }
+        h.run_steps(3);
         assert!(
             h.state().borrow().plugin_manager_open,
             "点「插件管理…」应打开插件管理"
         );
         // 插件管理浮层本 harness 没画,直接收掉它再点设置的完成
         h.state().borrow_mut().plugin_manager_open = false;
-        click(&mut h, "完成");
+        {
+            use egui_kittest::kittest::Queryable as _;
+            h.get_by_label("完成").click();
+        }
+        h.run_steps(3);
         assert!(!h.state().borrow().settings_open, "点「完成」应关闭设置弹窗");
     }
     // 设置:密度切换(紧凑 ↔ 标准)。皮肤 = 色彩预设 × 密度,这是换装入按;
@@ -3031,7 +3042,9 @@ fn modal_footer_buttons_work() {
     {
         let mut app = full_app("role");
         app.settings_open = true;
-        let mut h = harness_with(app, crate::modals::draw_settings_modal, 1400.0);
+        // 视口 2200:设置内容加高后,密度节以上的节点才都在 ScrollArea 视口内
+        // (视口外的节点被 egui 剔除,kittest 找不到);点击用语义 click,不依赖几何
+        let mut h = harness_with(app, crate::modals::draw_settings_modal, 2200.0);
         // 落盘的值:启动时按同一个键恢复(见 SETTINGS_KEY_DENSITY),内存对了文件没对等于白点
         let saved_density = |h: &egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| {
             let cfg = h.state().borrow().config_dir.clone();
@@ -3042,14 +3055,22 @@ fn modal_footer_buttons_work() {
             v.get(crate::app::SETTINGS_KEY_DENSITY)
                 .and_then(|x| x.as_u64())
         };
-        click(&mut h, "紧凑");
+        {
+            use egui_kittest::kittest::Queryable as _;
+            h.get_by_label("紧凑").click();
+        }
+        h.run_steps(3);
         assert_eq!(
             crate::theme::density_idx(),
             1,
             "点「紧凑」应切到紧凑密度"
         );
         assert_eq!(saved_density(&h), Some(1), "点「紧凑」后 settings.json 应记录 density=1");
-        click(&mut h, "标准");
+        {
+            use egui_kittest::kittest::Queryable as _;
+            h.get_by_label("标准").click();
+        }
+        h.run_steps(3);
         assert_eq!(
             crate::theme::density_idx(),
             0,
