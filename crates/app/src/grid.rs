@@ -149,11 +149,17 @@ pub(crate) const EDIT_FOCUS_KEYS: egui::EventFilter = egui::EventFilter {
 /// 的格,第二下也会被算成双击。这里要求两次点的是同一格,且落在系统双击间隔内。
 /// 每次点击都调一次(它会记下这一下);按住拖过了别的格之后用 [`reset_double_click`] 清掉,
 /// 免得"拖选完马上点回起点"被当成双击
-pub(crate) fn cell_double_clicked(ui: &egui::Ui, key: egui::Id, cell: (usize, usize)) -> bool {
+/// 同一格/同一条目在双击间隔内的第二次按下才算双击(egui 自带判定只看间隔
+/// 不看位置)。泛型:格子是 (usize, usize),历史行等条目用各自的标识
+pub(crate) fn cell_double_clicked<T: Eq + Clone + Send + Sync + 'static>(
+    ui: &egui::Ui,
+    key: egui::Id,
+    cell: T,
+) -> bool {
     let now = ui.input(|i| i.time);
     let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
     let hit = matches!(
-        ui.memory(|m| m.data.get_temp::<((usize, usize), f64)>(key)),
+        ui.memory(|m| m.data.get_temp::<(T, f64)>(key)),
         Some((prev, t)) if prev == cell && now - t < delay
     );
     ui.memory_mut(|m| m.data.insert_temp(key, (cell, now)));

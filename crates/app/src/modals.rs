@@ -2373,6 +2373,7 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
     let p = theme::c();
     let mut close = false;
     let mut pick: Option<String> = None;
+    let mut pick_run: Option<String> = None;
     let mut clear = false;
     let modal = egui::Modal::new(egui::Id::new("query-history-modal"))
         .frame(theme::modal_frame())
@@ -2487,8 +2488,17 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             theme::mono(10.5),
                             p.text2,
                         );
+                        let dbl = crate::grid::cell_double_clicked(
+                            ui,
+                            egui::Id::new("query-history-row"),
+                            it.ts,
+                        );
                         if resp.clicked() {
                             pick = Some(it.sql.clone());
+                        }
+                        if dbl {
+                            // 双击:回填并立即运行(重跑历史查询的高频路径)
+                            pick_run = Some(it.sql.clone());
                         }
                         ui.add_space(2.0);
                     }
@@ -2511,6 +2521,16 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 }
             });
         });
+    if let Some(sql) = pick_run {
+        let tid = app
+            .query_history
+            .as_ref()
+            .map(|h| h.tab_id.clone())
+            .unwrap_or_default();
+        app.pick_history(sql.clone());
+        // 回填后立即运行:run_query_sql 直接以该 SQL 发起,不依赖编辑器内容时序
+        app.run_query_sql(&tid, sql);
+    }
     if let Some(sql) = pick {
         app.pick_history(sql);
         return;

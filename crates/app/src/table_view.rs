@@ -1777,11 +1777,70 @@ pub(crate) fn draw_table_view(
                             page: tab.page + 1,
                         });
                     }
+                    // 页码可编辑:大表几百页,只有前后翻页不够用(点入/回车跳到第 N 页)
+                    let page_edit_id = egui::Id::new(("page-jump", &tab_id_s));
+                    let mut editing_page = ui
+                        .memory(|m| m.data.get_temp::<(bool, String)>(page_edit_id))
+                        .unwrap_or((false, String::new()));
+                    let (editing, page_draft) = (&mut editing_page.0, &mut editing_page.1);
                     let label = match total_pages {
                         Some(n) => format!("{} / {n}", tab.page),
                         None => format!("{}", tab.page),
                     };
-                    ui.label(RichText::new(label).size(theme::fs_px(12.0)).color(p.text2));
+                    if *editing {
+                        let resp = ui.add_sized(egui::vec2(46.0, 20.0), egui::TextEdit::singleline(page_draft).font(theme::mono(11.5)));
+                        resp.request_focus();
+                        let commit = resp.lost_focus()
+                            || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        if commit || cancel {
+                            if commit && !page_draft.trim().is_empty() {
+                                if let Ok(n) = page_draft.trim().parse::<usize>() {
+                                    if n >= 1 {
+                                        let target = match total_pages {
+                                            Some(total) => n.min(total),
+                                            None => n,
+                                        };
+                                        if target != tab.page {
+                                            actions.push(TabAction::SetPage {
+                                                tab_id: tab_id_s.clone(),
+                                                page: target,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            *editing = false;
+                            page_draft.clear();
+                        }
+                    } else {
+                        let (lrect, lresp) =
+                            ui.allocate_exact_size(egui::vec2(64.0, 20.0), egui::Sense::click());
+                        ui.painter().rect_filled(
+                            lrect,
+                            egui::CornerRadius::same(theme::radius_small() as u8),
+                            if lresp.hovered() { p.input_bg } else { egui::Color32::TRANSPARENT },
+                        );
+                        ui.painter().text(
+                            lrect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            &label,
+                            egui::FontId::proportional(theme::fs_px(12.0)),
+                            if lresp.hovered() { p.text } else { p.text2 },
+                        );
+                        if total_pages.is_some() {
+                            lresp.clone().on_hover_text(ui_kit::t!(
+                                "Click to jump to a page",
+                                "点击输入页码跳转"
+                            ));
+                        }
+                        let lresp = lresp.on_hover_cursor(egui::CursorIcon::Text);
+                        if lresp.clicked() && total_pages.is_some() {
+                            *editing = true;
+                            page_draft.clear();
+                        }
+                    }
+                    ui.memory_mut(|m| m.data.insert_temp(page_edit_id, editing_page));
                     let prev = icons::chevron(ui, true, if at_first { p.muted } else { p.text2 });
                     if !at_first && prev.clicked() {
                         actions.push(TabAction::SetPage {

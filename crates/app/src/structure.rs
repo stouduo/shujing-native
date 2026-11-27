@@ -79,14 +79,14 @@ pub fn draw_structure_view(
                             tab_id: tab_id.to_string(),
                         });
                     }
-                    if !s.loading
-                        && theme::button(
+                    let design_clicked = !s.loading
+                        && theme::tool_button(
                             ui,
+                            Some(&icons::PENCIL_RULER),
                             ui_kit::t!("Design Table", "设计表"),
-                            theme::BtnKind::Secondary,
-                        )
-                        .clicked()
-                    {
+                            "",
+                        );
+                    if design_clicked {
                         actions.push(TabAction::OpenDesigner {
                             conn_id: s.conn_id.clone(),
                             table: s.table.clone(),
@@ -95,17 +95,15 @@ pub fn draw_structure_view(
                     }
                     if let Some(d) = &s.data {
                         // 没有建表语句时按钮置灰(点了只会复制一片空白)
-                        ui.add_enabled_ui(!d.ddl.is_empty(), |ui| {
-                            if theme::button(
-                                ui,
-                                ui_kit::t!("Copy DDL", "复制 DDL"),
-                                theme::BtnKind::Secondary,
-                            )
-                            .clicked()
-                            {
-                                ui.ctx().copy_text(d.ddl.clone());
-                            }
-                        });
+                        if theme::tool_button_on(
+                            ui,
+                            Some(&icons::COPY),
+                            ui_kit::t!("Copy DDL", "复制 DDL"),
+                            "",
+                            !d.ddl.is_empty(),
+                        ) {
+                            ui.ctx().copy_text(d.ddl.clone());
+                        }
                     }
                 });
             });
@@ -682,13 +680,13 @@ pub fn draw_ddl_view(ctx: &egui::Context, tab_id: &str, d: &mut DdlTab) -> Vec<T
                     }
                     if let Some(ddl) = &d.ddl {
                         let ddl2 = ddl.clone();
-                        if theme::button(
+                        let copy_clicked = theme::tool_button(
                             ui,
+                            Some(&icons::COPY),
                             ui_kit::t!("Copy DDL", "复制 DDL"),
-                            theme::BtnKind::Secondary,
-                        )
-                        .clicked()
-                        {
+                            "",
+                        );
+                        if copy_clicked {
                             ui.ctx().copy_text(ddl2);
                         }
                     }

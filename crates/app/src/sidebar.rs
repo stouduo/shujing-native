@@ -142,11 +142,23 @@ impl ShujingApp {
                     .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
                     .inner_margin(egui::Margin::symmetric(14, 8))
                     .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(icons::clip(msg, 160))
-                                .size(theme::fs_px(12.0))
-                                .color(p.text),
-                        );
+                        // 数据库报错经常要贴去搜索/提 issue:点击 toast 复制全文
+                        // (悬停本来就看得到全文,这里补上"拿到手里"的路径)
+                        let resp = ui
+                            .label(
+                                RichText::new(icons::clip(msg, 160))
+                                    .size(theme::fs_px(12.0))
+                                    .color(p.text),
+                            )
+                            .interact(Sense::click());
+                        resp.clone().on_hover_text(ui_kit::t!(
+                            "Click to copy the full message",
+                            "点击复制全文"
+                        ));
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if resp.clicked() {
+                            ui.ctx().copy_text(msg.clone());
+                        }
                     });
             });
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
