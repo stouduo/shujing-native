@@ -62,12 +62,12 @@ pub fn draw_redis_view(
                         reset: true,
                     });
                 }
-                let sib = theme::button(
+                if theme::tool_button(
                     ui,
+                    Some(&icons::INFO),
                     ui_kit::t!("Server Info", "服务器信息"),
-                    theme::BtnKind::Secondary,
-                );
-                if sib.clicked() {
+                    "",
+                ) {
                     actions.push(TabAction::OpenRedisInfo {
                         conn_id: rt.conn_id.clone(),
                     });
@@ -81,12 +81,18 @@ pub fn draw_redis_view(
                 }
                 // 「继续扫描」常驻(不可用时不响应),宽度恒定
                 let more_enabled = rt.cursor != 0 && !rt.scanning;
-                let more = theme::button(ui, ui_kit::t!("Scan More", "继续扫描"), theme::BtnKind::Secondary);
-                let more_clicked = more.clicked();
-                if !more_enabled {
-                    more.on_disabled_hover_text(ui_kit::t!("No cursor left to continue", "没有待续扫的游标"));
-                }
-                if more_enabled && more_clicked {
+                let more = theme::tool_button_on(
+                    ui,
+                    Some(&icons::CHEVRONS_UP_DOWN),
+                    ui_kit::t!("Scan More", "继续扫描"),
+                    if more_enabled {
+                        ""
+                    } else {
+                        ui_kit::t!("No cursor left to continue", "没有待续扫的游标")
+                    },
+                    more_enabled,
+                );
+                if more {
                     actions.push(TabAction::RedisScan {
                         tab_id: tab_id.to_string(),
                         reset: false,
@@ -97,10 +103,12 @@ pub fn draw_redis_view(
                     1 => "A→Z",
                     _ => "Z→A",
                 };
-                if theme::button(ui, sort_label, theme::BtnKind::Secondary).clicked() {
+                if theme::tool_button(ui, Some(&icons::ARROW_UP_DOWN), sort_label, "") {
                     rt.sort = (rt.sort + 1) % 3;
                 }
-                if !read_only && theme::button(ui, ui_kit::t!("New", "新建"), theme::BtnKind::Secondary).clicked() {
+                if !read_only
+                    && theme::tool_button(ui, Some(&icons::SQUARE_PLUS), ui_kit::t!("New", "新建"), "")
+                {
                     rt.new_key = Some(RedisNewKeyState {
                         name: String::new(),
                         kind: 0,
@@ -108,18 +116,21 @@ pub fn draw_redis_view(
                         lines: String::new(),
                     });
                 }
-                let batch = theme::button(ui, ui_kit::t!("Batch Delete", "批量删"), theme::BtnKind::Secondary);
-                let batch_clicked = batch.clicked();
-                batch.on_hover_text(ui_kit::t!(
-                    "Batch delete keys matching the current pattern (full SCAN, limit 10k; counts first for confirmation)",
-                    "按当前 pattern 批量删除 key(SCAN 全量,上限 1 万;先计数确认)"
-                ));
+                let batch_clicked = theme::tool_button(
+                    ui,
+                    Some(&icons::TRASH),
+                    ui_kit::t!("Batch Delete", "批量删"),
+                    ui_kit::t!(
+                        "Batch delete keys matching the current pattern (full SCAN, limit 10k; counts first for confirmation)",
+                        "按当前 pattern 批量删除 key(SCAN 全量,上限 1 万;先计数确认)"
+                    ),
+                );
                 if batch_clicked {
                     actions.push(TabAction::RedisBatchDelete {
                         tab_id: tab_id.to_string(),
                     });
                 }
-                if theme::button(ui, ui_kit::t!("Analyze", "分析"), theme::BtnKind::Secondary).clicked() {
+                if theme::tool_button(ui, Some(&icons::WAND), ui_kit::t!("Analyze", "分析"), "") {
                     rt.analyze = Some(crate::app::RedisAnalyzeState {
                         mode: 0,
                         sample: 1000,

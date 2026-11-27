@@ -39,12 +39,14 @@ pub fn draw_rabbit_view(
                 } else if r.loading {
                     ui.label(RichText::new(ui_kit::t!("Loading…", "加载中…")).size(theme::fs_px(11.0)).color(p.muted));
                 }
-                let refresh = theme::button(
+                let refresh = theme::tool_button_on(
                     ui,
+                    None,
                     ui_kit::t!("Refresh", "刷新"),
-                    theme::BtnKind::Secondary,
+                    "",
+                    !r.loading,
                 );
-                if refresh.clicked() && !r.loading {
+                if refresh {
                     actions.push(TabAction::RabbitLoadQueues {
                         tab_id: tab_id.to_string(),
                     });

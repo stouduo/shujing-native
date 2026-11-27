@@ -593,6 +593,18 @@ fn tool_text(ui: &egui::Ui, label: &str) -> Option<std::sync::Arc<egui::Galley>>
 /// 工具栏按钮:图标 + 文字(label 为空 = 只留图标,靠悬停提示说明)。
 /// 全应用的工具栏(顶部、各页面、表头行)都用这一种,别处不再各写各的
 pub fn tool_button(ui: &mut egui::Ui, icon: Option<&'static Icon>, label: &str, tip: &str) -> bool {
+    tool_button_on(ui, icon, label, tip, true)
+}
+
+/// 同 `tool_button`,带禁用态(置灰、不响应点击,悬停说明保留——
+/// 配 `on_disabled_hover_text` 说明为什么不可用)
+pub fn tool_button_on(
+    ui: &mut egui::Ui,
+    icon: Option<&'static Icon>,
+    label: &str,
+    tip: &str,
+    enabled: bool,
+) -> bool {
     let p = crate::theme::c();
     let g = tool_text(ui, label);
     let w = if label.is_empty() {
@@ -601,7 +613,13 @@ pub fn tool_button(ui: &mut egui::Ui, icon: Option<&'static Icon>, label: &str, 
         8.0 + if icon.is_some() { ICON_SIZE + 5.0 } else { 0.0 } + g.as_ref().map_or(0.0, |g| g.size().x) + 9.0
     };
     let (rect, resp, hot) = tool_face(ui, w);
-    let col = if hot { p.text } else { p.text2 };
+    let col = if !enabled {
+        p.muted
+    } else if hot {
+        p.text
+    } else {
+        p.text2
+    };
     let cy = rect.center().y;
     let mut x = rect.left() + 8.0;
     if let Some(ic) = icon {
@@ -614,12 +632,12 @@ pub fn tool_button(ui: &mut egui::Ui, icon: Option<&'static Icon>, label: &str, 
     // 文字是画出来的:补无障碍标签,读屏与 kittest 才找得到按钮
     let name = if label.is_empty() { tip } else { label };
     resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name.to_owned())
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled && ui.is_enabled(), name.to_owned())
     });
     if !tip.is_empty() {
         resp.clone().on_hover_text(tip);
     }
-    resp.clicked()
+    enabled && resp.clicked()
 }
 
 /// 工具栏菜单按钮:图标 + 文字 + 下箭头,点开在正下方弹菜单(与 `tool_button` 同一张脸)。
@@ -653,13 +671,15 @@ pub fn tool_menu<R>(
     if let Some(g) = g {
         ui.painter().galley(egui::pos2(x, cy - g.size().y / 2.0), g, col);
     }
-    crate::icons::paint_icon(
-        ui.painter(),
-        &crate::lucide::CHEVRON_DOWN,
-        egui::pos2(rect.right() - 5.0 - 6.5, cy),
-        13.0,
-        p.muted,
-    );
+    if !label.is_empty() {
+        crate::icons::paint_icon(
+            ui.painter(),
+            &crate::lucide::CHEVRON_DOWN,
+            egui::pos2(rect.right() - 5.0 - 6.5, cy),
+            13.0,
+            p.muted,
+        );
+    }
     let name = if label.is_empty() { tip } else { label };
     resp.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name.to_owned())

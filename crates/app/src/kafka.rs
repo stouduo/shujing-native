@@ -54,26 +54,20 @@ pub fn draw_kafka_view(
                         tab_id: tab_id.to_string(),
                     });
                 }
-                let gb = theme::button(
+                let gb = theme::tool_button_on(
                     ui,
-                    if k.loading {
-                        ui_kit::t!("…", "…")
-                    } else {
-                        ui_kit::t!("Consumer Groups", "消费组")
-                    },
-                    theme::BtnKind::Secondary,
+                    None,
+                    ui_kit::t!("Consumer Groups", "消费组"),
+                    "",
+                    !k.loading,
                 );
-                if gb.clicked() && !k.loading {
+                if gb {
                     actions.push(TabAction::KafkaLoadGroups {
                         tab_id: tab_id.to_string(),
                     });
                 }
-                let nb = theme::button(
-                    ui,
-                    ui_kit::t!("＋ New Topic", "＋ 新建 Topic"),
-                    theme::BtnKind::Secondary,
-                );
-                if nb.clicked() {
+                if theme::tool_button(ui, Some(&crate::icons::SQUARE_PLUS), ui_kit::t!("New Topic", "新建 Topic"), "")
+                {
                     k.new_open = !k.new_open;
                 }
                 // 删除选中 topic:同按钮二次确认
