@@ -3144,6 +3144,7 @@ impl ShujingApp {
                     db: rt.db,
                     pattern: rt.pattern.clone(),
                     counted: None,
+                    confirm_input: String::new(),
                     deleting: false,
                     error: None,
                 });

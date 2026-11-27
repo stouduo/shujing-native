@@ -8301,6 +8301,93 @@ fn kv_delete_is_two_click_confirm() {
     assert!(h.query_by_label("删除键").is_some(), "确认后回到常态");
 }
 
+/// Redis 批量删除的确认门:输入匹配数量才亮「确认删除」。
+/// 此前 buffer 每帧从计数常量重建——打字被吞、v==n 恒成立,删除按钮默认就亮
+#[test]
+fn redis_batch_confirm_gates_delete() {
+    use egui_kittest::kittest::Queryable as _;
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let focused = std::cell::Cell::new(false);
+    let setup_done = std::cell::Cell::new(false);
+    let app = std::cell::RefCell::new(test_app(vec![], 0));
+    let st = crate::app::RedisBatchDeleteState {
+        conn_id: "c1".into(),
+        db: 0,
+        pattern: "cache:*".into(),
+        counted: Some(5),
+        confirm_input: String::new(),
+        deleting: false,
+        error: None,
+    };
+    app.borrow_mut().redis_batch_del = Some(st);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(900.0, 620.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                // 首帧才建出输入框;之后把焦点交给确认输入框
+                if focused.replace(true)
+                    && ctx.memory(|m| !m.has_focus(egui::Id::new("redis-batch-confirm")))
+                {
+                    ctx.memory_mut(|m| m.request_focus(egui::Id::new("redis-batch-confirm")));
+                }
+                let mut b = app.borrow_mut();
+                crate::modals::draw_redis_batch_modal(&mut b, ctx);
+            },
+            app,
+        );
+    h.run_steps(4);
+    // 门关着:计数 5、没输入 → 没有「确认删除」
+    assert!(
+        h.query_by_label("确认删除").is_none(),
+        "没输入匹配数量不该出现确认按钮(此前默认就亮)"
+    );
+    // 打字进输入框且持久(buffer 此前每帧被重置)
+    h.input_mut().events.push(egui::Event::Text("5".into()));
+    h.run_steps(2);
+    assert_eq!(
+        h.state().borrow().redis_batch_del.as_ref().unwrap().confirm_input,
+        "5",
+        "输入应持久写回状态"
+    );
+    h.run_steps(2);
+    assert!(h.query_by_label("确认删除").is_some(), "输入匹配数量后应亮确认按钮");
+    // 输错:门再次关上
+    let mut st = h.state().borrow_mut();
+    st.redis_batch_del.as_mut().unwrap().confirm_input = "6".into();
+    drop(st);
+    h.run_steps(2);
+    assert!(h.query_by_label("确认删除").is_none(), "输错数量后门应再次关上");
+    assert!(h.query_by_label("输入匹配数量后才能删除").is_some());
+}
+
+/// Redis 批量删除弹窗快照(计数完成待确认态)
+#[test]
+fn render_redis_batchdel() {
+    let mut app = test_app(vec![], 0);
+    app.redis_batch_del = Some(crate::app::RedisBatchDeleteState {
+        conn_id: "c1".into(),
+        db: 0,
+        pattern: "cache:*".into(),
+        counted: Some(5),
+        confirm_input: String::new(),
+        deleting: false,
+        error: None,
+    });
+    let app = std::cell::RefCell::new(app);
+    render("modal_redis_batchdel", 900.0, 620.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        crate::modals::draw_redis_batch_modal(&mut b, ctx);
+    });
+}
+
 /// KV 控制台:键列表(单行条目)+ 选中键的编辑区 + 新建键行
 #[test]
 fn render_kv_console() {
@@ -8333,5 +8420,7 @@ fn render_kv_console() {
         draw_app(&mut b, ctx);
     });
 }
+
+
 
 

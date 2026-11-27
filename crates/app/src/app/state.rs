@@ -502,6 +502,8 @@ pub struct RedisBatchDeleteState {
     pub pattern: String,
     /// SCAN 计数结果(Some=已计数,待确认删除)
     pub counted: Option<u64>,
+    /// 确认输入:用户敲入的匹配数量(此前 buffer 每帧重建,打字被吞、门形同虚设)
+    pub confirm_input: String,
     pub deleting: bool,
     pub error: Option<String>,
 }

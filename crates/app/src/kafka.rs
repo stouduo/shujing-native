@@ -22,18 +22,18 @@ pub fn draw_kafka_view(
             ui.horizontal(|ui| {
                 ui.label(RichText::new(ui_kit::t!("Topic", "主题")).size(theme::fs_px(11.0)).color(p.muted));
                 let before = k.selected.clone();
-                egui::ComboBox::from_id_salt(format!("kafka-topic-{tab_id}"))
-                    .width(240.0)
-                    .selected_text(
-                        k.selected.as_deref().unwrap_or(ui_kit::t!("(select)", "(未选择)")),
-                    )
-                    .show_ui(ui, |ui| {
-                        for t in k.topics.clone() {
-                            if ui.selectable_label(k.selected.as_deref() == Some(t.as_str()), &t).clicked() {
-                                k.selected = Some(t);
-                            }
-                        }
-                    });
+                // 下拉并入统一样式(此前原生 ComboBox,无描边框和其余控件两张皮)
+                let opts: Vec<(String, String)> =
+                    k.topics.iter().map(|t| (t.clone(), t.clone())).collect();
+                if let Some(new_t) = theme::select(
+                    ui,
+                    &format!("kafka-topic-{tab_id}"),
+                    k.selected.as_deref().unwrap_or(""),
+                    &opts,
+                    240.0,
+                ) {
+                    k.selected = Some(new_t);
+                }
                 if k.selected != before && k.selected.is_some() {
                     k.msgs.clear();
                     actions.push(TabAction::KafkaLoadMsgs {

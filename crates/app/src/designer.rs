@@ -63,17 +63,15 @@ pub fn draw_designer_view(
                     fg,
                 );
 
-                // 表名输入(编辑模式锁定)
-                let name_resp = ui.add_sized(
-                    [200.0, 26.0],
-                    egui::TextEdit::singleline(&mut d.table_name)
-                        .hint_text(
-                            RichText::new(ui_kit::t!("Table Name", "表名"))
-                                .font(theme::mono(12.0))
-                                .color(p.muted),
-                        )
-                        .font(theme::mono(12.5))
-                        .interactive(!is_edit),
+                // 表名输入(编辑模式锁定 → 禁用态同款框)
+                let name_resp = theme::field_hint_en(
+                    ui,
+                    "designer-table-name",
+                    &mut d.table_name,
+                    200.0,
+                    false,
+                    &ui_kit::t!("Table Name", "表名"),
+                    !is_edit,
                 );
                 if is_edit {
                     name_resp.on_hover_text(ui_kit::t!(

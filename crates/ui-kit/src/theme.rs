@@ -1260,7 +1260,41 @@ pub fn field_hint(
     pwd: bool,
     hint: &str,
 ) -> egui::Response {
+    field_hint_en(ui, id_salt, text, width, pwd, hint, true)
+}
+
+/// field_hint 的禁用态版本:enabled=false 画同款框但置灰文本、不可编辑
+#[allow(clippy::too_many_arguments)]
+pub fn field_hint_en(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    text: &mut String,
+    width: f32,
+    pwd: bool,
+    hint: &str,
+    enabled: bool,
+) -> egui::Response {
     let p = c();
+    if !enabled {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, field_h()), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), p.input_bg);
+        ui.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::same(radius_ctrl() as u8),
+            Stroke::new(1.0, p.border),
+            egui::StrokeKind::Inside,
+        );
+        let shown = if text.is_empty() { hint } else { text };
+        ui.painter().text(
+            egui::pos2(rect.left() + 10.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            shown,
+            egui::FontId::proportional(fs_px(13.0)),
+            p.muted,
+        );
+        return ui.interact(rect, egui::Id::new(id_salt), egui::Sense::hover());
+    }
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, field_h()), egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), p.input_bg);
@@ -1372,6 +1406,60 @@ fn multiline_box(
                         .margin(egui::Margin::ZERO)
                         .font(egui::FontId::proportional(fs_px(13.0))),
                 )
+            },
+        )
+        .inner;
+    let st = if resp.has_focus() {
+        Stroke::new(1.5, p.accent)
+    } else {
+        Stroke::new(1.0, p.border)
+    };
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(radius_ctrl() as u8),
+        st,
+        egui::StrokeKind::Inside,
+    );
+    resp
+}
+
+/// 代码/长内容编辑框(mono 字体):Redis 值、SQL 列定义等。
+/// 骨架与 multiline_box 同款(input_bg 填充 + 描边 + 聚焦强调色)
+pub fn code_box(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    text: &mut String,
+    width: f32,
+    rows: usize,
+    hint: &str,
+) -> egui::Response {
+    let p = c();
+    let h = (rows.max(2) as f32 * 17.0 + 12.0).min(400.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), p.input_bg);
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + 10.0, rect.top() + 6.0),
+        egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
+    );
+    let resp = ui
+        .allocate_new_ui(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::left_to_right(egui::Align::TOP)),
+            |ui| {
+                let mut te = egui::TextEdit::multiline(text)
+                    .id(egui::Id::new(id_salt))
+                    .code_editor()
+                    .frame(false)
+                    .margin(egui::Margin::ZERO)
+                    .font(FontId::monospace(fs_px(12.5)))
+                    .desired_width(inner.width())
+                    .desired_rows(rows);
+                if !hint.is_empty() {
+                    te = te.hint_text(RichText::new(hint).font(FontId::monospace(fs_px(12.0))).color(p.muted));
+                }
+                ui.add_sized(inner.size(), te)
             },
         )
         .inner;
@@ -1561,7 +1649,8 @@ pub fn select(
     let p = c();
     let popup_id = egui::Id::new(id).with("popup");
     let opened = ui.memory(|m| m.is_popup_open(popup_id));
-    let h = 30.0;
+    // 与表单输入框同高(field_h):此前 30,和并排的输入框/按钮差一截
+    let h = field_h();
 
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::click());
     let painter = ui.painter();

@@ -1486,14 +1486,7 @@ fn draw_edit_string_modal(
             let v = rt.edit_value.as_mut().unwrap();
             ui.label(RichText::new(ui_kit::t!("Content", "内容")).size(theme::fs_px(11.0)).color(p.muted));
             ui.add_space(4.0);
-            ui.add(
-                egui::TextEdit::multiline(v)
-                    .id_salt("rk-edit")
-                    .font(theme::mono(12.0))
-                    .desired_width(560.0)
-                    .desired_rows(10)
-                    .code_editor(),
-            );
+            theme::code_box(ui, "rk-edit", v, 536.0, 10, "");
             theme::modal_footer(ui, |ui| {
                 if theme::button(ui, ui_kit::t!("Save (Keep TTL)", "保存(TTL 保留)"), theme::BtnKind::Primary).clicked() {
                     save = true;

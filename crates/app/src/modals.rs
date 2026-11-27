@@ -604,26 +604,14 @@ pub fn draw_new_table_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     .color(p.muted),
                 );
                 ui.add_space(4.0);
-                egui::Frame::new()
-                    .fill(p.bg)
-                    .stroke(egui::Stroke::new(1.0, p.border))
-                    .corner_radius(egui::CornerRadius::same(theme::radius_card() as u8))
-                    .inner_margin(egui::Margin::same(10))
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut st.sql)
-                                .code_editor()
-                                .frame(false)
-                                .margin(egui::Margin::ZERO)
-                                .hint_text(
-                                    RichText::new("id BIGINT PRIMARY KEY,\nname VARCHAR(128)")
-                                        .font(theme::mono(12.0))
-                                        .color(p.muted),
-                                )
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(7),
-                        );
-                    });
+                theme::code_box(
+                    ui,
+                    "nt-sql",
+                    &mut st.sql,
+                    ui_kit::theme::fit_width(680.0, ui.available_width()),
+                    7,
+                    &"id BIGINT PRIMARY KEY,\nname VARCHAR(128)",
+                );
                 theme::modal_footer(ui, |ui| {
                     let ok = !st.name.trim().is_empty() && !st.sql.trim().is_empty();
                     if theme::button(
@@ -774,19 +762,13 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
                     }
                 }
                 ui.add_space(4.0);
-                // 关键词
-                let resp = ui.add_sized(
-                    [ui.available_width() - 70.0, 28.0],
-                    egui::TextEdit::singleline(&mut gs.keyword)
-                        .hint_text(
-                            RichText::new(ui_kit::t!(
-                                "Keyword, press Enter to search all tables…",
-                                "关键词,回车搜索所有表…"
-                            ))
-                                .size(theme::fs_px(12.0))
-                                .color(p.muted),
-                        )
-                        .font(egui::FontId::proportional(theme::fs_px(12.5))),
+                // 关键词(统一 search_box:放大镜图标与各页筛选框同款)
+                let resp = theme::search_box(
+                    ui,
+                    "gs-keyword",
+                    &mut gs.keyword,
+                    &ui_kit::t!("Keyword, press Enter to search all tables…", "关键词,回车搜索所有表…"),
+                    ui.available_width() - 70.0,
                 );
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     do_search = true;
@@ -1017,15 +999,13 @@ pub fn draw_confirm_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             let c = app.confirm.as_mut().unwrap();
             if need_input {
                 ui.add_space(2.0);
-                let resp = ui.add_sized(
-                    [420.0, 28.0],
-                    egui::TextEdit::singleline(&mut c.input)
-                        .hint_text(
-                            RichText::new(ui_kit::t!("Type the name to confirm", "输入名称以确认"))
-                                .size(theme::fs_px(12.0))
-                                .color(p.muted),
-                        )
-                        .font(theme::mono(12.5)),
+                let resp = theme::field_hint(
+                    ui,
+                    "confirm-input",
+                    &mut c.input,
+                    420.0,
+                    false,
+                    &ui_kit::t!("Type the name to confirm", "输入名称以确认"),
                 );
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     proceed = true;
@@ -1951,13 +1931,17 @@ pub fn draw_redis_batch_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                     format!("将删除 {n} 个 key,不可恢复!输入 pattern 确认:")
                 };
                 ui.label(RichText::new(confirm_line).size(theme::fs_px(12.0)).color(theme::c().orange));
-                let mut v = n.to_string();
-                let resp = ui.add_sized(
-                    [200.0, 26.0],
-                    egui::TextEdit::singleline(&mut v).font(theme::mono(12.0)),
+                // 确认输入持久在状态里:此前 buffer 每帧重建,打字被吞且 v==n 恒成立
+                let resp = theme::field_hint(
+                    ui,
+                    "redis-batch-confirm",
+                    &mut st.confirm_input,
+                    200.0,
+                    false,
+                    &ui_kit::t!("Type the count", "输入匹配数量"),
                 );
                 let _ = resp;
-                if v == n.to_string() {
+                if st.confirm_input.trim() == n.to_string() {
                     if theme::button(
                         ui,
                         ui_kit::t!("Confirm Delete", "确认删除"),
@@ -2264,23 +2248,26 @@ pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 .collect();
             ui.horizontal(|ui| {
                 ui.label(RichText::new(ui_kit::t!("Plugin", "插件")).size(theme::fs_px(11.5)).color(p.text2));
-                egui::ComboBox::from_id_salt("plugin-sel")
-                    .width(360.0)
-                    .selected_text(if ok_plugins.is_empty() {
-                        ui_kit::t!("(none)", "(无可用插件)").to_string()
-                    } else {
-                        let i = ok_plugins[pr.sel.min(ok_plugins.len() - 1)];
-                        format!("{} v{}", pr.plugins[i].name, pr.plugins[i].version)
+                // 下拉并入统一样式;值用 ok_plugins 下标,标签带版本
+                let opts: Vec<(String, String)> = ok_plugins
+                    .iter()
+                    .enumerate()
+                    .map(|(k, i)| {
+                        (
+                            k.to_string(),
+                            format!("{} v{}", pr.plugins[*i].name, pr.plugins[*i].version),
+                        )
                     })
-                    .show_ui(ui, |ui| {
-                        for (k, i) in ok_plugins.iter().enumerate() {
-                            ui.selectable_value(
-                                &mut app.plugin_run.as_mut().unwrap().sel,
-                                k,
-                                format!("{} v{}", pr.plugins[*i].name, pr.plugins[*i].version),
-                            );
-                        }
-                    });
+                    .collect();
+                let cur = ok_plugins
+                    .get(pr.sel.min(ok_plugins.len().saturating_sub(1)))
+                    .map(|_| pr.sel.min(ok_plugins.len().saturating_sub(1)).to_string())
+                    .unwrap_or_default();
+                if let Some(v) = theme::select(ui, "plugin-sel", &cur, &opts, 360.0) {
+                    if let Ok(k) = v.parse::<usize>() {
+                        app.plugin_run.as_mut().unwrap().sel = k;
+                    }
+                }
                 if let Some(i) = ok_plugins.get(pr.sel.min(ok_plugins.len().saturating_sub(1))).copied() {
                     if !pr.plugins[i].description.is_empty() {
                         ui.label(
@@ -2310,16 +2297,24 @@ pub fn draw_plugin_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 ui.label(RichText::new(icons::clip(e, 110)).size(theme::fs_px(11.5)).color(p.red));
             } else if let Some(out) = &pr.output {
                 ui.label(RichText::new(ui_kit::t!("Output", "输出")).size(theme::fs_px(11.0)).color(p.muted));
-                egui::ScrollArea::vertical()
-                    .id_salt("plugin-output")
-                    .max_height(220.0)
+                egui::Frame::new()
+                    .fill(p.input_bg)
+                    .stroke(egui::Stroke::new(1.0, p.border))
+                    .corner_radius(egui::CornerRadius::same(theme::radius_ctrl() as u8))
+                    .inner_margin(egui::Margin::same(8))
                     .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut out.as_str())
-                                .font(theme::mono(11.0))
-                                .desired_width(600.0)
-                                .interactive(false),
-                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("plugin-output")
+                            .max_height(220.0)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut out.as_str())
+                                        .font(theme::mono(11.0))
+                                        .frame(false)
+                                        .desired_width(600.0)
+                                        .interactive(false),
+                                );
+                            });
                     });
             }
             theme::modal_footer(ui, |ui| {
@@ -3966,14 +3961,19 @@ ui.add_space(6.0);
                 ui.separator();
                 ui.label(RichText::new(ui_kit::t!("Every", "间隔")).size(theme::fs_px(11.5)).color(p.text2));
                 let hours = app.auto_backup.interval_hours.max(1);
-                egui::ComboBox::from_id_salt("auto-backup-interval")
-                    .width(90.0)
-                    .selected_text(format!("{}h", hours))
-                    .show_ui(ui, |ui| {
-                        for h in [6u32, 12, 24, 72] {
-                            ui.selectable_value(&mut app.auto_backup.interval_hours, h, format!("{}h", h));
-                        }
-                    });
+                let opts: Vec<(String, String)> = [6u32, 12, 24, 72]
+                    .iter()
+                    .map(|h| (h.to_string(), format!("{h}h")))
+                    .collect();
+                if let Some(v) = theme::select(
+                    ui,
+                    "auto-backup-interval",
+                    &hours.to_string(),
+                    &opts,
+                    90.0,
+                ) {
+                    app.auto_backup.interval_hours = v.parse().unwrap_or(hours);
+                }
                 if app.auto_backup.last_run_ms > 0 {
                     ui.label(
                         RichText::new(format!(
