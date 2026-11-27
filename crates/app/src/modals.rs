@@ -2442,7 +2442,6 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                         } else {
                             format!("{} · {} · {}", time, it.conn, it.db)
                         };
-                        let status_icon = if it.ok { "✓" } else { "✗" };
                         let status_color = if it.ok { p.green } else { p.red };
                         let first_line: String = it
                             .sql
@@ -2462,10 +2461,22 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                             egui::CornerRadius::same(theme::radius_ctrl() as u8),
                             if resp.hovered() { p.hover } else { egui::Color32::TRANSPARENT },
                         );
+                        // 状态用矢量图标(全站图标语言;此前是字符 ✓/✗)
+                        crate::icons::paint_icon(
+                            ui.painter(),
+                            if it.ok {
+                                &crate::icons::CHECK
+                            } else {
+                                &crate::icons::X
+                            },
+                            egui::pos2(rect.left() + 16.0, rect.top() + 11.0),
+                            11.0,
+                            status_color,
+                        );
                         ui.painter().text(
-                            egui::pos2(rect.left() + 10.0, rect.top() + 11.0),
+                            egui::pos2(rect.left() + 26.0, rect.top() + 11.0),
                             egui::Align2::LEFT_CENTER,
-                            format!("{} {}", status_icon, head),
+                            &head,
                             egui::FontId::proportional(theme::fs_px(10.5)),
                             status_color,
                         );

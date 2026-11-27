@@ -6788,6 +6788,7 @@ impl eframe::App for ShujingApp {
             };
             let modal = egui::Modal::new(egui::Id::new("dirty-confirm"))
                 .frame(theme::modal_frame())
+                .backdrop_color(p.overlay)
                 .show(ctx, |ui| {
                     ui.set_width(380.0);
                     theme::modal_title(ui, ui_kit::t!("Unsaved Changes", "未保存的修改"));

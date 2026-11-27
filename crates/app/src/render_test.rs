@@ -4220,9 +4220,9 @@ fn tab_close_dirty_shows_confirm_and_closes() {
         assert!(app.pending.is_some(), "脏标签关闭应弹未保存确认");
         assert_eq!(app.tabs.len(), 3, "确认前不应关闭");
     }
-    let img = harness.render().expect("r");
-    let _ = std::fs::create_dir_all("/tmp/shujing_ui");
-    img.save("/tmp/shujing_ui/dirty_confirm.png").unwrap();
+    // egui Area 默认带 fade_in(弹出淡入):刚打开就截图会把整层弹窗(含遮罩)
+    // 定格在半透明帧上,看着像"确认框没有遮罩"。走完动画再截
+    harness.run_steps(16);
     let img = harness.render().expect("r");
     let _ = std::fs::create_dir_all("/tmp/shujing_ui");
     img.save("/tmp/shujing_ui/dirty_confirm.png").unwrap();
