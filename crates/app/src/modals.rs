@@ -3751,7 +3751,7 @@ ui.add_space(6.0);
             ui.add_space(6.0);
             ui.label(RichText::new(ui_kit::t!("Theme", "主题")).size(theme::fs_px(11.0)).color(p.muted));
             ui.horizontal(|ui| {
-                // 跟随系统开关(手动点 ☀/☾ 会自动解除跟随)
+                // 跟随系统开关(手动点顶栏的日/月会解除跟随)
                 let on = app.follow_system_theme;
                 let (rect, resp) = ui.allocate_exact_size(egui::vec2(38.0, 22.0), Sense::click());
                 ui.painter().rect_filled(
@@ -3783,7 +3783,7 @@ ui.add_space(6.0);
                     RichText::new(if on {
                         ui_kit::t!("Follow system appearance", "跟随系统外观")
                     } else {
-                        ui_kit::t!("Manual (toggle with sidebar ☀/☾)", "手动(侧栏 ☀/☾ 切换)")
+                        ui_kit::t!("Manual (toggle with the sun/moon button in the toolbar)", "手动(用顶栏的日/月按钮切换)")
                     })
                     .size(theme::fs_px(12.0))
                     .color(p.text2),

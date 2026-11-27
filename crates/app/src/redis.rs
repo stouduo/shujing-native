@@ -253,7 +253,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 fn ttl_short(t: i64) -> String {
     if t == -1 {
-        return "∞".into();
+        return ui_kit::t!("never", "永久").into();
     }
     if t < 0 {
         return String::new();
@@ -458,7 +458,10 @@ fn draw_detail(
         ui.centered_and_justified(|ui| {
             ui.add_space(20.0);
             ui.label(
-                RichText::new(ui_kit::t!("Failed to load details, click ↻ at top right to retry", "详情加载失败,点右上 ↻ 重试"))
+                RichText::new(ui_kit::t!(
+                    "Failed to load details, click the refresh button at top right to retry",
+                    "详情加载失败,点右上角刷新按钮重试"
+                ))
                     .size(theme::fs_px(12.5))
                     .color(p.red),
             );
@@ -578,7 +581,7 @@ fn draw_detail(
                             rt.rename_draft = None; // 与重命名草稿互斥,避免一次回车两条写操作
                             rt.ttl_draft = Some(d.ttl.max(60).to_string());
                         }
-                        if d.ttl != -1 && theme::mini_text_button(ui, "∞", p.text2).0 {
+                        if d.ttl != -1 && theme::mini_text_button(ui, "永久", p.text2).0 {
                             actions.push(TabAction::RedisSetTtl {
                                 tab_id: tab_id.to_string(),
                                 key: key.clone(),

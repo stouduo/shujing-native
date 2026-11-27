@@ -265,7 +265,7 @@ impl ShujingApp {
             // 版本号;有新版时变为可点链接(打开 Release 页)
             let upd = self.update_available.clone();
             if let Some((tag, url)) = upd {
-                let btn = ui.button(RichText::new(format!("⬆ {tag}")).size(theme::fs_px(10.5)));
+                let btn = ui.button(RichText::new(format!("{} {tag}", ui_kit::t!("Update:", "新版本:"))).size(theme::fs_px(10.5)));
                 let clicked = btn.clicked();
                 btn.on_hover_text(ui_kit::t!(
                     "New version available, click to open the download page",

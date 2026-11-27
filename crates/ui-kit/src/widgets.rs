@@ -2,7 +2,9 @@
 //! 结果网格的表头-行底色-单元格-行号绘制族、列宽启发式。
 //! 全部是纯参数(&Painter/&Ui + Rect/Color32/String),app 经 theme 转发层使用。
 
-use crate::theme::{chip_h, fs_px, radius_ctrl, radius_card, radius_small, mini_h};
+use crate::icons::{tool_face, ICON_SIZE};
+use crate::lucide::Icon;
+use crate::theme::{chip_h, fs_px, radius_ctrl, radius_small};
 use egui::{Color32, RichText, Sense};
 
 
@@ -45,16 +47,25 @@ pub fn where_chip(ui: &mut egui::Ui, active: bool, open: bool) -> egui::Response
         );
     }
     let cy = rect.center().y;
-    crate::icons::funnel_glyph(
+    let col = if active {
+        crate::theme::where_color()
+    } else {
+        p.text2
+    };
+    crate::icons::paint_icon(
         ui.painter(),
-        egui::pos2(rect.left() + 11.0, cy),
-        if active { crate::theme::where_color() } else { p.text2 },
+        &crate::lucide::FILTER,
+        egui::pos2(rect.left() + 13.0, cy),
+        13.0,
+        col,
     );
-    let g = ui
-        .painter()
-        .layout_no_wrap("WHERE".to_owned(), crate::theme::mono(12.0), crate::theme::where_color());
+    let g = ui.painter().layout_no_wrap(
+        "WHERE".to_owned(),
+        crate::theme::mono(12.0),
+        crate::theme::where_color(),
+    );
     ui.painter().galley(
-        egui::pos2(rect.left() + 24.0, cy - g.size().y / 2.0),
+        egui::pos2(rect.left() + 25.0, cy - g.size().y / 2.0),
         g,
         crate::theme::where_color(),
     );
@@ -560,71 +571,115 @@ pub fn base_width_at(
 
 // ---------------------------------------------------------------- 工具栏按钮
 
-pub type IconFn = fn(&egui::Painter, egui::Pos2, Color32);
+// ---------------------------------------------------------------- 工具栏按钮族
 
-/// 工具栏按钮:图标 + 文字(文字可空 = 只留图标),悬停淡底
-pub fn bar_button(ui: &mut egui::Ui, icon: IconFn, label: &str, tip: &str) -> bool {
-    let p = crate::theme::c();
-    let g = if label.is_empty() {
+/// 工具栏按钮统一高度
+pub const TOOL_H: f32 = 28.0;
+
+fn tool_text(ui: &egui::Ui, label: &str) -> Option<std::sync::Arc<egui::Galley>> {
+    if label.is_empty() {
         None
     } else {
         Some(
-            ui.painter()
-                .layout_no_wrap(label.to_owned(), egui::FontId::proportional(fs_px(12.0)), p.text),
+            ui.painter().layout_no_wrap(
+                label.to_owned(),
+                egui::FontId::proportional(fs_px(12.0)),
+                crate::theme::c().text,
+            ),
         )
-    };
-    let w = 8.0 + 14.0 + g.as_ref().map_or(0.0, |g| 6.0 + g.size().x) + 8.0;
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::click());
-    // 文字是手绘的:补无障碍标签,读屏与 kittest 才找得到按钮(窄窗口只剩图标时用提示语)
-    resp.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            true,
-            if label.is_empty() { tip } else { label }.to_owned(),
-        )
-    });
-    if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), crate::theme::tint(p.text, 16));
     }
+}
+
+/// 工具栏按钮:图标 + 文字(label 为空 = 只留图标,靠悬停提示说明)。
+/// 全应用的工具栏(顶部、各页面、表头行)都用这一种,别处不再各写各的
+pub fn tool_button(ui: &mut egui::Ui, icon: Option<&'static Icon>, label: &str, tip: &str) -> bool {
+    let p = crate::theme::c();
+    let g = tool_text(ui, label);
+    let w = if label.is_empty() {
+        TOOL_H
+    } else {
+        8.0 + if icon.is_some() { ICON_SIZE + 5.0 } else { 0.0 } + g.as_ref().map_or(0.0, |g| g.size().x) + 9.0
+    };
+    let (rect, resp, hot) = tool_face(ui, w);
+    let col = if hot { p.text } else { p.text2 };
     let cy = rect.center().y;
-    icon(ui.painter(), egui::pos2(rect.left() + 15.0, cy), p.text);
+    let mut x = rect.left() + 8.0;
+    if let Some(ic) = icon {
+        crate::icons::paint_icon(ui.painter(), ic, egui::pos2(x + ICON_SIZE / 2.0, cy), ICON_SIZE, col);
+        x += ICON_SIZE + 5.0;
+    }
     if let Some(g) = g {
-        ui.painter().galley(
-            egui::pos2(rect.left() + 28.0, cy - g.size().y / 2.0),
-            g,
-            p.text,
+        ui.painter().galley(egui::pos2(x, cy - g.size().y / 2.0), g, col);
+    }
+    // 文字是画出来的:补无障碍标签,读屏与 kittest 才找得到按钮
+    let name = if label.is_empty() { tip } else { label };
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name.to_owned())
+    });
+    if !tip.is_empty() {
+        resp.clone().on_hover_text(tip);
+    }
+    resp.clicked()
+}
+
+/// 工具栏菜单按钮:图标 + 文字 + 下箭头,点开在正下方弹菜单(与 `tool_button` 同一张脸)。
+/// 菜单项由调用方的闭包给出;点中某项后由调用方 `ui.close_menu()` 关闭
+pub fn tool_menu<R>(
+    ui: &mut egui::Ui,
+    icon: Option<&'static Icon>,
+    label: &str,
+    tip: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::Response {
+    let p = crate::theme::c();
+    let popup_id = ui.id().with(("tool-menu", label, tip));
+    let opened = ui.memory(|m| m.is_popup_open(popup_id));
+    let g = tool_text(ui, label);
+    // 箭头紧贴内容(图标-only 时按钮才不会中间空一截,看着像两个按钮)
+    let w = 8.0
+        + if icon.is_some() { ICON_SIZE + 5.0 } else { 0.0 }
+        + g.as_ref().map_or(0.0, |g| g.size().x)
+        + 2.0
+        + 13.0
+        + 5.0;
+    let (rect, resp, hot) = tool_face(ui, w);
+    let col = if hot || opened { p.text } else { p.text2 };
+    let cy = rect.center().y;
+    let mut x = rect.left() + 8.0;
+    if let Some(ic) = icon {
+        crate::icons::paint_icon(ui.painter(), ic, egui::pos2(x + ICON_SIZE / 2.0, cy), ICON_SIZE, col);
+        x += ICON_SIZE + 5.0;
+    }
+    if let Some(g) = g {
+        ui.painter().galley(egui::pos2(x, cy - g.size().y / 2.0), g, col);
+    }
+    crate::icons::paint_icon(
+        ui.painter(),
+        &crate::lucide::CHEVRON_DOWN,
+        egui::pos2(rect.right() - 5.0 - 6.5, cy),
+        13.0,
+        p.muted,
+    );
+    let name = if label.is_empty() { tip } else { label };
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name.to_owned())
+    });
+    if !tip.is_empty() {
+        resp.clone().on_hover_text(tip);
+    }
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup_id));
+    }
+    if opened {
+        let _ = egui::popup_below_widget(
+            ui,
+            popup_id,
+            &resp,
+            egui::PopupCloseBehavior::CloseOnClick,
+            add,
         );
     }
-    if !tip.is_empty() {
-        resp.clone().on_hover_text(tip.to_string());
-    }
-    let clicked = resp.clicked();
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    clicked
-}
-/// 纯图标按钮(28×28,文字字形当图标)
-pub fn icon_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
-    let p = crate::theme::c();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
-    resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip.to_owned())
-    });
-    if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), crate::theme::tint(p.text, 16));
-    }
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        glyph,
-        egui::FontId::proportional(fs_px(14.0)),
-        if resp.hovered() { p.text } else { p.text2 },
-    );
-    let clicked = resp.clicked();
-    resp.clone().on_hover_text(tip);
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    clicked
+    resp
 }
 
 // ---------------------------------------------------------------- 设计器小件

@@ -125,3 +125,48 @@ fn gallery_render() {
     let img = harness.render().expect("render");
     img.save(out_dir.join("kit_gallery.png")).expect("save");
 }
+
+/// 图标总览:全部 Lucide 图标在 16px(实际使用尺寸)与 32px 下各画一遍,核对路径转换
+/// (弧线、齿轮齿、圆角矩形最容易出错)。存 /tmp/shujing_ui/kit_icons.png
+#[test]
+fn icon_sheet_render() {
+    use ui_kit::icons::{paint_icon, ICON_SIZE};
+    let out_dir = std::path::PathBuf::from("/tmp/shujing_ui");
+    let _ = std::fs::create_dir_all(&out_dir);
+    let setup = std::cell::Cell::new(false);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(980.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build(|ctx| {
+            if !setup.get() {
+                setup.set(true);
+                theme::install_fallback_fonts(ctx);
+                theme::set_dark(true);
+                return;
+            }
+            theme::apply(ctx);
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let p = theme::c();
+                ui.set_width(980.0);
+                let (cols, cw, ch) = (8, 118.0, 46.0);
+                for (i, (name, icon)) in ui_kit::lucide::ALL.iter().enumerate() {
+                    let (col, row) = (i % cols, i / cols);
+                    let origin = ui.max_rect().min + egui::vec2(10.0 + col as f32 * cw, 8.0 + row as f32 * ch);
+                    let c = origin + egui::vec2(14.0, 14.0);
+                    paint_icon(ui.painter(), icon, c, ICON_SIZE, p.text);
+                    paint_icon(ui.painter(), icon, origin + egui::vec2(58.0, 14.0), 32.0, p.text2);
+                    ui.painter().text(
+                        origin + egui::vec2(0.0, 38.0),
+                        egui::Align2::LEFT_CENTER,
+                        *name,
+                        egui::FontId::monospace(10.0),
+                        p.muted,
+                    );
+                }
+            });
+        });
+    harness.run_steps(4);
+    let img = harness.render().expect("render 失败");
+    img.save(out_dir.join("kit_icons.png"))
+        .expect("保存 PNG 失败");
+}

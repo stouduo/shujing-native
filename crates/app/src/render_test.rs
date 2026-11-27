@@ -2793,7 +2793,7 @@ fn entry_points_are_unique() {
     h.run_steps(6);
 
     // 顶栏「更多」:只有连接的导入导出;设置由右侧齿轮进
-    open_menu(&mut h, "更多 ▾");
+    open_menu(&mut h, "更多");
     for keep in [
         "导入连接(DBeaver/Navicat)…",
         "导出连接(加密备份)…",
@@ -2806,7 +2806,7 @@ fn entry_points_are_unique() {
     assert!(!has(&h, "导入连接(DBeaver/Navicat)…"), "Esc 应关掉菜单");
 
     // 表页「···」:只留"这一页怎么看"(列显隐、复制格式、Mongo 文档操作)
-    open_menu(&mut h, "···");
+    open_menu(&mut h, "更多操作");
     for keep in ["显示列", "显示全部列", "复制本页为 TSV", "复制本页为 INSERT 语句"] {
         assert!(has(&h, keep), "表页 ··· 应保留:{keep}");
     }
@@ -2831,7 +2831,7 @@ fn entry_points_are_unique() {
     key_once(&mut h, egui::Key::Escape, plain);
 
     // 导出只有页面工具栏这一处
-    open_menu(&mut h, "导出 ▾");
+    open_menu(&mut h, "导出");
     for keep in ["导出 CSV", "导出 Excel(.xlsx)", "导出 SQL"] {
         assert!(has(&h, keep), "工具栏「导出」应包含:{keep}");
     }
@@ -2887,9 +2887,16 @@ fn sidebar_context_menus_are_layered() {
     );
     // 表节点
     right_click_at(&mut h, table_row);
-    for keep in ["表结构", "设计表", "复制表名", "删除表…"] {
+    // "设计表"在面包屑工具栏也有一份(有意保留的两个入口),菜单开着时全窗口
+    // 恰好两处;表节点菜单专有的项用唯一性断言
+    for keep in ["复制表名", "删除表…", "复制 SELECT *"] {
         assert!(menu_has(&h, keep), "表节点右键菜单应有:{keep}");
     }
+    assert_eq!(
+        h.query_all_by_label("设计表").count(),
+        2,
+        "「设计表」= 面包屑按钮 + 表节点菜单,共两处"
+    );
     assert!(!menu_has(&h, "新建查询"), "表节点右键菜单不该有新建查询(与连接节点重复)");
     key_once(&mut h, egui::Key::Escape, plain);
     assert!(!menu_has(&h, "复制表名"), "Esc 应关掉菜单");

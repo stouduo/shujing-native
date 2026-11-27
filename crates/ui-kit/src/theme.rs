@@ -890,7 +890,7 @@ pub fn hairline_top(ui: &egui::Ui) {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum BtnKind {
-    /// 反色实心(DBX 主操作:深色主题浅灰底,浅色主题近黑底)
+    /// 强调色实心(主操作:运行/保存;与选中、激活标签同一强调色)
     Primary,
     /// 系统绿填充(保存)
     Success,
@@ -904,7 +904,7 @@ impl BtnKind {
     fn colors(self) -> (Color32, Color32, Option<(Color32, Color32)>) {
         let p = c();
         match self {
-            BtnKind::Primary => (p.primary_bg, p.primary_fg, None),
+            BtnKind::Primary => (p.accent, p.primary_fg, None),
             BtnKind::Success => {
                 if is_dark() {
                     (p.green, Color32::from_rgb(0x04, 0x1f, 0x14), None)
@@ -1620,23 +1620,12 @@ pub fn select(
 
     let mut picked = None;
     if opened {
-        if std::env::var("SHUJING_POPUP_DEBUG").is_ok() {
-            eprintln!(
-                "[popup] id={popup_id:?} widget={:?} parent_layer={:?} screen={:?}",
-                resp.rect,
-                ui.layer_id(),
-                ui.input(|i| i.screen_rect)
-            );
-        }
         let _area_out = egui::popup_below_widget(
             ui,
             popup_id,
             &resp,
             egui::PopupCloseBehavior::CloseOnClick,
             |ui| {
-                if std::env::var("SHUJING_POPUP_DEBUG").is_ok() {
-                    eprintln!("[popup-inner] max_rect={:?} layer={:?}", ui.max_rect(), ui.layer_id());
-                }
                 ui.set_min_width(width);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (val, label) in options {

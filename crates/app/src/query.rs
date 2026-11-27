@@ -126,8 +126,11 @@ pub fn draw_query_view(
                     // 导出收纳为单一菜单:CSV/Excel/Parquet/JSON 四格式
                     // (按钮常驻,不可用时菜单内灰置——随结果集异步出现/消失会把
                     // 右侧按钮整体平移,按压中的点击被吞)
-                    let exp = ui.menu_button(
-                        RichText::new(ui_kit::t!("Export ▾", "导出 ▾")).size(theme::fs_px(12.5)).color(p.text2),
+                    let exp = theme::tool_menu(
+                        ui,
+                        Some(&crate::icons::DOWNLOAD),
+                        ui_kit::t!("Export", "导出"),
+                        "",
                         |ui| {
                             ui.set_min_width(180.0);
                             macro_rules! item {
@@ -190,15 +193,18 @@ pub fn draw_query_view(
                         },
                     );
                     if !has_grid {
-                        exp.response.on_hover_text(ui_kit::t!(
+                        exp.on_hover_text(ui_kit::t!(
                             "Nothing to export in this result set (no grid)",
                             "当前结果集不可导出(无表格)"
                         ));
                     }
-                    // 低频操作收进「更多 ▾」:存为新表/插件/计划/优化
+                    // 低频操作收进「更多」:存为新表/插件/计划/优化
                     // (工具栏可见控件收敛到 运行/AI/格式化/片段/历史/导出/更多)
-                    ui.menu_button(
-                        RichText::new(ui_kit::t!("More ▾", "更多 ▾")).size(theme::fs_px(12.5)).color(p.text2),
+                    let _ = theme::tool_menu(
+                        ui,
+                        Some(&crate::icons::ELLIPSIS),
+                        ui_kit::t!("More", "更多"),
+                        "",
                         |ui| {
                             ui.set_min_width(200.0);
                             macro_rules! low_item {
@@ -268,7 +274,7 @@ pub fn draw_query_view(
                         },
                     );
                     if !is_redis {
-                        let ai = theme::button(ui, "AI", theme::BtnKind::Secondary);
+                        let ai = icons::icon_button(ui, &crate::icons::SPARKLES, "");
                         let ai_clicked = ai.clicked();
                         ai.on_hover_text(ui_kit::t!(
                             "AI Assistant: generate SQL / explain / optimization tips (configure API in Settings)",
@@ -281,21 +287,37 @@ pub fn draw_query_view(
                             });
                         }
                     }
-                    if !is_redis
-                        && theme::button(ui, ui_kit::t!("Format", "格式化"), theme::BtnKind::Secondary)
-                            .on_hover_text(ui_kit::t!(
+                    // 格式化:与同栏其它入口同一张脸(此前 格式化/AI 是带框按钮,
+                    // 历史/片段/导出是裸文字)
+                    let format_clicked = !is_redis
+                        && theme::tool_button(
+                            ui,
+                            Some(&crate::icons::ALIGN_LEFT),
+                            ui_kit::t!("Format", "格式化"),
+                            ui_kit::t!(
                                 "Beautify SQL (uppercase keywords + line breaks and indent)",
                                 "美化 SQL(关键字大写+换行缩进)"
-                            ))
-                            .clicked()
-                        && !q.sql.trim().is_empty()
-                    {
+                            ),
+                        );
+                    if format_clicked && !q.sql.trim().is_empty() {
                         q.sql = shujing_core::sql_format::format_sql(&q.sql);
                     }
-                    ui.menu_button(RichText::new(ui_kit::t!("Snippets", "片段")).size(theme::fs_px(12.5)).color(p.text2), |ui| {
+                    // 片段:保存当前 SQL / 点一条插入编辑器 / 右侧 × 删除
+                    let _ = theme::tool_menu(
+                        ui,
+                        Some(&crate::icons::BOOKMARK),
+                        ui_kit::t!("Snippets", "片段"),
+                        "",
+                        |ui| {
                             ui.set_min_width(300.0);
                             if !is_redis && !q.sql.trim().is_empty() {
-                                if ui.button(ui_kit::t!("☆ Save Current SQL as Snippet", "☆ 保存当前 SQL 为片段")).clicked() {
+                                if ui
+                                    .button(ui_kit::t!(
+                                        "Save Current SQL as Snippet",
+                                        "保存当前 SQL 为片段"
+                                    ))
+                                    .clicked()
+                                {
                                     actions.push(TabAction::SnippetSave {
                                         sql: q.sql.clone(),
                                     });
@@ -304,7 +326,11 @@ pub fn draw_query_view(
                                 ui.separator();
                             }
                             if snippets.is_empty() {
-                                ui.label(RichText::new(ui_kit::t!("No snippets", "暂无片段")).size(theme::fs_px(12.0)).color(p.muted));
+                                ui.label(
+                                    RichText::new(ui_kit::t!("No snippets", "暂无片段"))
+                                        .size(theme::fs_px(12.0))
+                                        .color(p.muted),
+                                );
                             }
                             for (i, snip) in snippets.iter().enumerate() {
                                 let preview: String = snip.chars().take(56).collect();
@@ -320,19 +346,35 @@ pub fn draw_query_view(
                                         q.sql.push_str(snip);
                                         ui.close_menu();
                                     }
-                                    if ui.small_button(RichText::new(ui_kit::t!("Del", "删")).size(theme::fs_px(10.0))).clicked() {
+                                    if icons::icon_button(
+                                        ui,
+                                        &crate::icons::X,
+                                        ui_kit::t!("Delete snippet", "删除片段"),
+                                    )
+                                    .clicked()
+                                    {
                                         actions.push(TabAction::SnippetDelete { idx: i });
                                         ui.close_menu();
                                     }
                                 });
                             }
-                        });
+                        },
+                    );
+                    // 执行历史:点一条回到编辑器;完整历史另开弹窗
                     let history = q.history.clone();
-                    let hist =
-                        ui.menu_button(RichText::new(ui_kit::t!("History", "历史")).size(theme::fs_px(12.5)).color(p.text2), |ui| {
+                    let _ = theme::tool_menu(
+                        ui,
+                        Some(&crate::icons::HISTORY),
+                        ui_kit::t!("History", "历史"),
+                        ui_kit::t!("Execution history", "执行历史"),
+                        |ui| {
                             ui.set_min_width(280.0);
                             if history.is_empty() {
-                                ui.label(RichText::new(ui_kit::t!("No history", "暂无记录")).size(theme::fs_px(12.0)).color(p.muted));
+                                ui.label(
+                                    RichText::new(ui_kit::t!("No history", "暂无记录"))
+                                        .size(theme::fs_px(12.0))
+                                        .color(p.muted),
+                                );
                             }
                             for (i, h) in history.iter().enumerate() {
                                 let preview: String = h.chars().take(52).collect();
@@ -349,16 +391,20 @@ pub fn draw_query_view(
                                 }
                             }
                             ui.separator();
-                            if ui.button(
-                                RichText::new(ui_kit::t!("Open full history…", "打开完整历史…")).size(theme::fs_px(12.0)),
-                            ).clicked() {
+                            if ui
+                                .button(
+                                    RichText::new(ui_kit::t!("Open full history…", "打开完整历史…"))
+                                        .size(theme::fs_px(12.0)),
+                                )
+                                .clicked()
+                            {
                                 actions.push(TabAction::OpenQueryHistory {
                                     tab_id: tab_id.to_string(),
                                 });
                                 ui.close_menu();
                             }
-                        });
-                    hist.response.on_hover_text(ui_kit::t!("Execution history", "执行历史"));
+                        },
+                    );
                 });
             });
             theme::hairline_bottom(ui);

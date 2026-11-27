@@ -58,29 +58,29 @@ impl ShujingApp {
                         ui_kit::t!("Compare Structure…", "结构对比…"),
                         ui_kit::t!("Plugins", "插件管理"),
                     ];
+                    // 数据对比与结构对比是两件事,图标也要分开(此前共用一个)
                     for (i, icon) in [
-                        crate::icons::icon_plus_sq,
-                        crate::icons::icon_doc_plus,
-                        crate::icons::icon_swap,
-                        crate::icons::icon_diff,
-                        crate::icons::icon_diff,
-                        crate::icons::icon_box,
+                        &icons::PLUG,
+                        &icons::SQUARE_PEN,
+                        &icons::TRANSFER,
+                        &icons::COMPARE,
+                        &icons::FILE_DIFF,
+                        &icons::BLOCKS,
                     ]
                     .into_iter()
                     .enumerate()
                     {
-                        if theme::bar_button(ui, icon, &lbl(tip[i]), tip[i]) {
+                        if theme::tool_button(ui, Some(icon), &lbl(tip[i]), tip[i]) {
                             act = Some(i as u8);
                         }
                     }
-                    // 更多:低频的全局入口
-                    ui.menu_button(
-                        egui::RichText::new(format!(
-                            "{} ▾",
-                            ui_kit::t!("More", "更多")
-                        ))
-                        .size(theme::fs_px(12.0))
-                        .color(p.text),
+                    ui.add_space(2.0);
+                    // 更多:低频的全局入口(连接的导入导出)。设置在右侧齿轮,不在这里重复
+                    let _ = theme::tool_menu(
+                        ui,
+                        Some(&icons::ELLIPSIS),
+                        &lbl(ui_kit::t!("More", "更多")),
+                        ui_kit::t!("More", "更多"),
                         |ui| {
                             ui.set_min_width(250.0);
                             for (label, a) in [
@@ -89,7 +89,7 @@ impl ShujingApp {
                                         "Import Connections (DBeaver/Navicat)…",
                                         "导入连接(DBeaver/Navicat)…"
                                     ),
-                                    8,
+                                    8u8,
                                 ),
                                 (
                                     ui_kit::t!(
@@ -112,22 +112,29 @@ impl ShujingApp {
                                 }
                             }
                         },
-                    )
-                    .response
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    );
 
                     // 右侧:外观切换 / 设置
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        if theme::icon_button(ui, "⚙", ui_kit::t!("Settings", "设置")) {
+                        if icons::icon_button(ui, &icons::SETTINGS, ui_kit::t!("Settings", "设置"))
+                            .clicked()
+                        {
                             act = Some(7);
                         }
-                        let glyph = if theme::is_dark() { "☀" } else { "☾" };
-                        if theme::icon_button(
+                        // 深色时画太阳(点了变浅色),浅色时画月亮
+                        let glyph = if theme::is_dark() {
+                            &icons::SUN
+                        } else {
+                            &icons::MOON
+                        };
+                        if icons::icon_button(
                             ui,
                             glyph,
                             ui_kit::t!("Toggle light/dark appearance", "切换深浅外观"),
-                        ) {
+                        )
+                        .clicked()
+                        {
                             act = Some(6);
                         }
                     });

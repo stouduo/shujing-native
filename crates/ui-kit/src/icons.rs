@@ -3,7 +3,75 @@
 
 use crate::theme;
 use crate::theme::{fs_px, radius_ctrl};
+
+use crate::lucide::Icon;
 use egui::{Color32, Pos2, Sense, Shape, Stroke, Ui, Vec2};
+
+// ---------------------------------------------------------------- Lucide 线性图标
+
+/// 图标的标准显示尺寸(工具栏、菜单、表头都用这一档;行内小图标用 12)
+pub const ICON_SIZE: f32 = 16.0;
+
+/// 画一个 Lucide 图标:以 `c` 为中心、外接尺寸 `size`。线宽随尺寸等比(24 网格上描边 2),
+/// 圆头圆角与原版一致
+pub fn paint_icon(p: &egui::Painter, icon: &Icon, c: Pos2, size: f32, color: Color32) {
+    let k = size / 24.0;
+    let stroke = Stroke::new(2.0 * k, color);
+    for line in icon.lines {
+        let Some(first) = line.first() else {
+            continue;
+        };
+        if line.len() < 2 {
+            // 退化的单点:画一个圆点
+            p.circle_filled(
+                Pos2::new(c.x + (first[0] - 12.0) * k, c.y + (first[1] - 12.0) * k),
+                stroke.width / 2.0,
+                color,
+            );
+            continue;
+        }
+        let pts: Vec<Pos2> = line
+            .iter()
+            .map(|&[x, y]| Pos2::new(c.x + (x - 12.0) * k, c.y + (y - 12.0) * k))
+            .collect();
+        p.add(Shape::line(pts, stroke));
+    }
+}
+
+/// 图标按钮的底:`w × 28` 的可点区,悬停/按住时垫淡底。返回 (矩形, 响应, 是否高亮)
+pub(crate) fn tool_face(ui: &mut Ui, w: f32) -> (egui::Rect, egui::Response, bool) {
+    let p = theme::c();
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 28.0), Sense::click());
+    let hot = resp.hovered() || resp.is_pointer_button_down_on();
+    if hot {
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::same(5),
+            theme::tint(p.text, 16),
+        );
+    }
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    (rect, resp, hot)
+}
+
+/// 图标按钮(28×28),悬停才提亮并垫淡底。图标不是文字,所以补无障碍标签
+/// (读屏与 kittest 靠它找到按钮)
+pub fn icon_button(ui: &mut Ui, icon: &Icon, tip: &str) -> egui::Response {
+    let p = theme::c();
+    let (rect, resp, hot) = tool_face(ui, 28.0);
+    paint_icon(
+        ui.painter(),
+        icon,
+        rect.center(),
+        ICON_SIZE,
+        if hot { p.text } else { p.text2 },
+    );
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tip.to_owned())
+    });
+    resp.clone().on_hover_text(tip);
+    resp
+}
 
 /// 展开/收起三角(自绘;位置由调用方给定)
 pub fn paint_triangle(p: &egui::Painter, center: Pos2, open: bool, color: Color32) {
@@ -204,47 +272,14 @@ pub fn eye_off_glyph(p: &egui::Painter, center: egui::Pos2, color: egui::Color32
     );
 }
 
-/// 漏斗 glyph(筛选语义),宽 12,高 12
+/// 漏斗 glyph(筛选语义,12×12;内部已是 Lucide FILTER)
 pub fn funnel_glyph(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
-    let st = Stroke::new(1.2, color);
-    let (x, y) = (center.x, center.y - 1.0);
-    p.line_segment(
-        [egui::pos2(x - 5.0, y - 3.5), egui::pos2(x + 5.0, y - 3.5)],
-        st,
-    );
-    p.line_segment(
-        [egui::pos2(x - 5.0, y - 3.5), egui::pos2(x - 1.6, y + 0.8)],
-        st,
-    );
-    p.line_segment(
-        [egui::pos2(x + 5.0, y - 3.5), egui::pos2(x + 1.6, y + 0.8)],
-        st,
-    );
-    p.line_segment(
-        [egui::pos2(x - 1.6, y + 0.8), egui::pos2(x - 1.6, y + 4.5)],
-        st,
-    );
-    p.line_segment(
-        [egui::pos2(x + 1.6, y + 0.8), egui::pos2(x + 1.6, y + 2.8)],
-        st,
-    );
-    p.line_segment(
-        [egui::pos2(x - 1.6, y + 4.5), egui::pos2(x + 1.6, y + 2.8)],
-        st,
-    );
+    paint_icon(p, &crate::lucide::FILTER, center, 12.0, color);
 }
 
-/// 放大镜 glyph(搜索框内)
+/// 放大镜 glyph(搜索框内;Lucide SEARCH)
 pub fn magnifier(p: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
-    let st = Stroke::new(1.3, color);
-    p.circle_stroke(egui::pos2(center.x - 1.0, center.y - 1.0), 3.6, st);
-    p.line_segment(
-        [
-            egui::pos2(center.x + 1.9, center.y + 1.9),
-            egui::pos2(center.x + 5.2, center.y + 5.2),
-        ],
-        st,
-    );
+    paint_icon(p, &crate::lucide::SEARCH, center, 13.0, color);
 }
 
 /// 画一个关闭叉(位置/尺寸由调用方给定)
@@ -319,94 +354,37 @@ pub fn chip(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
     resp
 }
 
-/// 刷新图标:3/4 圆弧 + 箭头(手绘,避免字形基线问题)
-pub fn refresh(ui: &mut Ui, color: egui::Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
-    let col = if resp.hovered() {
-        theme::c().text
-    } else {
-        color
-    };
-    let p = ui.painter();
-    let c = rect.center();
-    let r = 6.0;
-    let st = Stroke::new(1.4, col);
-    let start = -std::f32::consts::FRAC_PI_2 + 0.55;
-    let end = start + std::f32::consts::TAU * 0.78;
-    let mut pts = Vec::new();
-    let n = 28;
-    for i in 0..=n {
-        let a = start + (end - start) * i as f32 / n as f32;
-        pts.push(egui::pos2(c.x + a.cos() * r, c.y + a.sin() * r));
-    }
-    p.add(Shape::line(pts, st));
-    // 箭头(弧尾切线方向)
-    let a = end;
-    let tip = egui::pos2(c.x + a.cos() * (r + 1.6), c.y + a.sin() * (r + 1.6));
-    let s = 3.2;
-    let dx = -a.sin();
-    let dy = a.cos();
-    let nx = a.cos();
-    let ny = a.sin();
-    let base = egui::pos2(tip.x - dx * s * 0.6, tip.y - dy * s * 0.6);
-    p.add(Shape::convex_polygon(
-        vec![
-            tip,
-            egui::pos2(base.x + nx * s, base.y + ny * s),
-            egui::pos2(base.x - nx * s, base.y - ny * s),
-        ],
-        col,
-        Stroke::NONE,
-    ));
+/// 刷新按钮(26×26,调用方自己挂提示)。调用点多,保留这个名字;图标已是 Lucide 的
+pub fn refresh(ui: &mut Ui, color: Color32) -> egui::Response {
+    let (rect, resp, hot) = tool_face(ui, 26.0);
+    paint_icon(
+        ui.painter(),
+        &crate::lucide::REFRESH,
+        rect.center(),
+        ICON_SIZE,
+        if hot { theme::c().text } else { color },
+    );
     resp
 }
 
-/// ‹ / › 翻页箭头
-pub fn chevron(ui: &mut Ui, left: bool, color: egui::Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(22.0, 24.0), Sense::click());
-    let col = if resp.hovered() {
-        theme::c().text
+/// ‹ / › 翻页箭头(22×24)
+pub fn chevron(ui: &mut Ui, left: bool, color: Color32) -> egui::Response {
+    let (rect, resp, hot) = tool_face(ui, 22.0);
+    let icon = if left {
+        &crate::lucide::CHEVRON_LEFT
     } else {
-        color
+        &crate::lucide::CHEVRON_RIGHT
     };
-    let p = ui.painter();
-    let st = Stroke::new(1.5, col);
-    let (c, d) = (rect.center(), 3.4);
-    if left {
-        p.line_segment(
-            [
-                egui::pos2(c.x + d * 0.5, c.y - d),
-                egui::pos2(c.x - d * 0.5, c.y),
-            ],
-            st,
-        );
-        p.line_segment(
-            [
-                egui::pos2(c.x - d * 0.5, c.y),
-                egui::pos2(c.x + d * 0.5, c.y + d),
-            ],
-            st,
-        );
-    } else {
-        p.line_segment(
-            [
-                egui::pos2(c.x - d * 0.5, c.y - d),
-                egui::pos2(c.x + d * 0.5, c.y),
-            ],
-            st,
-        );
-        p.line_segment(
-            [
-                egui::pos2(c.x + d * 0.5, c.y),
-                egui::pos2(c.x - d * 0.5, c.y + d),
-            ],
-            st,
-        );
-    }
+    paint_icon(
+        ui.painter(),
+        icon,
+        rect.center(),
+        ICON_SIZE,
+        if hot { theme::c().text } else { color },
+    );
     resp
 }
 
-/// 是否中日韩表意文字/全角标点(用于修正回退字体的基线)
 pub fn is_cjk(ch: char) -> bool {
     matches!(
         ch as u32,

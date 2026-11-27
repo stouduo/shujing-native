@@ -771,8 +771,11 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                     .max_rect(controls_rect)
                     .layout(Layout::right_to_left(Align::Center)),
             );
-            controls_ui.menu_button(
-                RichText::new(ui_kit::t!("▾ All tabs", "▾ 全部标签")).size(theme::fs_px(11.0)).color(p.text2),
+            let _ = theme::tool_menu(
+                &mut controls_ui,
+                None,
+                ui_kit::t!("All tabs", "全部标签"),
+                "",
                 |ui| {
                     ui.set_min_width(220.0);
                     for (i, t) in app.tabs.iter().enumerate() {
@@ -955,8 +958,13 @@ fn draw_one_tab(
     let painter = ui.painter();
     // DBX 式方框标签:细描边(文字色按比例掺进边框色),激活态换薄荷绿淡底 + 更深的描边;
     // 未激活悬停淡灰底。标签占满标签条高度,底部由标签条自己的发丝线收口
+    // 激活标签:淡强调底 + 强调描边(与选中行/主按钮同一强调色;此前描边偏灰绿,
+    // 看着像另一个主题)
     let (fill, stroke_col) = if active {
-        (theme::tab_active_bg(), theme::mix(p.border, p.text, 0.42))
+        (
+            theme::tint(p.accent, 26).gamma_multiply(0.55),
+            theme::mix(p.accent, p.text, 0.25),
+        )
     } else if resp.hovered() {
         (theme::tint(p.text, 14), theme::mix(p.border, p.text, 0.28))
     } else {
@@ -1065,11 +1073,11 @@ fn order_chip(ui: &mut egui::Ui, tab: &mut TableTab) -> bool {
     };
     let mut pick: Option<(String, bool)> = None;
     let mut clear = false;
-    ui.menu_button(
-        RichText::new(label)
-            .monospace()
-            .size(theme::fs_px(12.0))
-            .color(theme::order_color()),
+    let _ = theme::tool_menu(
+        ui,
+        Some(&icons::LIST_FILTER),
+        &label,
+        "",
         |ui| {
             ui.set_min_width(200.0);
             let cols: Vec<String> = tab
@@ -1228,14 +1236,24 @@ pub(crate) fn draw_table_view(
                     ui.spacing_mut().item_spacing.x = 2.0;
                     // 这两个入口以前只在侧栏右键菜单里:表页直达。文案与侧栏右键菜单统一叫
                     // "设计表"(此前这里叫"编辑表结构"、结构页叫"设计",同一功能三种叫法)
-                    if theme::ghost_button(ui, ui_kit::t!("Design Table", "设计表")).clicked() {
+                    if theme::tool_button(
+                        ui,
+                        Some(&icons::PENCIL_RULER),
+                        ui_kit::t!("Design Table", "设计表"),
+                        "",
+                    ) {
                         actions.push(TabAction::OpenDesigner {
                             conn_id: tab.conn_id.clone(),
                             table: tab.table.clone(),
                             database: tab.database.clone(),
                         });
                     }
-                    if theme::ghost_button(ui, ui_kit::t!("Structure", "表结构")).clicked() {
+                    if theme::tool_button(
+                        ui,
+                        Some(&icons::TABLE_PROPS),
+                        ui_kit::t!("Structure", "表结构"),
+                        "",
+                    ) {
                         actions.push(TabAction::OpenStructure {
                             conn_id: tab.conn_id.clone(),
                             table: tab.table.clone(),
@@ -1352,14 +1370,18 @@ pub(crate) fn draw_table_view(
                     let conn_is_mongo = conns
                         .iter()
                         .any(|c| c.id == tab.conn_id && c.db_type == shujing_core::DbType::Mongo);
-                    let more =
-                        ui.menu_button(RichText::new("···").size(theme::fs_px(15.0)).color(p.text2), |ui| {
+                    let more = theme::tool_menu(
+                        ui,
+                        Some(&icons::ELLIPSIS),
+                        "",
+                        ui_kit::t!("More actions", "更多操作"),
+                        |ui| {
                             // 这里只放"这一页怎么看":列显隐与复制格式。全局功能(数据传输/对比、
                             // 外观、设置)在顶部应用工具栏,导出在页面工具栏的「导出」,整行详情在
                             // 单元格右键菜单——此前各有一份,是重复入口
                             ui.set_min_width(180.0);
                             if compact {
-                                if ui.button(ui_kit::t!("＋ Add Row", "＋ 新增行")).clicked() {
+                                if ui.button(ui_kit::t!("Add Row", "新增行")).clicked() {
                                     tab.insert_form = Some(
                                         tab.columns
                                             .iter()
@@ -1520,15 +1542,15 @@ pub(crate) fn draw_table_view(
                                 }
                             }
                             // 每页行数已移至底栏快捷设置
-                        });
-                    more.response
-                        .on_hover_text(ui_kit::t!("More actions", "更多操作"));
+                        },
+                    );
 
                     // 导出:页面工具栏这一处(原先底栏和 ··· 菜单各有一份)
-                    ui.menu_button(
-                        RichText::new(format!("{} ▾", ui_kit::t!("Export", "导出")))
-                            .size(theme::fs_px(12.0))
-                            .color(p.text2),
+                    let _ = theme::tool_menu(
+                        ui,
+                        Some(&icons::DOWNLOAD),
+                        ui_kit::t!("Export", "导出"),
+                        "",
                         |ui| {
                             ui.set_min_width(170.0);
                             if ui.button(ui_kit::t!("Export CSV", "导出 CSV")).clicked() {
@@ -1554,9 +1576,7 @@ pub(crate) fn draw_table_view(
                                 ui.close_menu();
                             }
                         },
-                    )
-                    .response
-                    .on_hover_text(ui_kit::t!("Export", "导出"));
+                    );
 
                     if !tab.loading
                         && icons::refresh(ui, p.text2)
@@ -1569,11 +1589,13 @@ pub(crate) fn draw_table_view(
                     }
 
                     if !compact {
-                        // 新增行(DBX 式幽灵按钮;窄窗口收进 ···)
-                        if theme::ghost_button(ui, ui_kit::t!("＋ Add Row", "＋ 新增行"))
-                            .on_hover_text(ui_kit::t!("Insert a new row", "插入一行新数据"))
-                            .clicked()
-                        {
+                        // 新增行(窄窗口收进 ··· 菜单)
+                        if theme::tool_button(
+                            ui,
+                            Some(&icons::PLUS),
+                            ui_kit::t!("Add Row", "新增行"),
+                            ui_kit::t!("Insert a new row", "插入一行新数据"),
+                        ) {
                             tab.insert_form = Some(
                                 tab.columns
                                     .iter()
@@ -1771,11 +1793,11 @@ pub(crate) fn draw_table_view(
                     theme::vsep(ui);
                     let size_opts = [50usize, 100, 200, 500];
                     let size_label = if ui_kit::i18n::is_english() {
-                        format!("{} rows / page ▾", tab.page_size)
+                        format!("{} rows / page", tab.page_size)
                     } else {
-                        format!("{} 行/页 ▾", tab.page_size)
+                        format!("{} 行/页", tab.page_size)
                     };
-                    ui.menu_button(RichText::new(size_label).size(theme::fs_px(11.5)).color(p.text2), |ui| {
+                    let _ = theme::tool_menu(ui, None, &size_label, "", |ui| {
                         ui.set_min_width(90.0);
                         for n in size_opts {
                             if ui
@@ -3350,10 +3372,19 @@ fn draw_data_table(
                         *sc = Some(c.clone());
                     }
                 }
-                let _ = resp.clone().on_hover_text(ui_kit::t!(
-                    "Click to sort: asc → desc → clear; funnel: filter this column; drag column edge to resize",
-                    "点击排序:升序 → 降序 → 取消;漏斗:按本列筛选;拖动列边缘调宽"
-                ));
+                // 悬停提示:列注释(此前常驻表头第三行,挤)+ 操作说明
+                {
+                    let mut tip = String::new();
+                    if let Some(cm) = col_comments.get(c).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                        tip.push_str(cm);
+                        tip.push('\n');
+                    }
+                    tip.push_str(ui_kit::t!(
+                        "Click to sort: asc → desc → clear · funnel: filter this column · drag column edge to resize",
+                        "点击排序:升序 → 降序 → 取消 · 漏斗:按本列筛选 · 拖动列边缘调宽"
+                    ));
+                    resp.clone().on_hover_text(tip);
+                }
                 // 列头右键:排序/按列筛选/列统计/冻结(与冻结覆盖层共用)
                 header_col_menu(
                     &resp,
@@ -4343,12 +4374,19 @@ fn paint_col_head(
         .size()
         .x;
     let full = rect.width() - theme::HEAD_PAD_X * 2.0;
-    let (reserve, show_pair, show_funnel) = if full - 36.0 >= title_w {
+    // 降噪:未排序的双箭头只在悬停时出现(此前常驻);已排序列的箭头常驻(状态要有归属);
+    // 漏斗只在悬停或该列已有筛选条件时出现(此前常驻灰漏斗)。注释挪到悬停提示,
+    // 表头只剩 名称 + 类型 两行
+    let (reserve, show_pair, show_funnel) = if sorted.is_some() {
+        if full - 20.0 >= title_w {
+            (20.0, false, false)
+        } else {
+            (16.0, false, false)
+        }
+    } else if full - 36.0 >= title_w && hovered {
         (36.0, true, true)
-    } else if sorted.is_some() {
-        (16.0, false, false)
     } else if full - 20.0 >= title_w {
-        (20.0, false, true)
+        (20.0, false, hovered || has_cond)
     } else {
         (0.0, false, hovered || has_cond)
     };
@@ -4386,14 +4424,8 @@ fn paint_col_head(
         );
     }
     let ty = anno.types.get(name).map(String::as_str).filter(|t| !t.is_empty());
-    let comment = anno.comments.get(name).map(|s| s.trim()).filter(|s| !s.is_empty());
-    theme::paint_col_anno(
-        painter,
-        rect,
-        ty,
-        comment,
-        anno.pk_cols.iter().any(|k| k == name),
-    );
+    // 注释不再画在表头第三行(挤),挪到列头悬停提示(调用方组装)
+    theme::paint_col_anno(painter, rect, ty, None, anno.pk_cols.iter().any(|k| k == name));
     // 漏斗不显示时返回空矩形:点击列头就是排序
     if show_funnel {
         funnel_rect
