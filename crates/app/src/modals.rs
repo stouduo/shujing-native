@@ -693,16 +693,14 @@ pub fn draw_global_search(app: &mut ShujingApp, ctx: &egui::Context) {
         return;
     }
     let p = theme::c();
+    // 全局搜索逐表拼 SQL:只列有 SQL 执行面的在线连接(中间件/MongoDB/Redis
+    // 选了必报错,别让人走到那一步)
     let online: Vec<(String, String)> = app
-        .trees
+        .conns
         .iter()
-        .filter(|(_, t)| t.online)
-        .filter_map(|(id, _)| {
-            app.conns
-                .iter()
-                .find(|c| &c.id == id)
-                .map(|c| (c.id.clone(), c.name.clone()))
-        })
+        .filter(|c| c.db_type.caps().sql)
+        .filter(|c| app.trees.get(&c.id).map(|t| t.online).unwrap_or(false))
+        .map(|c| (c.id.clone(), c.name.clone()))
         .collect();
     // 打开时未选连接:默认第一个在线的
     if app.global_search.as_ref().unwrap().conn_id.is_empty() {
@@ -3102,16 +3100,16 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
             ui.set_width(720.0);
             let Some(st) = app.data_diff.as_mut() else { return };
             theme::modal_title(ui, ui_kit::t!("Data Compare", "数据对比"));
-            let src_name = app
-                .conns
-                .iter()
-                .find(|c| c.id == st.src_conn)
+            let src = app.conns.iter().find(|c| c.id == st.src_conn);
+            let src_type = src.map(|c| c.db_type);
+            let src_name = src
                 .map(|c| c.name.clone())
                 .unwrap_or_else(|| st.src_conn.clone());
+            // 运行规则就是同类型(data_diff.rs:类型不同直接报错)——下拉先按这个过滤
             let conn_opts: Vec<(String, String)> = app
                 .conns
                 .iter()
-                .filter(|c| c.id != st.src_conn)
+                .filter(|c| c.id != st.src_conn && Some(c.db_type) == src_type)
                 .map(|c| (c.id.clone(), conn_opt_label(c)))
                 .collect();
             let picked = src_target_form(
@@ -3120,7 +3118,10 @@ pub fn draw_data_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 st.src_db.as_deref(),
                 &st.src_table,
                 ui_kit::t!("Rows are aligned by primary key", "按主键逐行对齐"),
-                None,
+                Some(ui_kit::t!(
+                    "No other connection of the same type — add a target connection in the sidebar first",
+                    "没有同类型的其他连接——先在侧栏添加目标连接"
+                )),
                 &conn_opts,
                 "dd-dst-conn",
                 &st.dst_conn,
@@ -3500,9 +3501,11 @@ pub fn draw_schema_diff_modal(app: &mut ShujingApp, ctx: &egui::Context) {
                 .find(|c| c.id == st.src_conn)
                 .map(|c| c.name.clone())
                 .unwrap_or_else(|| st.src_conn.clone());
+            // 没有表结构语义的连接(中间件/Redis)不进目标列表:结构拉不出来
             let conn_opts: Vec<(String, String)> = app
                 .conns
                 .iter()
+                .filter(|c| c.db_type.caps().schema)
                 .map(|c| (c.id.clone(), conn_opt_label(c)))
                 .collect();
             let picked = src_target_form(

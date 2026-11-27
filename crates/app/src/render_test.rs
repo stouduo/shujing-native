@@ -3341,6 +3341,294 @@ fn query_conn_dropdown_lists_only_query_surfaces() {
     }
 }
 
+/// MongoDB 集合行的右键菜单此前整张是 SQL 口径:表统计(SELECT COUNT)/导入表格
+/// (拼 INSERT)/设计表(ALTER 保存)/复制 SELECT */导出 SQL/复制表为/ANALYZE/重命名/
+/// 清空/删除——对集合要么报错要么生成跑不了的 SQL 文本。菜单只留集合真能用的:
+/// 表结构(Mongo 结构页可用)与复制表名;「插入表名到查询」已由批次91 按 SQL 执行面门禁
+#[test]
+fn mongo_collection_menu_offers_no_sql_entries() {
+    use egui_kittest::kittest::Queryable as _;
+    type H<'a> = egui_kittest::Harness<'a, std::cell::RefCell<ShujingApp>>;
+    fn menu_has(h: &H<'_>, label: &str) -> bool {
+        h.query_by_label(label).is_some()
+    }
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let mut app = online_conn_app(
+        conn_of("mg", "MongoDB·shop", shujing_core::DbType::Mongo),
+        &["shop"],
+    );
+    let tree = app.trees.get_mut("mg").unwrap();
+    tree.expanded_db = Some("shop".into());
+    tree.tables_by_db.insert(
+        "shop".to_string(),
+        vec![shujing_core::TableMeta {
+            name: "users".into(),
+            kind: "table".into(),
+            owner: None,
+        }],
+    );
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_shell(&mut b, ctx);
+            },
+            cell,
+        );
+    h.run_steps(6);
+    // 行位置(标准密度):连接行 102,库头 130,集合行 158 起
+    right_click_at(&mut h, egui::pos2(150.0, 172.0));
+    for keep in ["表结构", "复制表名"] {
+        assert!(menu_has(&h, keep), "MongoDB 集合行右键菜单应有:{keep}");
+    }
+    for gone in [
+        "表统计…",
+        "导入表格(CSV/Excel)…",
+        "设计表",
+        "复制 SELECT *",
+        "插入表名到查询",
+        "导出 SQL(结构+数据)",
+        "复制表为…",
+        "维护:更新统计 (ANALYZE)",
+        "重命名…",
+        "清空表数据…",
+        "删除表…",
+    ] {
+        assert!(!menu_has(&h, gone), "MongoDB 集合行右键菜单不该有:{gone}");
+    }
+    key_once(&mut h, egui::Key::Escape, plain);
+    assert!(!menu_has(&h, "复制表名"), "Esc 应关掉菜单");
+}
+
+/// 全局搜索(⌘⇧F)是拼 SQL 逐表搜的:中间件/MongoDB/Redis 连接选了必报错。
+/// 连接下拉只列有 SQL 执行面的在线连接
+#[test]
+fn global_search_lists_only_sql_conns() {
+    use egui_kittest::kittest::Queryable as _;
+    type H<'a> = egui_kittest::Harness<'a, std::cell::RefCell<ShujingApp>>;
+    fn has(h: &H<'_>, label: &str) -> bool {
+        h.query_by_label(label).is_some()
+    }
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use shujing_core::DbType as T;
+    let mut app = test_app(vec![], 0);
+    for (i, ty) in [T::Kafka, T::Mongo].into_iter().enumerate() {
+        let c = conn_of(&format!("x{i}"), "占位", ty);
+        app.conns.push(c.clone());
+        app.trees.insert(c.id.clone(), ConnTree { online: true, ..Default::default() });
+    }
+    // 连接名要可读:直接改
+    for (id, name) in [("x0", "Kafka·本地"), ("x1", "MongoDB·shop")] {
+        if let Some(c) = app.conns.iter_mut().find(|c| c.id == id) {
+            c.name = name.into();
+        }
+    }
+    app.global_search = Some(crate::app::GlobalSearchState {
+        conn_id: String::new(),
+        db: None,
+        all_dbs: false,
+        keyword: String::new(),
+        searching: false,
+        searched: false,
+        hits: vec![],
+        error: None,
+    });
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    let open = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = open.clone();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                if flag.replace(false) {
+                    ctx.memory_mut(|m| m.open_popup(egui::Id::new("gs-conn").with("popup")));
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+                crate::modals::draw_global_search(&mut b, ctx);
+            },
+            cell,
+        );
+    h.run_steps(6);
+    open.set(true);
+    h.run_steps(3);
+    assert!(has(&h, "dramato-dev"), "全局搜索下拉应列出 SQL 连接 dramato-dev");
+    for gone in ["Kafka·本地", "MongoDB·shop"] {
+        assert!(!has(&h, gone), "全局搜索连接下拉不该列出没有 SQL 执行面的连接:{gone}");
+    }
+}
+
+/// 传输/数据对比/结构对比入口此前不校验能力:当前标签是 Kafka 控制台时点顶栏
+/// 「数据传输…」,照样开出 Kafka→Kafka 的传输弹窗,点开始才报"不支持跨连接数据传输";
+/// 数据对比的目标连接下拉列出任意类型连接,选了不同类型运行才报错;
+/// 结构对比的目标列表包含没有表结构语义的连接。打开时校验源能力,目标列表按运行规则过滤
+#[test]
+fn diff_entry_gates_and_target_lists() {
+    use egui_kittest::kittest::Queryable as _;
+    type H<'a> = egui_kittest::Harness<'a, std::cell::RefCell<ShujingApp>>;
+    fn has(h: &H<'_>, label: &str) -> bool {
+        h.query_by_label(label).is_some()
+    }
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // (a) 中间件上下文:三个入口都只弹说明,不开弹窗
+    {
+        let mut app = test_app(vec![], 0);
+        app.conns.push(conn_of("mw", "Kafka·本地", shujing_core::DbType::Kafka));
+        // 只有中间件连接在线:顶栏的传输/对比上下文会回退到"第一个在线连接",
+        // 此前这正是走进死胡同的路径——开出 Kafka→Kafka 传输弹窗,点开始才报错
+        app.trees.clear();
+        app.trees.insert(
+            "mw".to_string(),
+            ConnTree {
+                online: true,
+                ..Default::default()
+            },
+        );
+        app.tabs.push(Tab {
+            id: "mwtab".into(),
+            title: "控制台".into(),
+            kind: console_tab("kafka", "mw"),
+        });
+        app.active_tab = 0;
+        let cell = std::cell::RefCell::new(app);
+        let setup_done = std::cell::Cell::new(false);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .build_state(
+                move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                    if !setup_done.get() {
+                        setup_done.set(true);
+                        ShujingApp::apply_fonts(ctx);
+                        crate::theme::set_dark(true);
+                        crate::theme::apply(ctx);
+                        return;
+                    }
+                    let mut b = app.borrow_mut();
+                    draw_shell(&mut b, ctx);
+                },
+                cell,
+            );
+        h.run_steps(6);
+        for (label, which) in [
+            ("数据传输…", "transfer"),
+            ("数据对比…", "data_diff"),
+            ("结构对比…", "schema_diff"),
+        ] {
+            h.state().borrow_mut().error_toast = None;
+            {
+                h.get_by_label(label).simulate_click();
+            }
+            h.run_steps(3);
+            let st = h.state().borrow();
+            let opened = match which {
+                "transfer" => st.transfer.is_some(),
+                "data_diff" => st.data_diff.is_some(),
+                _ => st.schema_diff.is_some(),
+            };
+            assert!(!opened, "Kafka 控制台上下文点「{label}」不该打开弹窗");
+            assert!(
+                st.error_toast.is_some(),
+                "Kafka 控制台上下文点「{label}」应弹能力说明"
+            );
+        }
+    }
+
+    // (b)(c) SQL 源:数据对比目标列表只列同类型;结构对比目标列表排除没有
+    // 表结构语义的连接(中间件/Redis)
+    let mut m2 = conn_of("m2", "MySQL·二", shujing_core::DbType::MySql);
+    m2.port = Some(3307);
+    let m2 = m2;
+    let k1 = conn_of("k1", "Kafka·本地", shujing_core::DbType::Kafka);
+    let cases: [(&str, fn(&mut ShujingApp), &str, &[&str], &[&str]); 2] = [
+        (
+            "数据对比",
+            |app: &mut ShujingApp| {
+                app.open_data_diff("c1", Some("dramato"), "backend_role_privilege")
+            },
+            "dd-dst-conn",
+            &["MySQL·二 (127.0.0.1:3307)"],
+            &["本地", "Kafka·本地 (127.0.0.1)"],
+        ),
+        (
+            "结构对比",
+            |app: &mut ShujingApp| {
+                app.open_schema_diff("c1", Some("dramato"), "backend_role_privilege")
+            },
+            "diff-dst-conn",
+            &["MySQL·二 (127.0.0.1:3307)", "本地"],
+            &["Kafka·本地 (127.0.0.1)"],
+        ),
+    ];
+    for (name, open_modal, sel_id, want, gone) in cases {
+        let mut app = test_app(vec![], 0);
+        app.conns.push(m2.clone());
+        app.conns.push(k1.clone());
+        open_modal(&mut app);
+        let cell = std::cell::RefCell::new(app);
+        let setup_done = std::cell::Cell::new(false);
+        let open = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = open.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1100.0, 720.0))
+            .with_pixels_per_point(2.0)
+            .build_state(
+                move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                    if !setup_done.get() {
+                        setup_done.set(true);
+                        ShujingApp::apply_fonts(ctx);
+                        crate::theme::set_dark(true);
+                        crate::theme::apply(ctx);
+                        return;
+                    }
+                    if flag.replace(false) {
+                        ctx.memory_mut(|m| {
+                            m.open_popup(egui::Id::new(sel_id).with("popup"))
+                        });
+                    }
+                    let mut b = app.borrow_mut();
+                    draw_app(&mut b, ctx);
+                    match name {
+                        "数据对比" => crate::modals::draw_data_diff_modal(&mut b, ctx),
+                        _ => crate::modals::draw_schema_diff_modal(&mut b, ctx),
+                    }
+                },
+                cell,
+            );
+        h.run_steps(6);
+        open.set(true);
+        h.run_steps(3);
+        for label in want {
+            assert!(has(&h, label), "「{name}」目标连接下拉应有:{label}");
+        }
+        for label in gone {
+            assert!(!has(&h, label), "「{name}」目标连接下拉不该有:{label}");
+        }
+    }
+}
+
 /// 键盘快捷键速查是独立弹窗(用户要求:不放在设置里)。入口:顶栏
 /// 「更多 → 键盘快捷键…」与 ⌘⇧/;设置弹窗里不再有速查表。
 /// (本测试覆盖菜单路径;⌘⇧/ 见 shortcuts_modal_toggles_with_keyboard)
@@ -7932,4 +8220,6 @@ fn sidebar_conn_rows_drag_reorder() {
         "位移不足阈值的按压不算拖拽: {order_final:?}"
     );
 }
+
+
 

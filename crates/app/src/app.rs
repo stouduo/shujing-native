@@ -3206,6 +3206,15 @@ impl ShujingApp {
     pub fn open_transfer(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
         let src_info = self.conns.iter().find(|c| c.id == conn_id).cloned();
         let Some(src_info) = src_info else { return };
+        // 能力门:跨连接传输只有 MySQL/PG(内核 transfer.rs 运行时还会再拦,但那时
+        // 用户已经填完表单)——别开一个注定跑不通的弹窗
+        if !src_info.db_type.caps().transfer {
+            self.toast_error(ui_kit::t!(
+                "Data Transfer supports MySQL/PostgreSQL for now",
+                "数据传输目前支持 MySQL/PostgreSQL"
+            ));
+            return;
+        }
         let dst_conn = self
             .conns
             .iter()
@@ -3559,6 +3568,15 @@ impl ShujingApp {
     pub fn open_data_diff(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
         let src_info = self.conns.iter().find(|c| c.id == conn_id).cloned();
         let Some(src_info) = src_info else { return };
+        // 数据对比按主键逐行拉数据、生成同步 SQL:没有 SQL 执行面的连接(中间件/
+        // MongoDB/Redis)选了必报错,打开前就说明
+        if !src_info.db_type.caps().sql {
+            self.toast_error(ui_kit::t!(
+                "Data Diff supports SQL databases only",
+                "数据对比目前仅支持 SQL 数据库"
+            ));
+            return;
+        }
         let dst_conn = self
             .conns
             .iter()
@@ -3976,6 +3994,20 @@ impl ShujingApp {
 
     /// 打开结构对比弹窗(源=右键表;目标预填同一连接/库/表)
     pub fn open_schema_diff(&mut self, conn_id: &str, db: Option<&str>, table: &str) {
+        // 结构对比要拉表结构:中间件/Redis 没有表结构语义,打开前就说明
+        let has_schema = self
+            .conns
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| c.db_type.caps().schema)
+            .unwrap_or(false);
+        if !has_schema {
+            self.toast_error(ui_kit::t!(
+                "Structure Diff is not available for this connection type",
+                "该连接类型不支持结构对比"
+            ));
+            return;
+        }
         self.schema_diff = Some(SchemaDiffState {
             src_conn: conn_id.to_string(),
             src_db: db.map(str::to_string),
