@@ -2380,6 +2380,45 @@ fn session_save_restore_roundtrip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 旧会话里可能存着绑到中间件连接的查询标签(当时「新建查询」没按类型限制):
+/// 还原成未选连接,SQL 文本保留——否则留着的是一个点运行才报"无 SQL 执行面"的标签。
+/// SQL 连接的查询标签原样还原
+#[test]
+fn restore_unbinds_query_tabs_on_middleware_conns() {
+    let dir = std::env::temp_dir().join(format!("shujing_sess_mw_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let mut app = test_app(vec![], 0);
+    app.config_dir = dir.clone();
+    app.conns.push(conn_of("k1", "Kafka·本地", shujing_core::DbType::Kafka));
+    std::fs::write(
+        dir.join("session.json"),
+        r#"{"tabs":[
+            {"kind":"query","conn":"k1","sql":"SELECT 1","database":null},
+            {"kind":"query","conn":"c1","sql":"SELECT 2","database":null}
+        ],"active":0,"online":[],"expanded":{}}"#,
+    )
+    .unwrap();
+    assert!(app.restore_session(), "session.json 应能还原");
+    let got: Vec<(String, String)> = app
+        .tabs
+        .iter()
+        .map(|t| match &t.kind {
+            TabKind::Query(q) => (q.conn_id.clone(), q.sql.clone()),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (String::new(), "SELECT 1".into()),
+            ("c1".into(), "SELECT 2".into())
+        ],
+        "绑到中间件连接的查询标签应还原成未选连接,SQL 保留"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn tabbar_wheel_ignored_when_pointer_over_table() {
     let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2941,6 +2980,365 @@ fn sidebar_context_menus_are_layered() {
         assert!(menu_has(&h, keep), "右键点在连接名上应出同一个菜单,缺:{keep}");
     }
     key_once(&mut h, egui::Key::Escape, plain);
+}
+
+/// 测试用连接(只区分类型;地址是占位,不会真连)
+fn conn_of(id: &str, name: &str, db_type: shujing_core::DbType) -> shujing_core::ConnInfo {
+    shujing_core::ConnInfo {
+        id: id.into(),
+        name: name.into(),
+        db_type,
+        host: Some("127.0.0.1".into()),
+        port: None,
+        user: None,
+        password: None,
+        database: None,
+        file_path: None,
+        color: None,
+        read_only: false,
+        perm: None,
+        group: None,
+        plugin: None,
+        ssh: None,
+    }
+}
+
+/// 侧栏夹具:目标连接在线、未分组、排在首行(右键坐标同上面的 conn_row);
+/// MySQL 连接 c1 留在第二位做对照
+fn online_conn_app(target: shujing_core::ConnInfo, dbs: &[&str]) -> ShujingApp {
+    let mut app = test_app(vec![], 0);
+    let mysql = app.conns[0].clone();
+    app.trees.clear();
+    app.trees.insert(
+        target.id.clone(),
+        ConnTree {
+            online: true,
+            databases: dbs.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        },
+    );
+    app.conns = vec![target, mysql];
+    app
+}
+
+/// 中间件/配置中心连接(Kafka/RabbitMQ/MQTT/Nacos/Consul/etcd)没有 SQL 执行面,
+/// "查询"就是各自的专属控制台。此前连接右键菜单对所有类型都给同一套 SQL 项:
+/// 右键 Kafka 开出的是 SQL 查询页,点运行才报"该数据源无 SQL 执行面";
+/// 「导入 SQL 文件…」先弹文件选择框再失败,「备份数据库…」「筛选显示的库…」只会弹报错。
+/// MongoDB 有库有表结构但同样没有 SQL 执行面。菜单只留这个类型真能用的项
+#[test]
+fn middleware_conn_menu_offers_no_sql_entries() {
+    use egui_kittest::kittest::Queryable as _;
+    type H<'a> = egui_kittest::Harness<'a, std::cell::RefCell<ShujingApp>>;
+    fn menu_has(h: &H<'_>, label: &str) -> bool {
+        h.query_by_label(label).is_some()
+    }
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    use shujing_core::DbType as T;
+    let cases: Vec<(T, &str, Vec<&str>)> = vec![
+        (T::Kafka, "Kafka·本地", vec![]),
+        (T::Rabbit, "Rabbit·本地", vec![]),
+        (T::Mqtt, "MQTT·本地", vec![]),
+        (T::Nacos, "Nacos·本地", vec![]),
+        (T::Consul, "Consul·本地", vec![]),
+        (T::Etcd, "etcd·本地", vec![]),
+        (T::Mongo, "MongoDB·shop", vec!["shop"]),
+        // Redis 的查询页兼作命令通道:留「新建查询」,其余 SQL 项同样用不上
+        (T::Redis, "Redis·本地", vec![]),
+    ];
+    for (i, (ty, name, dbs)) in cases.into_iter().enumerate() {
+        let cell = std::cell::RefCell::new(online_conn_app(conn_of(&format!("m{i}"), name, ty), &dbs));
+        let setup_done = std::cell::Cell::new(false);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .build_state(
+                move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                    if !setup_done.get() {
+                        setup_done.set(true);
+                        ShujingApp::apply_fonts(ctx);
+                        crate::theme::set_dark(true);
+                        crate::theme::apply(ctx);
+                        return;
+                    }
+                    let mut b = app.borrow_mut();
+                    draw_shell(&mut b, ctx);
+                },
+                cell,
+            );
+        h.run_steps(6);
+        // 点在行内空白处(名字右侧)
+        right_click_at(&mut h, egui::pos2(150.0, 102.0));
+        for keep in ["断开连接", "刷新", "编辑连接…", "删除连接…"] {
+            assert!(menu_has(&h, keep), "{name}:连接右键菜单应有:{keep}");
+        }
+        for gone in ["导入 SQL 文件…", "备份数据库…"] {
+            assert!(
+                !menu_has(&h, gone),
+                "{name}:没有 SQL 执行面的连接不该出现「{gone}」(点了只会失败)"
+            );
+        }
+        if ty == T::Redis {
+            assert!(menu_has(&h, "新建查询"), "{name}:Redis 的查询页兼作命令通道,应保留「新建查询」");
+        } else {
+            assert!(
+                !menu_has(&h, "新建查询"),
+                "{name}:没有 SQL 执行面的连接不该出现「新建查询」(查询入口是它的专属控制台)"
+            );
+        }
+        // 库筛选:有库才给(MongoDB 有库;中间件连接没有库)
+        assert_eq!(
+            menu_has(&h, "筛选显示的库…"),
+            !dbs.is_empty(),
+            "{name}:「筛选显示的库…」应只在有库时出现"
+        );
+        key_once(&mut h, egui::Key::Escape, plain);
+        assert!(!menu_has(&h, "编辑连接…"), "{name}:Esc 应关掉菜单");
+    }
+}
+
+/// 标签种类的名字(断言信息用;TabKind 没派生 Debug)
+fn tab_kind_name(k: &TabKind) -> &'static str {
+    match k {
+        TabKind::Table(_) => "Table",
+        TabKind::Structure(_) => "Structure",
+        TabKind::Query(_) => "Query",
+        TabKind::Designer(_) => "Designer",
+        TabKind::Redis(_) => "Redis",
+        TabKind::Er(_) => "Er",
+        TabKind::Kafka(_) => "Kafka",
+        TabKind::Rabbit(_) => "Rabbit",
+        TabKind::Mqtt(_) => "Mqtt",
+        TabKind::Kv(_) => "Kv",
+        TabKind::Session(_) => "Session",
+        TabKind::Ddl(_) => "Ddl",
+    }
+}
+
+/// 控制台标签的空壳(四类中间件控制台各一)
+fn console_tab(kind: &str, conn_id: &str) -> TabKind {
+    let cid = || conn_id.to_string();
+    match kind {
+        "kafka" => TabKind::Kafka(crate::app::KafkaTab {
+            conn_id: cid(),
+            topics: vec![],
+            selected: None,
+            msgs: vec![],
+            loading: false,
+            error: None,
+            send_key: String::new(),
+            send_payload: String::new(),
+            sending: false,
+            groups: None,
+            groups_open: false,
+            frozen: 0,
+            new_open: false,
+            new_name: String::new(),
+            new_parts: "1".into(),
+            new_repl: "1".into(),
+            drop_arm: false,
+            topic_busy: false,
+        }),
+        "kv" => TabKind::Kv(crate::app::KvTab {
+            conn_id: cid(),
+            entries: vec![],
+            selected: None,
+            edit_value: None,
+            filter: String::new(),
+            new_key: String::new(),
+            loading: false,
+            busy: false,
+            error: None,
+            drop_arm: false,
+        }),
+        "mqtt" => TabKind::Mqtt(crate::app::MqttTab {
+            conn_id: cid(),
+            topics: vec![],
+            selected: None,
+            loading: false,
+            error: None,
+            pub_topic: String::new(),
+            pub_payload: String::new(),
+            pub_retain: false,
+            sending: false,
+        }),
+        "rabbit" => TabKind::Rabbit(crate::app::RabbitTab {
+            conn_id: cid(),
+            queues: vec![],
+            selected: None,
+            msgs: vec![],
+            overview: None,
+            loading: false,
+            error: None,
+            send_key: String::new(),
+            send_payload: String::new(),
+            sending: false,
+            drop_arm: false,
+        }),
+        _ => unreachable!(),
+    }
+}
+
+/// 在控制台标签上按 ⌘T:新建查询继承"当前标签的连接",但中间件连接没有 SQL
+/// 执行面——继承过去就是一个绑到 Kafka 的 SQL 查询页(运行即报"无 SQL 执行面")。
+/// 此时应留空让用户选连接(与没有任何标签时一致)。全局快捷键在真实的 `update`
+/// 里处理,必须用 eframe 夹具
+#[test]
+fn cmd_t_on_console_tab_does_not_inherit_middleware_conn() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cmd = egui::Modifiers {
+        command: true,
+        ..Default::default()
+    };
+    // (场景, 期望新查询标签绑到的连接);mysql = 对照:SQL 连接照常继承
+    for (kind, ty, expect) in [
+        ("mysql", shujing_core::DbType::MySql, "c1"),
+        ("kafka", shujing_core::DbType::Kafka, ""),
+        ("kv", shujing_core::DbType::Consul, ""),
+        ("kv", shujing_core::DbType::Etcd, ""),
+        ("mqtt", shujing_core::DbType::Mqtt, ""),
+        ("rabbit", shujing_core::DbType::Rabbit, ""),
+    ] {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .with_pixels_per_point(2.0)
+            .with_step_dt(1.0 / 60.0)
+            .build_eframe(|cc| {
+                let mut app = if kind == "mysql" {
+                    test_app(vec![stub_tab("campaign_report", "campaign_report")], 0)
+                } else {
+                    let mut app = test_app(vec![], 0);
+                    app.conns.push(conn_of("mw", "中间件", ty));
+                    app.tabs.push(Tab {
+                        id: "mwtab".into(),
+                        title: "控制台".into(),
+                        kind: console_tab(kind, "mw"),
+                    });
+                    app.active_tab = 0;
+                    app
+                };
+                app.auto_connect_done = true;
+                ShujingApp::apply_fonts(&cc.egui_ctx);
+                crate::theme::set_dark(true);
+                app
+            });
+        h.run_steps(8);
+        let before = h.state().tabs.len();
+        h.input_mut().modifiers = cmd;
+        h.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::T,
+            pressed: true,
+            repeat: false,
+            modifiers: cmd,
+            physical_key: None,
+        });
+        h.step();
+        h.step();
+        h.input_mut().modifiers = Default::default();
+        h.step();
+        let st = h.state();
+        assert_eq!(st.tabs.len(), before + 1, "{kind}/{ty:?}:⌘T 应新建一个标签");
+        match &st.tabs[before].kind {
+            TabKind::Query(q) => assert_eq!(
+                q.conn_id, expect,
+                "{kind}/{ty:?}:新查询标签绑到的连接不对"
+            ),
+            other => panic!("{kind}/{ty:?}:⌘T 应新建查询标签,实际是 {}", tab_kind_name(other)),
+        }
+    }
+}
+
+/// 同一条约束的另一半:显式指定的连接也要过(「插入表名到查询」这类入口直接传
+/// 连接 id)。任何入口都不该开出绑到中间件/MongoDB 连接的查询标签
+#[test]
+fn query_tab_never_binds_middleware_conn() {
+    use shujing_core::DbType as T;
+    for (i, ty) in [T::Kafka, T::Consul, T::Etcd, T::Mqtt, T::Rabbit, T::Mongo]
+        .into_iter()
+        .enumerate()
+    {
+        let mut app = test_app(vec![], 0);
+        app.conns.push(conn_of(&format!("mw{i}"), "中间件", ty));
+        let mw = format!("mw{i}");
+        app.open_query_tab(Some(mw.clone()));
+        app.insert_name_to_query(&mw, "t");
+        // 对照:同一夹具里 SQL 连接照常能开
+        app.open_query_tab(Some("c1".into()));
+        let bound: Vec<&str> = app
+            .tabs
+            .iter()
+            .filter_map(|t| match &t.kind {
+                TabKind::Query(q) => Some(q.conn_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bound, vec!["", "", "c1"], "{ty:?}:查询标签绑到的连接不对");
+    }
+}
+
+/// 查询页的「连接」下拉只列能跑查询的连接(SQL 型 + Redis 命令通道)。
+/// 此前列出全部连接:在 SQL 查询页里也能把 Kafka 选成目标
+#[test]
+fn query_conn_dropdown_lists_only_query_surfaces() {
+    use egui_kittest::kittest::Queryable as _;
+    type H<'a> = egui_kittest::Harness<'a, std::cell::RefCell<ShujingApp>>;
+    fn has(h: &H<'_>, label: &str) -> bool {
+        h.query_by_label(label).is_some()
+    }
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use shujing_core::DbType as T;
+    let mut app = test_app(
+        vec![Tab {
+            id: "q1".into(),
+            title: "查询".into(),
+            kind: TabKind::Query(test_query_tab()),
+        }],
+        0,
+    );
+    app.conns = vec![
+        app.conns[0].clone(),
+        conn_of("k1", "Kafka·本地", T::Kafka),
+        conn_of("v1", "Consul·本地", T::Consul),
+        conn_of("e1", "etcd·本地", T::Etcd),
+        conn_of("m1", "MQTT·本地", T::Mqtt),
+        conn_of("g1", "MongoDB·shop", T::Mongo),
+        conn_of("r1", "Redis·本地", T::Redis),
+    ];
+    let cell = std::cell::RefCell::new(app);
+    let setup_done = std::cell::Cell::new(false);
+    // Rc<Cell>:闭包拿的是同一个开关(Cell::clone 是拷贝值,各改各的)
+    let open_dropdown = std::rc::Rc::new(std::cell::Cell::new(false));
+    let open_flag = open_dropdown.clone();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                // 下拉本体是自绘控件(没有无障碍标签),按弹层 id 直接打开
+                if open_flag.replace(false) {
+                    ctx.memory_mut(|m| m.open_popup(egui::Id::new("query-conn-select").with("popup")));
+                }
+                let mut b = app.borrow_mut();
+                draw_shell(&mut b, ctx);
+            },
+            cell,
+        );
+    h.run_steps(6);
+    open_dropdown.set(true);
+    h.run_steps(3);
+    assert!(has(&h, "dramato-dev"), "下拉应列出 SQL 连接");
+    assert!(has(&h, "Redis·本地"), "下拉应列出 Redis(查询页兼作命令通道)");
+    for gone in ["Kafka·本地", "Consul·本地", "etcd·本地", "MQTT·本地", "MongoDB·shop"] {
+        assert!(!has(&h, gone), "查询页「连接」下拉不该列出没有 SQL 执行面的连接:{gone}");
+    }
 }
 
 /// 键盘快捷键速查是独立弹窗(用户要求:不放在设置里)。入口:顶栏
@@ -7534,3 +7932,4 @@ fn sidebar_conn_rows_drag_reorder() {
         "位移不足阈值的按压不算拖拽: {order_final:?}"
     );
 }
+

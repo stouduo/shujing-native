@@ -33,8 +33,11 @@ pub fn draw_query_view(
         }))
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
+                // 只列能在查询页里跑的连接(SQL 型 + Redis 命令通道):此前全部连接
+                // 都列,在 SQL 查询页里能把 Kafka/Consul 选成目标,运行才报"无 SQL 执行面"
                 let opts: Vec<(String, String)> = conns
                     .iter()
+                    .filter(|c| c.db_type.has_query_surface())
                     .map(|c| (c.id.clone(), c.name.clone()))
                     .collect();
                 let sel_name = conns

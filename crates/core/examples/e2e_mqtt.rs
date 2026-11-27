@@ -75,5 +75,13 @@ async fn main() {
         Err(e) => fail("browse", &e),
     }
 
+    // 4) 无 SQL 执行面:界面侧已不给 MQTT 开 SQL 查询页,这里是后端的兜底——
+    // 真要走到 run_sql,必须是明确的拒绝
+    match service.run_sql("e2e-mqtt", "SELECT 1".into(), None).await {
+        Err(e) if e.contains("无 SQL 执行面") => pass("no_sql_surface", &e),
+        Err(e) => fail("no_sql_surface", &format!("拒绝文案不对: {e}")),
+        Ok(_) => fail("no_sql_surface", "MQTT 连接竟然执行了 SQL"),
+    }
+
     println!("\n全部通过 ✓");
 }

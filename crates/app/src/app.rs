@@ -2414,25 +2414,40 @@ impl ShujingApp {
         });
     }
 
-    /// 新建查询标签
+    /// 连接能否在查询页里跑(有 SQL 执行面,或是 Redis 命令通道)。
+    /// 认不出的连接 id 按"能"处理,保持原样
+    fn conn_can_query(&self, conn_id: &str) -> bool {
+        self.conns
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| c.db_type.has_query_surface())
+            .unwrap_or(true)
+    }
+
+    /// 新建查询标签。查询标签不接没有查询面的连接(指定的和继承的都一样):中间件/
+    /// 配置中心/MongoDB 没有 SQL 执行面,绑上去就是一个点运行才报"无 SQL 执行面"的
+    /// SQL 查询页(此前在 Kafka 控制台标签上按 ⌘T 就会这样)。这时留空让用户选连接,
+    /// 与没有任何标签时一致
     pub fn open_query_tab(&mut self, conn_id: Option<String>) {
         // 库上下文跟随当前激活标签(正在看 shop 库的表 → 新查询默认 shop)
-        let inherit = conn_id.or_else(|| {
-            self.tabs.get(self.active_tab).map(|t| match &t.kind {
-                TabKind::Table(t) => t.conn_id.clone(),
-                TabKind::Structure(s) => s.conn_id.clone(),
-                TabKind::Query(q) => q.conn_id.clone(),
-                TabKind::Designer(d) => d.conn_id.clone(),
-                TabKind::Redis(r) => r.conn_id.clone(),
-                TabKind::Er(e) => e.conn_id.clone(),
-                TabKind::Ddl(d) => d.conn_id.clone(),
-                TabKind::Kafka(k) => k.conn_id.clone(),
-                TabKind::Rabbit(r) => r.conn_id.clone(),
-                TabKind::Mqtt(m) => m.conn_id.clone(),
-                TabKind::Kv(k) => k.conn_id.clone(),
-                TabKind::Session(s) => s.conn_id.clone(),
+        let inherit = conn_id
+            .or_else(|| {
+                self.tabs.get(self.active_tab).map(|t| match &t.kind {
+                    TabKind::Table(t) => t.conn_id.clone(),
+                    TabKind::Structure(s) => s.conn_id.clone(),
+                    TabKind::Query(q) => q.conn_id.clone(),
+                    TabKind::Designer(d) => d.conn_id.clone(),
+                    TabKind::Redis(r) => r.conn_id.clone(),
+                    TabKind::Er(e) => e.conn_id.clone(),
+                    TabKind::Ddl(d) => d.conn_id.clone(),
+                    TabKind::Kafka(k) => k.conn_id.clone(),
+                    TabKind::Rabbit(r) => r.conn_id.clone(),
+                    TabKind::Mqtt(m) => m.conn_id.clone(),
+                    TabKind::Kv(k) => k.conn_id.clone(),
+                    TabKind::Session(s) => s.conn_id.clone(),
+                })
             })
-        });
+            .filter(|cid| self.conn_can_query(cid));
         let inherit_db = self.tabs.get(self.active_tab).and_then(|t| match &t.kind {
             TabKind::Table(t) => t.database.clone(),
             TabKind::Structure(s) => s.database.clone(),
@@ -3264,10 +3279,7 @@ impl ShujingApp {
     /// 打开备份数据库弹窗(SQL 类连接右键入口)
     pub fn open_backup(&mut self, conn_id: &str) {
         let Some(c) = self.conns.iter().find(|c| c.id == conn_id) else { return };
-        if !matches!(
-            c.db_type,
-            shujing_core::DbType::MySql | shujing_core::DbType::Postgres | shujing_core::DbType::Sqlite
-        ) {
+        if !c.db_type.caps().backup {
             self.toast_error(ui_kit::t!(
                 "Backup supports MySQL/PostgreSQL/SQLite for now",
                 "备份目前支持 MySQL/PostgreSQL/SQLite"
@@ -3414,12 +3426,7 @@ impl ShujingApp {
         let online: Vec<ConnInfo> = self
             .conns
             .iter()
-            .filter(|c| {
-                matches!(
-                    c.db_type,
-                    shujing_core::DbType::MySql | shujing_core::DbType::Postgres | shujing_core::DbType::Sqlite
-                )
-            })
+            .filter(|c| c.db_type.caps().backup)
             .cloned()
             .collect();
         if online.is_empty() {
@@ -3435,10 +3442,7 @@ impl ShujingApp {
     /// 队列逐个执行(串行,防并发写备份目录)
     pub fn run_auto_backup_next(&mut self) {
         let Some(c) = self.auto_backup_queue.pop() else { return };
-        if !matches!(
-            c.db_type,
-            shujing_core::DbType::MySql | shujing_core::DbType::Postgres | shujing_core::DbType::Sqlite
-        ) {
+        if !c.db_type.caps().backup {
             self.run_auto_backup_next();
             return;
         }
@@ -4472,6 +4476,10 @@ impl ShujingApp {
                 } => {
                     self.query_seq += 1;
                     let id = format!("q{}", rand_suffix());
+                    // 旧会话里可能存着绑到中间件/MongoDB 连接的查询标签(当时入口没按
+                    // 类型限制):还原成未选连接,SQL 文本保留——否则留着的是一个点运行
+                    // 才报"无 SQL 执行面"的标签
+                    let conn = if self.conn_can_query(conn) { conn.clone() } else { String::new() };
                     self.tabs.push(Tab {
                         id: id.clone(),
                         title: format!("{} {}", ui_kit::t!("Query", "查询"), self.query_seq),

@@ -99,6 +99,14 @@ async fn main() {
         Err(e) => fail("list_groups", &e),
     }
 
+    // 6b) 无 SQL 执行面:界面侧已不给 Kafka 开 SQL 查询页,这里是后端的兜底——
+    // 真要走到 run_sql,必须是明确的拒绝,不能悄悄执行或报一堆驱动黑话
+    match service.run_sql("e2e-kafka", "SELECT 1".into(), None).await {
+        Err(e) if e.contains("无 SQL 执行面") => pass("no_sql_surface", &e),
+        Err(e) => fail("no_sql_surface", &format!("拒绝文案不对: {e}")),
+        Ok(_) => fail("no_sql_surface", "Kafka 连接竟然执行了 SQL"),
+    }
+
     // 7) 删除 topic(清理)
     match service.kafka_delete_topic("e2e-kafka", "shujing-e2e").await {
         Ok(_) => pass("delete_topic", "清理完成"),

@@ -56,6 +56,8 @@ pub struct Capabilities {
     pub indexes: bool,
     /// 能生成建表语句(DDL)
     pub ddl: bool,
+    /// 支持整库备份(逐表 DDL+INSERT 流式写盘;目前 MySQL/PG/SQLite)
+    pub backup: bool,
 }
 
 impl Capabilities {
@@ -70,6 +72,7 @@ impl Capabilities {
             middleware: false,
             indexes: false,
             ddl: false,
+            backup: false,
         }
     }
 }
@@ -86,6 +89,7 @@ impl DbType {
             middleware: false,
             indexes: true,
             ddl: true,
+            backup: false,
         };
         match self {
             DbType::MySql | DbType::Postgres => Capabilities {
@@ -93,10 +97,12 @@ impl DbType {
                 save_result: true,
                 cancel: true,
                 sessions: true,
+                backup: true,
                 ..SQL_DB
             },
             DbType::Sqlite => Capabilities {
                 save_result: true,
+                backup: true,
                 ..SQL_DB
             },
             DbType::Mssql => Capabilities {
@@ -127,6 +133,13 @@ impl DbType {
                 ..Capabilities::none()
             },
         }
+    }
+
+    /// 能在查询页里跑:有 SQL 执行面,或是 Redis(查询页兼作命令通道)。
+    /// 中间件/配置中心/MongoDB 都没有——它们的"查询"是各自的专属控制台或数据页,
+    /// 给它们开 SQL 查询页只会在点运行时报"该数据源无 SQL 执行面"
+    pub fn has_query_surface(self) -> bool {
+        self.caps().sql || self == DbType::Redis
     }
 }
 
@@ -1015,5 +1028,55 @@ mod use_db_tests {
         );
         assert_eq!(extract_use_db("USE a; USE b;"), Some("b".into()));
         assert_eq!(extract_use_db("SELECT 1"), None);
+    }
+}
+
+#[cfg(test)]
+mod caps_tests {
+    use super::*;
+
+    const ALL: [DbType; 14] = [
+        DbType::Sqlite,
+        DbType::MySql,
+        DbType::Postgres,
+        DbType::Redis,
+        DbType::Mongo,
+        DbType::Mssql,
+        DbType::ClickHouse,
+        DbType::Kafka,
+        DbType::Rabbit,
+        DbType::Mqtt,
+        DbType::Plugin,
+        DbType::Nacos,
+        DbType::Consul,
+        DbType::Etcd,
+    ];
+
+    /// 查询面 = SQL 型 + Redis 命令通道;中间件/配置中心/MongoDB 没有——
+    /// 界面的「新建查询」入口、⌘T 的连接继承、查询页连接下拉都按这一位放行
+    #[test]
+    fn query_surface_is_sql_plus_redis() {
+        for t in ALL {
+            let want = matches!(
+                t,
+                DbType::Sqlite
+                    | DbType::MySql
+                    | DbType::Postgres
+                    | DbType::Mssql
+                    | DbType::ClickHouse
+                    | DbType::Plugin
+                    | DbType::Redis
+            );
+            assert_eq!(t.has_query_surface(), want, "{t:?}");
+        }
+    }
+
+    /// 整库备份目前只有 MySQL/PG/SQLite(与逐表 DDL+INSERT 的实现一致)
+    #[test]
+    fn backup_only_three_dialects() {
+        for t in ALL {
+            let want = matches!(t, DbType::MySql | DbType::Postgres | DbType::Sqlite);
+            assert_eq!(t.caps().backup, want, "{t:?}");
+        }
     }
 }

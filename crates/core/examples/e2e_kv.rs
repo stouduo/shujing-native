@@ -39,6 +39,14 @@ async fn run_one(service: &Service, id: &str, db_type: DbType, port: u16, host: 
         Err(e) => fail(&format!("connect/{tag}"), &e),
     }
 
+    // 无 SQL 执行面:界面侧已不给配置中心开 SQL 查询页,这里是后端的兜底——
+    // 真要走到 run_sql,必须是明确的拒绝
+    match service.run_sql(id, "SELECT 1".into(), None).await {
+        Err(e) if e.contains("无 SQL 执行面") => pass(&format!("no_sql_surface/{tag}"), &e),
+        Err(e) => fail(&format!("no_sql_surface/{tag}"), &format!("拒绝文案不对: {e}")),
+        Ok(_) => fail(&format!("no_sql_surface/{tag}"), "配置中心连接竟然执行了 SQL"),
+    }
+
     // 幂等:清掉上轮残留(前缀键)
     if let Ok(entries) = service.kv_list(id, "shujing-e2e/").await {
         for e in &entries {

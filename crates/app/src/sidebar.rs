@@ -10,11 +10,17 @@ use egui::{Align, Color32, Layout, RichText, Sense, Vec2};
 
 /// 连接节点的右键菜单:只回动作名(动作在菜单外执行——这样同一份菜单能同时挂在
 /// 整行和名字两个控件上)。"新建查询""导入 SQL 文件"是连接级的:库里/表里那些同名项
-/// 调用的是同一个不带库参数的函数,已作为重复入口删掉
+/// 调用的是同一个不带库参数的函数,已作为重复入口删掉。
+///
+/// 只列这个类型真能用的项(按能力矩阵出项)。此前 SQL 那几项对所有类型都给:右键
+/// Kafka/Consul/MQTT 开出的是 SQL 查询页,点运行才报"该数据源无 SQL 执行面";
+/// 「导入 SQL 文件…」先弹文件选择框再失败,「备份数据库…」「筛选显示的库…」只会弹报错。
+/// 这些类型的"查询"是各自的专属控制台
 fn conn_context_menu(
     ui: &mut egui::Ui,
     online: bool,
     db_type: shujing_core::DbType,
+    has_dbs: bool,
 ) -> Option<&'static str> {
     let mut act = None;
     let mut item = |ui: &mut egui::Ui, key: &'static str, label: &str| {
@@ -46,6 +52,7 @@ fn conn_context_menu(
             db_type,
             shujing_core::DbType::MySql | shujing_core::DbType::Postgres
         );
+        let caps = db_type.caps();
         if sessions_ok {
             item(ui, "sessions", ui_kit::t!("Sessions Panel…", "会话面板…"));
         }
@@ -56,11 +63,21 @@ fn conn_context_menu(
                 ui_kit::t!("Export Data Dictionary (Markdown)…", "导出数据字典(Markdown)…"),
             );
         }
-        item(ui, "query", ui_kit::t!("New Query", "新建查询"));
-        item(ui, "dbfilter", ui_kit::t!("Filter Databases…", "筛选显示的库…"));
+        // Redis 的查询页兼作命令通道,一并放行
+        if db_type.has_query_surface() {
+            item(ui, "query", ui_kit::t!("New Query", "新建查询"));
+        }
+        // 有库才谈得上筛选(中间件连接没有库;没加载出来时也不给一个只会报错的项)
+        if has_dbs {
+            item(ui, "dbfilter", ui_kit::t!("Filter Databases…", "筛选显示的库…"));
+        }
         item(ui, "refresh", ui_kit::t!("Refresh", "刷新"));
-        item(ui, "backup", ui_kit::t!("Backup Database…", "备份数据库…"));
-        item(ui, "importsql", ui_kit::t!("Import SQL File…", "导入 SQL 文件…"));
+        if caps.backup {
+            item(ui, "backup", ui_kit::t!("Backup Database…", "备份数据库…"));
+        }
+        if caps.sql {
+            item(ui, "importsql", ui_kit::t!("Import SQL File…", "导入 SQL 文件…"));
+        }
         ui.separator();
     }
     item(ui, "edit", ui_kit::t!("Edit Connection…", "编辑连接…"));
@@ -433,10 +450,15 @@ impl ShujingApp {
         // 连接操作的右键菜单同时挂在整行和名字上:名字是行内上层控件,只挂行的话正好
         // 点在名字上反而不出菜单;只挂名字则点到行内空白没反应(此前就是这样,与库行/
         // 表行也不一致)。菜单只回动作名,动作在菜单外执行
+        let has_dbs = self
+            .trees
+            .get(&c.id)
+            .map(|t| !t.databases.is_empty())
+            .unwrap_or(false);
         let act = std::cell::Cell::new(None);
         for resp in [row_resp.clone(), name_resp.clone()] {
             let _ = resp.context_menu(|ui| {
-                if let Some(a) = conn_context_menu(ui, online, c.db_type) {
+                if let Some(a) = conn_context_menu(ui, online, c.db_type, has_dbs) {
                     act.set(Some(a));
                 }
             });
@@ -512,12 +534,7 @@ impl ShujingApp {
         }
         // 库筛选快捷入口:漏斗只在悬停或筛选激活时出现(常驻=行内又一处噪音;
         // 筛选激活用 accent 色常驻提示,平时让位给干净的名字行)
-        let filter_db_avail = online
-            && self
-                .trees
-                .get(&c.id)
-                .map(|t| !t.databases.is_empty())
-                .unwrap_or(false);
+        let filter_db_avail = online && has_dbs;
         if filter_db_avail {
             let frec = egui::Rect::from_center_size(
                 egui::pos2(rect.right() - 12.0, rect.center().y),
@@ -1529,6 +1546,14 @@ impl ShujingApp {
         );
 
         let menu_id = egui::Id::new(format!("tblmenu-{conn_id}-{db}-{name}"));
+        // 「插入表名到查询」会开一个 SQL 查询标签:连接没有 SQL 执行面时不给
+        // (MongoDB 集合行也是这张菜单)
+        let sql_surface = self
+            .conns
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| c.db_type.caps().sql)
+            .unwrap_or(true);
         let clicked_resp = resp.clone();
         let _ = clicked_resp.context_menu(|ui| {
             if ui
@@ -1574,9 +1599,10 @@ impl ShujingApp {
                 ui.ctx().copy_text(sql);
                 ui.close_menu();
             }
-            if ui
-                .button(ui_kit::t!("Insert Table Name into Query", "插入表名到查询"))
-                .clicked()
+            if sql_surface
+                && ui
+                    .button(ui_kit::t!("Insert Table Name into Query", "插入表名到查询"))
+                    .clicked()
             {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "insname".to_string()));
