@@ -473,6 +473,8 @@ pub struct ShujingApp {
     /// 会话持久化
     pub snippets: std::sync::Arc<Vec<String>>,
     pub settings_open: bool,
+    /// 键盘快捷键速查弹窗(独立窗口;入口在顶栏「更多」与 ⌘⇧/)
+    pub shortcuts_open: bool,
     /// Parquet 文件预览(路径,解析结果)
     pub parquet_preview: Option<(String, shujing_core::parquet_preview::ParquetPreview)>,
     /// AI 助手配置(base_url/key/model,settings.json)
@@ -654,6 +656,7 @@ impl ShujingApp {
             confirm: None,
             snippets,
             settings_open: false,
+            shortcuts_open: false,
             parquet_preview: None,
             ai_config: settings_ai.unwrap_or_default(),
             ai_assist: None,
@@ -706,6 +709,13 @@ impl ShujingApp {
                 }),
         };
         app.restore_session();
+        // 自截图模式的辅助:启动时直接打开指定弹窗,用来验证真实安装包里的
+        // 弹窗渲染(测试渲染与装机包之间隔着一层——淡入动画、字体度量都踩过)
+        match std::env::var("SHUJING_SHOT_MODAL").as_deref() {
+            Ok("shortcuts") => app.shortcuts_open = true,
+            Ok("settings") => app.settings_open = true,
+            _ => {}
+        }
         app
     }
 

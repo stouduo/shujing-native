@@ -38,6 +38,138 @@ pub fn paint_icon(p: &egui::Painter, icon: &Icon, c: Pos2, size: f32, color: Col
     }
 }
 
+/// 修饰键符号(键位胶囊用):⌘ ⌃ ⌥ 自绘,↵ 用 Lucide CORNER_DOWN_LEFT。
+/// 不用字体字形——SF 无 ↵(回退到 Apple Symbols,度量不齐,渲染出来又小又
+/// 下沉,看着像乱码);⌘⇧ 在 SF 里有但 11pt 下笔画过细
+pub mod key_caps {
+    use super::{paint_icon, theme, Color32, Pos2, Shape, Stroke};
+    use crate::lucide;
+
+    const STROKE: f32 = 1.3;
+
+    /// 花键 ⌘(四个圆环 + 中框)
+    pub fn command(p: &egui::Painter, c: Pos2, size: f32, color: Color32) {
+        let st = Stroke::new(STROKE * size / 14.0, color);
+        let r = size * 0.18;
+        let o = size * 0.26;
+        for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+            let cx = c.x + dx * o;
+            let cy = c.y + dy * o;
+            // 圆环
+            p.circle_stroke(egui::pos2(cx, cy), r, st);
+        }
+        // 中框(圆环间的方形边框)
+        let a = o - r;
+        p.add(Shape::line(
+            vec![
+                egui::pos2(c.x - a, c.y - a),
+                egui::pos2(c.x + a, c.y - a),
+                egui::pos2(c.x + a, c.y + a),
+                egui::pos2(c.x - a, c.y + a),
+                egui::pos2(c.x - a, c.y - a),
+            ],
+            st,
+        ));
+    }
+
+    /// 上箭头 ⇧(空心)
+    pub fn shift(p: &egui::Painter, c: Pos2, size: f32, color: Color32) {
+        let st = Stroke::new(STROKE * size / 14.0, color);
+        let h = size * 0.42;
+        let w = size * 0.36;
+        let stem = size * 0.16;
+        let pts = vec![
+            egui::pos2(c.x, c.y - h),
+            egui::pos2(c.x + w, c.y - h * 0.25),
+            egui::pos2(c.x + w * 0.55, c.y - h * 0.25),
+            egui::pos2(c.x + w * 0.55, c.y + h * 0.7),
+            egui::pos2(c.x - w * 0.55, c.y + h * 0.7),
+            egui::pos2(c.x - w * 0.55, c.y - h * 0.25),
+            egui::pos2(c.x - w, c.y - h * 0.25),
+            egui::pos2(c.x, c.y - h),
+        ];
+        p.add(Shape::line(pts, st));
+        let _ = stem;
+    }
+
+    /// 上箭头符 ⌃(细 V)
+    pub fn control(p: &egui::Painter, c: Pos2, size: f32, color: Color32) {
+        let st = Stroke::new(STROKE * size / 14.0, color);
+        let h = size * 0.26;
+        let w = size * 0.30;
+        p.line_segment([egui::pos2(c.x - w, c.y + h * 0.4), egui::pos2(c.x, c.y - h * 0.6)], st);
+        p.line_segment([egui::pos2(c.x, c.y - h * 0.6), egui::pos2(c.x + w, c.y + h * 0.4)], st);
+    }
+
+    /// 回车 ↵(Lucide CORNER_DOWN_LEFT,统一走图标引擎保度量)
+    pub fn return_key(p: &egui::Painter, c: Pos2, size: f32, color: Color32) {
+        paint_icon(p, &lucide::CORNER_DOWN_LEFT, c, size, color);
+    }
+
+    /// 键位胶囊排版:解析 "⌘⇧F" / "⌃Space" / "⌘1…9" 这类键位串,修饰键符号画出来,
+    /// 普通字符仍走文本(基线对齐)。返回总宽度(调用方居中用)
+    pub fn draw_key_caps(
+        p: &egui::Painter,
+        keys: &str,
+        center: Pos2,
+        text_size: f32,
+        color: Color32,
+    ) -> f32 {
+        let sym = text_size * 0.72; // 符号的视觉尺寸
+        let gap = text_size * 0.12;
+        // 先量宽:符号段按 sym + 小间距,文本段按字形
+        let mut total = 0.0f32;
+        let mut segments: Vec<(bool, String)> = Vec::new();
+        let mut text_buf = String::new();
+        for ch in keys.chars() {
+            let is_sym = matches!(ch, '\u{2318}' | '\u{21E7}' | '\u{2303}' | '\u{2325}');
+            if is_sym {
+                if !text_buf.is_empty() {
+                    segments.push((false, std::mem::take(&mut text_buf)));
+                }
+                segments.push((true, ch.to_string()));
+            } else {
+                text_buf.push(ch);
+            }
+        }
+        if !text_buf.is_empty() {
+            segments.push((false, text_buf));
+        }
+        for (is_sym, seg) in &segments {
+            if *is_sym {
+                total += sym + gap;
+            } else {
+                let g = p.layout_no_wrap(seg.clone(), egui::FontId::proportional(text_size), color);
+                total += g.size().x;
+                let _ = g;
+            }
+        }
+        // 再画:从总宽左缘起,基线取中心
+        let mut x = center.x - total / 2.0;
+        let cy = center.y;
+        for (is_sym, seg) in &segments {
+            if *is_sym {
+                let cc = egui::pos2(x + sym / 2.0, cy);
+                match seg.as_str() {
+                    "\u{2318}" => command(p, cc, sym, color),
+                    "\u{21E7}" => shift(p, cc, sym, color),
+                    "\u{2303}" => control(p, cc, sym, color),
+                    "\u{2325}" => return_key(p, cc, sym, color),
+                    _ => {}
+                }
+                x += sym + gap;
+            } else {
+                let g = p.layout_no_wrap(seg.clone(), egui::FontId::proportional(text_size), color);
+                let w = g.size().x;
+                let h = g.size().y;
+                p.galley(egui::pos2(x, cy - h / 2.0), g, color);
+                x += w;
+            }
+        }
+        total
+    }
+}
+
 /// 图标按钮的底:`w × 28` 的可点区,悬停/按住时垫淡底。返回 (矩形, 响应, 是否高亮)
 pub(crate) fn tool_face(ui: &mut Ui, w: f32) -> (egui::Rect, egui::Response, bool) {
     let p = theme::c();

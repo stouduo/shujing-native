@@ -2552,6 +2552,112 @@ pub fn draw_history_modal(app: &mut ShujingApp, ctx: &egui::Context) {
 }
 
 
+/// 快捷键速查表:(分组名, [(键位, 说明)])。静态表——新增快捷键时记得来这加一行
+pub fn shortcut_groups() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+    vec![
+        (
+            ui_kit::t!("Global", "全局"),
+            vec![
+                ("⌘T", ui_kit::t!("New query tab", "新建查询标签")),
+                ("⌘N", ui_kit::t!("New connection", "新建连接")),
+                ("⌘W", ui_kit::t!("Close tab", "关闭标签")),
+                ("⌘P", ui_kit::t!("Quick open table", "快速打开表")),
+                ("⌘⇧F", ui_kit::t!("Global search", "全局搜索")),
+                ("⌘⇧L", ui_kit::t!("Toggle appearance", "切换深浅外观")),
+                ("⌘1…9", ui_kit::t!("Switch to tab N", "切换到第 N 个标签")),
+                ("⌘⇧/", ui_kit::t!("Keyboard shortcuts", "键盘快捷键")),
+            ],
+        ),
+        (
+            ui_kit::t!("Table page", "表页"),
+            vec![
+                ("⌘R", ui_kit::t!("Refresh", "刷新")),
+                ("⌘S", ui_kit::t!("Save changes", "保存修改")),
+                ("⌘F", ui_kit::t!("Focus the row filter", "聚焦筛选框")),
+            ],
+        ),
+        (
+            ui_kit::t!("Query page", "查询页"),
+            vec![
+                ("⌘↵", ui_kit::t!("Run SQL / execute command", "运行 SQL / 执行命令")),
+                ("⌘/", ui_kit::t!("Toggle comment on selection", "选区注释切换")),
+                ("⌃Space", ui_kit::t!("Trigger autocomplete", "触发补全")),
+            ],
+        ),
+    ]
+}
+
+/// 速查表本体:键位胶囊 + 说明,按组分节
+fn draw_shortcut_list(ui: &mut egui::Ui) {
+    let p = theme::c();
+    for (gi, (gname, items)) in shortcut_groups().into_iter().enumerate() {
+        if gi > 0 {
+            ui.add_space(6.0);
+            theme::hairline_top(ui);
+            ui.add_space(6.0);
+        }
+        ui.label(RichText::new(gname).size(theme::fs_px(10.5)).color(p.muted));
+        ui.add_space(2.0);
+        for (key, desc) in items {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                // 行高固定 22:修饰键字形(⌘⇧⌃↵)在等宽字体里走回退,排版画廊的纵向
+                // 度量会被撑到几十 px(实测把每行撑到 ~130px),不能拿画廊高度定行高。
+                // 键位用比例字体:SF 自带这些字形,和系统菜单里的样子一致
+                let (krect, _) =
+                    ui.allocate_exact_size(egui::vec2(72.0, 22.0), egui::Sense::hover());
+                ui.painter().rect_filled(
+                    krect,
+                    egui::CornerRadius::same(theme::radius_small() as u8),
+                    p.input_bg,
+                );
+                // 修饰键(⌘⇧⌃↵)自绘矢量符号:文本字形回退(SF 无 ↵)度量不齐
+                ui_kit::icons::key_caps::draw_key_caps(
+                    ui.painter(),
+                    key,
+                    krect.center(),
+                    theme::fs_px(11.5),
+                    p.text,
+                );
+                ui.label(RichText::new(desc).size(theme::fs_px(12.0)).color(p.text2));
+            });
+            ui.add_space(2.0);
+        }
+    }
+}
+
+/// 键盘快捷键弹窗(独立窗口,不放在设置里)。入口:顶栏「更多 → 键盘快捷键…」与 ⌘⇧/
+pub fn draw_shortcuts_modal(app: &mut ShujingApp, ctx: &egui::Context) {
+    if !app.shortcuts_open {
+        return;
+    }
+    let p = theme::c();
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::new("shortcuts-modal"))
+        .frame(theme::modal_frame())
+        .backdrop_color(p.overlay)
+        .show(ctx, |ui| {
+            ui.set_width(480.0);
+            theme::modal_title(ui, ui_kit::t!("Keyboard Shortcuts", "键盘快捷键"));
+            theme::modal_scroll_style(ui);
+            egui::ScrollArea::vertical()
+                .id_salt("shortcuts-scroll")
+                .auto_shrink([false, true])
+                .max_height((ui.ctx().screen_rect().height() - 210.0).max(320.0))
+                .show(ui, draw_shortcut_list);
+            theme::modal_footer(ui, |ui| {
+                if theme::button(ui, ui_kit::t!("Close", "关闭"), theme::BtnKind::Secondary)
+                    .clicked()
+                {
+                    close = true;
+                }
+            });
+        });
+    if close || modal.should_close() {
+        app.shortcuts_open = false;
+    }
+}
+
 /// 连接在下拉里的显示名:名称 + 主机(同名连接靠主机区分;不暴露内部 id)
 fn conn_opt_label(c: &shujing_core::ConnInfo) -> String {
     match c.host.as_deref().filter(|h| !h.is_empty()) {
@@ -3820,89 +3926,6 @@ ui.add_space(6.0);
                     .color(p.text2),
                 );
             });
-            // 键盘快捷键速查:15 个绑定散在悬停提示里没有任何可发现性。
-            // 静态表(与实现同步靠人肉;新增快捷键时记得来这加一行)
-            ui.add_space(10.0);
-            ui.label(theme::strong(ui_kit::t!("Keyboard Shortcuts", "键盘快捷键"), 12.5).color(p.text2));
-            ui.add_space(4.0);
-            {
-                let groups: &[(&str, &[(&str, &str)])] = &[
-                    (
-                        if ui_kit::i18n::is_english() { "Global" } else { "全局" },
-                        &[
-                            ("⌘T", ui_kit::t!("New query tab", "新建查询标签")),
-                            ("⌘N", ui_kit::t!("New connection", "新建连接")),
-                            ("⌘W", ui_kit::t!("Close tab", "关闭标签")),
-                            ("⌘P", ui_kit::t!("Quick open table", "快速打开表")),
-                            ("⌘⇧F", ui_kit::t!("Global search", "全局搜索")),
-                            ("⌘⇧L", ui_kit::t!("Toggle appearance", "切换深浅外观")),
-                            ("⌘1…9", ui_kit::t!("Switch to tab N", "切换到第 N 个标签")),
-                        ],
-                    ),
-                    (
-                        if ui_kit::i18n::is_english() { "Table page" } else { "表页" },
-                        &[
-                            ("⌘R", ui_kit::t!("Refresh", "刷新")),
-                            ("⌘S", ui_kit::t!("Save changes", "保存修改")),
-                            ("⌘F", ui_kit::t!("Focus the row filter", "聚焦筛选框")),
-                        ],
-                    ),
-                    (
-                        if ui_kit::i18n::is_english() { "Query page" } else { "查询页" },
-                        &[
-                            ("⌘↵", ui_kit::t!("Run SQL / execute command", "运行 SQL / 执行命令")),
-                            ("⌘/", ui_kit::t!("Toggle comment on selection", "选区注释切换")),
-                            ("⌃Space", ui_kit::t!("Trigger autocomplete", "触发补全")),
-                        ],
-                    ),
-                ];
-                for (gi, (gname, items)) in groups.iter().enumerate() {
-                    if gi > 0 {
-                        ui.add_space(6.0);
-                        theme::hairline_top(ui);
-                        ui.add_space(6.0);
-                    }
-                    ui.label(
-                        RichText::new(*gname)
-                            .size(theme::fs_px(10.5))
-                            .color(p.muted),
-                    );
-                    ui.add_space(2.0);
-                    for (key, desc) in *items {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 8.0;
-                            // 高度固定:⌘ 走字体回退,排版画廊的纵向度量会被撑到
-                            // 几十 px(实测把每行撑到 ~130px),不能拿画廊高度定行高
-                            let (krect, _) =
-                                ui.allocate_exact_size(egui::vec2(64.0, 22.0), egui::Sense::hover());
-                            ui.painter().rect_filled(
-                                krect,
-                                egui::CornerRadius::same(theme::radius_small() as u8),
-                                p.input_bg,
-                            );
-                            let kg = ui.painter().layout_no_wrap(
-                                (*key).to_owned(),
-                                theme::mono(11.0),
-                                p.text,
-                            );
-                            ui.painter().galley(
-                                egui::pos2(
-                                    krect.center().x - kg.size().x / 2.0,
-                                    krect.center().y - kg.size().y / 2.0,
-                                ),
-                                kg,
-                                p.text,
-                            );
-                            ui.label(
-                                RichText::new(*desc)
-                                    .size(theme::fs_px(11.5))
-                                    .color(p.text2),
-                            );
-                        });
-                        ui.add_space(2.0);
-                    }
-                }
-            }
             // 定时自动备份            // 定时自动备份
             ui.add_space(8.0);
             ui.label(theme::strong(ui_kit::t!("Scheduled Backup", "定时备份"), 12.5).color(p.text2));

@@ -99,6 +99,10 @@ impl ShujingApp {
                                     9,
                                 ),
                                 (
+                                    ui_kit::t!("Keyboard Shortcuts…", "键盘快捷键…"),
+                                    11u8,
+                                ),
+                                (
                                     ui_kit::t!(
                                         "Import Connections (Encrypted Backup)…",
                                         "导入连接(加密备份)…"
@@ -165,6 +169,7 @@ impl ShujingApp {
             Some(8) => self.import_connections_file(),
             Some(9) => self.export_connections_encrypted(),
             Some(10) => self.import_connections_encrypted(),
+            Some(11) => self.shortcuts_open = true,
             _ => {}
         }
     }

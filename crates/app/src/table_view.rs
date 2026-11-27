@@ -6474,6 +6474,7 @@ impl eframe::App for ShujingApp {
             || self.conn_modal.is_some()
             || self.global_search.is_some()
             || self.settings_open
+            || self.shortcuts_open
             || self.db_filter.is_some()
             || self.parquet_preview.is_some()
             || self.schema_diff.is_some()
@@ -6561,6 +6562,14 @@ impl eframe::App for ShujingApp {
         {
             let dark = !theme::is_dark();
             self.set_theme_dark(ctx, dark);
+        }
+        // ⌘⇧/(美式键盘即 ⌘?):开关快捷键速查弹窗。弹窗自己开着时也放行,否则关不掉
+        if (!modal_open || self.shortcuts_open)
+            && ctx.input(
+                |i| i.key_pressed(egui::Key::Slash) && i.modifiers.command && i.modifiers.shift,
+            )
+        {
+            self.shortcuts_open = !self.shortcuts_open;
         }
         if !modal_open && ctx.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command) {
             self.quick_open = Some(crate::app::QuickOpen {
@@ -6725,6 +6734,7 @@ impl eframe::App for ShujingApp {
                             || self.conn_modal.is_some()
                             || self.global_search.is_some()
                             || self.settings_open
+            || self.shortcuts_open
                             || self.db_filter.is_some(),
                     )
                 }
@@ -6767,6 +6777,7 @@ impl eframe::App for ShujingApp {
         crate::modals::draw_col_stats_modal(self, ctx);
         crate::modals::draw_db_filter_modal(self, ctx);
         crate::modals::draw_settings_modal(self, ctx);
+        crate::modals::draw_shortcuts_modal(self, ctx);
         crate::modals::draw_parquet_modal(self, ctx);
         crate::modals::draw_schema_diff_modal(self, ctx);
         crate::modals::draw_ai_modal(self, ctx);

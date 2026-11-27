@@ -222,6 +222,7 @@ fn test_app(tabs: Vec<Tab>, active_tab: usize) -> ShujingApp {
         confirm: None,
         snippets: std::sync::Arc::new(vec![]),
         settings_open: false,
+        shortcuts_open: false,
         db_filter: None,
         theme_toggle_requested: false,
         session_dirty: false,
@@ -644,6 +645,18 @@ fn render_shell_query() {
     render("shell_query", 1440.0, 900.0, true, move |ctx| {
         let mut b = app.borrow_mut();
         draw_shell(&mut b, ctx);
+    });
+}
+
+#[test]
+fn render_shell_shortcuts() {
+    let mut app = shell_app("role");
+    app.shortcuts_open = true;
+    let app = std::cell::RefCell::new(app);
+    render("shell_shortcuts", 1440.0, 900.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_shell(&mut b, ctx);
+        crate::modals::draw_shortcuts_modal(&mut b, ctx);
     });
 }
 
@@ -2795,6 +2808,7 @@ fn entry_points_are_unique() {
     // 顶栏「更多」:只有连接的导入导出;设置由右侧齿轮进
     open_menu(&mut h, "更多");
     for keep in [
+        "键盘快捷键…",
         "导入连接(DBeaver/Navicat)…",
         "导出连接(加密备份)…",
         "导入连接(加密备份)…",
@@ -2929,6 +2943,115 @@ fn sidebar_context_menus_are_layered() {
     key_once(&mut h, egui::Key::Escape, plain);
 }
 
+/// 键盘快捷键速查是独立弹窗(用户要求:不放在设置里)。入口:顶栏
+/// 「更多 → 键盘快捷键…」与 ⌘⇧/;设置弹窗里不再有速查表。
+/// (本测试覆盖菜单路径;⌘⇧/ 见 shortcuts_modal_toggles_with_keyboard)
+#[test]
+fn shortcuts_modal_is_standalone() {
+    use egui_kittest::kittest::Queryable as _;
+    type H<'a> = egui_kittest::Harness<'a, std::cell::RefCell<ShujingApp>>;
+    fn has(h: &H<'_>, label: &str) -> bool {
+        h.query_by_label(label).is_some()
+    }
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let plain = egui::Modifiers::NONE;
+    let cell = std::cell::RefCell::new(shell_app("role"));
+    let setup_done = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_shell(&mut b, ctx);
+                crate::modals::draw_settings_modal(&mut b, ctx);
+                crate::modals::draw_shortcuts_modal(&mut b, ctx);
+            },
+            cell,
+        );
+    h.run_steps(6);
+
+    // 设置弹窗里不再有速查表(整节搬走,不是折叠)
+    h.state().borrow_mut().settings_open = true;
+    h.run_steps(3);
+    assert!(has(&h, "外观"), "设置弹窗应已打开");
+    assert!(!has(&h, "键盘快捷键"), "速查表不该再出现在设置里");
+    h.state().borrow_mut().settings_open = false;
+    h.run_steps(2);
+
+    // 顶栏「更多 → 键盘快捷键…」
+    {
+        h.get_by_label("更多").simulate_click();
+    }
+    h.run_steps(3);
+    assert!(has(&h, "键盘快捷键…"), "「更多」菜单应有速查入口");
+    {
+        h.get_by_label("键盘快捷键…").simulate_click();
+    }
+    h.run_steps(3);
+    assert!(h.state().borrow().shortcuts_open, "点菜单项应打开速查弹窗");
+    for keep in ["全局", "表页", "查询页", "新建查询标签", "运行 SQL / 执行命令"] {
+        assert!(has(&h, keep), "速查弹窗应包含:{keep}");
+    }
+    // 标题与 ⌘⇧/ 那一行的说明同名,按个数断言(query_by_label 遇同名会 panic)
+    assert!(
+        h.query_all_by_label("键盘快捷键").count() >= 2,
+        "速查弹窗应有标题与 ⌘⇧/ 条目"
+    );
+    key_once(&mut h, egui::Key::Escape, plain);
+    assert!(!h.state().borrow().shortcuts_open, "Esc 应关闭速查弹窗");
+}
+
+/// ⌘⇧/(美式键盘即 ⌘?)开关速查弹窗。全局快捷键在真实的 `update` 里处理——
+/// draw_shell 夹具不跑 update,这条必须用 eframe 夹具
+#[test]
+fn shortcuts_modal_toggles_with_keyboard() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_eframe(|cc| {
+            let mut app = full_app("role");
+            app.auto_connect_done = true;
+            ShujingApp::apply_fonts(&cc.egui_ctx);
+            crate::theme::set_dark(true);
+            app
+        });
+    h.run_steps(8);
+    let toggle = egui::Modifiers {
+        command: true,
+        shift: true,
+        ..Default::default()
+    };
+    let mut press = |h: &mut egui_kittest::Harness<ShujingApp>| {
+        h.input_mut().modifiers = toggle;
+        h.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Slash,
+            pressed: true,
+            repeat: false,
+            modifiers: toggle,
+            physical_key: None,
+        });
+        h.step();
+        h.step();
+        h.input_mut().modifiers = Default::default();
+        h.step();
+    };
+    assert!(!h.state().shortcuts_open);
+    press(&mut h);
+    assert!(h.state().shortcuts_open, "⌘⇧/ 应打开速查弹窗");
+    press(&mut h);
+    assert!(!h.state().shortcuts_open, "再按 ⌘⇧/ 应关闭(弹窗开着时也放行)");
+}
+
 /// 71 批重排过的弹窗底栏按钮:此前只看过渲染图,没点过。
 /// 按无障碍标签找按钮(theme::button 已补 widget_info),指针模拟点击,
 /// 断言各自的状态变化。设置弹窗的语言开关会改全局 i18n、"打开文件夹"会真开
@@ -3015,9 +3138,9 @@ fn modal_footer_buttons_work() {
         let mut app = full_app("role");
         app.settings_open = true;
         // 高视口让整份设置内容可见:插件区在 720 下已滚出 ScrollArea,模拟点不到
-        // (加了快捷键速查节后内容更高,2200 才放得下;ScrollArea 会把视口外
-        // 的控件剔除,kittest 点不到视口外的节点)
-        let mut h = harness_with(app, crate::modals::draw_settings_modal, 2200.0);
+        // 视口外的控件会被 ScrollArea 剔除(kittest 点不到):视口要盖住被点的节点;
+        // 点击用语义 click,不依赖几何
+        let mut h = harness_with(app, crate::modals::draw_settings_modal, 1600.0);
         {
             use egui_kittest::kittest::Queryable as _;
             let n = h.get_by_label("插件管理…");
@@ -3042,9 +3165,9 @@ fn modal_footer_buttons_work() {
     {
         let mut app = full_app("role");
         app.settings_open = true;
-        // 视口 2200:设置内容加高后,密度节以上的节点才都在 ScrollArea 视口内
-        // (视口外的节点被 egui 剔除,kittest 找不到);点击用语义 click,不依赖几何
-        let mut h = harness_with(app, crate::modals::draw_settings_modal, 2200.0);
+        // 视口 1600:密度节的节点在 ScrollArea 视口内(视口外的节点被 egui 剔除,
+        // kittest 找不到);点击用语义 click,不依赖几何
+        let mut h = harness_with(app, crate::modals::draw_settings_modal, 1600.0);
         // 落盘的值:启动时按同一个键恢复(见 SETTINGS_KEY_DENSITY),内存对了文件没对等于白点
         let saved_density = |h: &egui_kittest::Harness<std::cell::RefCell<ShujingApp>>| {
             let cfg = h.state().borrow().config_dir.clone();
