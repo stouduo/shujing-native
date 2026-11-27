@@ -564,11 +564,15 @@ fn draw_detail(
                     if !read_only {
                         if let Some(draft) = rt.ttl_draft.clone() {
                             let mut v = draft;
+                            // 内联输入框是带边框的盒子,夹在文字按钮的 4px 节奏里
+                            // 视觉贴死:前后各垫 6px(合计 10px)
+                            ui.add_space(6.0);
                             // 回车只在输入框持有焦点时提交(全局 Enter 会和模式框等串扰,误写 TTL)
                             let resp = ui.add_sized(
                                 [56.0, 22.0],
                                 egui::TextEdit::singleline(&mut v).font(theme::mono(11.0)),
                             );
+                            ui.add_space(6.0);
                             let apply =
                                 resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             rt.ttl_draft = Some(v.clone());
@@ -601,10 +605,12 @@ fn draw_detail(
                         }
                         if let Some(draft) = rt.rename_draft.clone() {
                             let mut v = draft;
+                            ui.add_space(6.0);
                             let resp = ui.add_sized(
                                 [150.0, 22.0],
                                 egui::TextEdit::singleline(&mut v).font(theme::mono(11.5)),
                             );
+                            ui.add_space(6.0);
                             let apply =
                                 resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             rt.rename_draft = Some(v.clone());

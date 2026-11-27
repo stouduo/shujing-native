@@ -1788,7 +1788,10 @@ pub(crate) fn draw_table_view(
                         None => format!("{}", tab.page),
                     };
                     if *editing {
+                        // 带边框的输入框夹在箭头按钮的 4px 节奏里视觉贴死:前后各垫 4px
+                        ui.add_space(4.0);
                         let resp = ui.add_sized(egui::vec2(46.0, 20.0), egui::TextEdit::singleline(page_draft).font(theme::mono(11.5)));
+                        ui.add_space(4.0);
                         resp.request_focus();
                         let commit = resp.lost_focus()
                             || ui.input(|i| i.key_pressed(egui::Key::Enter));

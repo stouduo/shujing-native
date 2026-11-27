@@ -8424,3 +8424,150 @@ fn render_kv_console() {
 
 
 
+
+
+#[test]
+fn zz_tmp_gap() {
+    // 1) kafka 新建 topic 表单行
+    let app = std::cell::RefCell::new(test_app(
+        vec![Tab {
+            id: "k1".into(),
+            title: "Kafka 控制台".into(),
+            kind: console_tab("kafka", "c1"),
+        }],
+        0,
+    ));
+    {
+        let mut b = app.borrow_mut();
+        if let TabKind::Kafka(k) = &mut b.tabs[0].kind {
+            k.new_open = true;
+            k.selected = Some("orders".into());
+        }
+    }
+    render("zz_gap_kafka", 1100.0, 640.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+    // 2) redis 批量删除 armed(输入框+红按钮)
+    let app2 = std::cell::RefCell::new(test_app(vec![], 0));
+    app2.borrow_mut().redis_batch_del = Some(crate::app::RedisBatchDeleteState {
+        conn_id: "c1".into(),
+        db: 0,
+        pattern: "cache:*".into(),
+        counted: Some(5),
+        confirm_input: "5".into(),
+        deleting: false,
+        error: None,
+    });
+    render("zz_gap_batch", 900.0, 620.0, true, move |ctx| {
+        let mut b = app2.borrow_mut();
+        crate::modals::draw_redis_batch_modal(&mut b, ctx);
+    });
+    // 3) kv 控制台(编辑区按钮行 + 新建键行)
+    let app3 = std::cell::RefCell::new(test_app(
+        vec![Tab {
+            id: "kv1".into(),
+            title: "KV 控制台".into(),
+            kind: TabKind::Kv(crate::app::KvTab {
+                conn_id: "c1".into(),
+                entries: vec![shujing_core::kv::KvEntry {
+                    key: "app/config.yaml".into(),
+                    value: "v".into(),
+                    binary: false,
+                }],
+                selected: Some("app/config.yaml".into()),
+                edit_value: Some("v".into()),
+                filter: String::new(),
+                new_key: String::new(),
+                loading: false,
+                busy: false,
+                error: None,
+                drop_arm: false,
+            }),
+        }],
+        0,
+    ));
+    render("zz_gap_kv", 1100.0, 640.0, true, move |ctx| {
+        let mut b = app3.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+    // 4) mqtt 控制台(发布表单)
+    let app4 = std::cell::RefCell::new(test_app(
+        vec![Tab {
+            id: "m1".into(),
+            title: "MQTT 控制台".into(),
+            kind: TabKind::Mqtt(crate::app::MqttTab {
+                conn_id: "c1".into(),
+                topics: vec![],
+                selected: None,
+                loading: false,
+                error: None,
+                pub_topic: String::new(),
+                pub_payload: String::new(),
+                pub_retain: false,
+                sending: false,
+            }),
+        }],
+        0,
+    ));
+    render("zz_gap_mqtt", 1100.0, 640.0, true, move |ctx| {
+        let mut b = app4.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
+
+/// Redis 详情头部行:TTL/重命名内联输入框夹在文字按钮行(RTL 4px)里,
+/// 带边框的盒子前后垫 6px,否则视觉上和按钮贴死
+#[test]
+fn render_redis_detail_inline() {
+    let mut app = test_app(vec![], 0);
+    app.tabs.push(Tab {
+        id: "r1".into(),
+        title: "Redis".into(),
+        kind: TabKind::Redis(crate::app::RedisTab {
+            conn_id: "c1".into(),
+            db: 0,
+            pattern: "*".into(),
+            cursor: 0,
+            keys: vec!["user:1001".into()],
+            selected_key: Some("user:1001".into()),
+            detail: Some(shujing_core::redis_ops::RedisDetail {
+                key_type: "string".into(),
+                ttl: 3600,
+                len: 11,
+                text: Some("hello world".into()),
+                pairs: vec![],
+            }),
+            detail_loading: false,
+            detail_more_loading: false,
+            detail_gen: 0,
+            scanning: false,
+            error: None,
+            key_types: Default::default(),
+            key_ttls: Default::default(),
+            sort: 0,
+            op_running: false,
+            new_key: None,
+            analyze: None,
+            rename_draft: None,
+            ttl_draft: Some("3600".into()),
+            edit_value: None,
+            member_add: None,
+            member_set_hash: false,
+            list_edit: None,
+            stream_add_text: String::new(),
+            stream_groups: None,
+            stream_busy: false,
+        }),
+    });
+    app.active_tab = 0;
+    let app = std::cell::RefCell::new(app);
+    render("redis_detail_inline", 1100.0, 720.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        crate::redis::draw_redis_view(ctx, "r1", match &mut b.tabs[0].kind {
+            TabKind::Redis(rt) => rt,
+            _ => unreachable!(),
+        }, false);
+    });
+}
