@@ -78,6 +78,14 @@ async fn main() {
         conn.query_drop("INSERT INTO e2e_mysql2.marker VALUES (1, '跨库值')")
             .await
             .unwrap();
+        conn.query_drop("DROP VIEW IF EXISTS e2e_mysql.v_user_score").await.unwrap();
+        // 单行定义:服务器 SHOW CREATE VIEW 返回的定义体就是一整行(结构页
+        // 此前把这一坨原样展示,没有格式)
+        conn.query_drop(
+            "CREATE VIEW e2e_mysql.v_user_score AS select id, name, score from e2e_mysql.users where score is not null order by score desc",
+        )
+        .await
+        .unwrap();
     }
 
     let info = ConnInfo {
@@ -143,6 +151,35 @@ async fn main() {
             pass("structure", "6 cols, pk=id");
         }
         Err(e) => fail("structure", &e),
+    }
+
+    // 3b) 视图 DDL 有格式:SHOW CREATE VIEW 的定义体是一整行,core 要把 AS 后的
+    // SELECT 体格式化(多行),头部(ALGORITHM/DEFINER/VIEW 名)逐字保留
+    match service
+        .get_table_structure("e2e-mysql", "v_user_score", Some("e2e_mysql".to_string()))
+        .await
+    {
+        Ok(st) => {
+            let ddl = &st.ddl;
+            let head_ok = ddl.starts_with("CREATE ALGORITHM=");
+            let multi = ddl.matches('\n').count() >= 3;
+            let body_ok =
+                ddl.contains("\nFROM `users`") && ddl.contains("\nWHERE (") && ddl.contains("ORDER BY");
+            if head_ok && multi && body_ok {
+                pass(
+                    "view ddl formatted",
+                    &format!("{} lines, head verbatim", ddl.lines().count()),
+                );
+            } else {
+                fail(
+                    "view ddl formatted",
+                    &format!(
+                        "head_ok={head_ok} multi={multi} body_ok={body_ok} ddl={ddl:?}"
+                    ),
+                );
+            }
+        }
+        Err(e) => fail("view ddl formatted", &e),
     }
 
     // 5) 计数

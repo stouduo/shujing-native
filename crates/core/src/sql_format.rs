@@ -14,6 +14,56 @@ const UPPER_ONLY: &[&str] = &[
     "IN", "NOT", "LIKE", "AS", "BETWEEN", "EXISTS", "IS", "ASC", "DESC", "DISTINCT",
 ];
 
+/// 视图 DDL 的定义体(MySQL 的 SHOW CREATE VIEW / SQLite·PG 的 CREATE VIEW .. AS)
+/// 常是一整行 SELECT:结构页里就是一坨。把 AS 之后的 SELECT 体走 format_sql,
+/// 头部(ALGORITHM/DEFINER/VIEW 名等)逐字保留——头部含 DEFINER=`x`@`%` 这类
+/// token,过格式化器会被加空格,改变可复制执行的文本。
+/// 不是"CREATE .. AS select"形状的输入(普通表的 DDL 等)原样返回。
+pub fn format_view_ddl(create_view: &str) -> String {
+    let Some(pos) = find_as_select(create_view) else {
+        return create_view.to_string();
+    };
+    // 闸门:头部必须是 CREATE ... VIEW(列注释里"形如 AS select 的注释"这类
+    // 字符串不能触发——普通表的 DDL 必须逐字保留)
+    let head_is_view = {
+        let head_lower = create_view[..pos].to_lowercase();
+        head_lower.starts_with("create")
+            && head_lower
+                .split_inclusive(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_') == "view")
+    };
+    if !head_is_view {
+        return create_view.to_string();
+    }
+    let head_end = pos + " AS ".len();
+    // 头部保留到 " AS " 为止(尾随空白归并)
+    let head = create_view[..pos].trim_end();
+    let body = format_sql(create_view[head_end..].trim_start());
+    format!("{head} AS\n{}", body.trim_end())
+}
+
+/// 找 " AS " 且其后(跳过空白)以 SELECT/WITH 开头的那一处;取最后一个满足的
+/// (定义体内部还会有 "expr AS alias",但 remainder 不是 SELECT 开头)
+fn find_as_select(sql: &str) -> Option<usize> {
+    let lower = sql.to_lowercase();
+    let mut found = None;
+    let mut from = 0usize;
+    while let Some(i) = lower[from..].find(" as ") {
+        let pos = from + i;
+        let rest = sql[pos + 4..].trim_start();
+        let is_body = {
+            let b = rest.as_bytes();
+            (b.len() >= 6 && b[..6].eq_ignore_ascii_case(b"select"))
+                || (b.len() >= 4 && b[..4].eq_ignore_ascii_case(b"with"))
+        };
+        if is_body {
+            found = Some(pos);
+        }
+        from = pos + 4;
+    }
+    found
+}
+
 pub fn format_sql(sql: &str) -> String {
     let tokens = tokenize(sql);
     let mut out = String::with_capacity(sql.len() * 2);
@@ -164,23 +214,51 @@ fn tokenize(sql: &str) -> Vec<String> {
         if c == '\'' || c == '"' || c == '`' {
             let start = i;
             let quote = c;
-            i += 1;
-            while i < bytes.len() {
-                if bytes[i] as char == quote {
-                    // 双写转义
-                    if i + 1 < bytes.len() && bytes[i + 1] as char == quote {
+            i += 1; // 跳过首段开引号
+            loop {
+                while i < bytes.len() {
+                    if bytes[i] as char == quote {
+                        // 双写转义
+                        if i + 1 < bytes.len() && bytes[i + 1] as char == quote {
+                            i += 2;
+                            continue;
+                        }
+                        i += 1; // 越过闭引号
+                        break;
+                    }
+                    // 反斜杠转义(字符串)
+                    if quote == '\'' && bytes[i] == b'\\' && i + 1 < bytes.len() {
                         i += 2;
                         continue;
                     }
                     i += 1;
-                    break;
                 }
-                // 反斜杠转义(字符串)
-                if quote == '\'' && bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    i += 2;
-                    continue;
+                // 限定名链 `db`.`table`.`col`(及 `t`.col):闭引号后跟 . 且再跟
+                // 引号段/词 → 整链是一个词。此前拆成 `a` / . / `b` 三个,格式化后
+                // 点两侧被塞进空格,改变可复制执行的文本
+                if (quote == '`' || quote == '"')
+                    && bytes.get(i) == Some(&b'.')
+                    && i + 1 < bytes.len()
+                {
+                    let n = sql[i + 1..].chars().next().unwrap_or('\0');
+                    if n == quote {
+                        i += 2; // 越过点与下一段开引号,while 从段内首字符接着扫
+                        continue;
+                    }
+                    if n.is_alphanumeric() || n == '_' {
+                        i += 1; // 越过点,再吃整段裸词
+                        while i < bytes.len() {
+                            let ch = sql[i..].chars().next().unwrap_or('\0');
+                            if ch.is_alphanumeric() || ch == '_' || ch == '$' {
+                                i += ch.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
                 }
-                i += 1;
+                break;
             }
             out.push(sql[start..i.min(bytes.len())].to_string());
             continue;
@@ -243,6 +321,17 @@ mod tests {
         assert!(out.contains("\nWHERE id = 1"));
     }
 
+    /// `db`.`table`.`col` 限定名链是一个词:点两侧不能被塞进空格
+    /// (塞了就改变可复制执行的文本)
+    #[test]
+    fn dotted_identifier_chain_stays_one_token() {
+        let out = format_sql("select `u`.`id` from `shop`.`users` `u`");
+        assert!(out.contains("`u`.`id`"), "{out}");
+        assert!(out.contains("`shop`.`users`"), "{out}");
+        assert!(!out.contains(". "), "{out}");
+        assert!(!out.contains(" ."), "{out}");
+    }
+
     #[test]
     fn parens_indent() {
         let out = format_sql("select * from t where id in (1,2,3)");
@@ -282,5 +371,52 @@ mod literal_tests {
     fn code_blank_lines_still_compressed() {
         let out = format_sql("SELECT 1;\n\n\n   \nSELECT 2;");
         assert!(!out.contains("\n\n\n"), "代码区多余空行仍应压缩: {out:?}");
+    }
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+
+    /// MySQL SHOW CREATE VIEW 的定义体是一整行(服务器不排版):结构页的视图 DDL
+    /// 由此变成一坨。头部(ALGORITHM/DEFINER/VIEW 名)必须逐字保留——用户会复制
+    /// 执行,过格式化器会被加空格(如 `x`@`%` 变 `x` @ `%`);只有 AS 后的
+    /// SELECT 体格式化
+    #[test]
+    fn view_ddl_formats_body_keeps_header_verbatim() {
+        let one_line = "CREATE ALGORITHM=UNDEFINED DEFINER=`prod`@`%` SQL SECURITY DEFINER \
+VIEW `shop`.`v_order` AS select o.id, o.user_id, u.name from orders o left join users u \
+on o.user_id = u.id where o.status = 1 and o.amount > 100 order by o.id desc limit 50";
+        let out = format_view_ddl(one_line);
+        // 头部逐字保留
+        let head = "CREATE ALGORITHM=UNDEFINED DEFINER=`prod`@`%` SQL SECURITY DEFINER VIEW `shop`.`v_order` AS";
+        assert_eq!(
+            out.lines().next().unwrap(),
+            head,
+            "头部必须逐字保留: {out:?}"
+        );
+        // SELECT 体多行
+        assert!(out.contains("\nSELECT o.id"), "{out}");
+        assert!(out.contains("\nFROM orders o"), "{out}");
+        assert!(out.contains("\nLEFT JOIN users u"), "{out}");
+        assert!(out.contains("\n  ON o.user_id = u.id"), "{out}");
+        assert!(out.contains("\nWHERE o.status = 1"), "{out}");
+        assert!(out.contains("\nORDER BY o.id DESC"), "{out}");
+    }
+
+    /// 普通表的 SHOW CREATE TABLE 不能被误改:列注释里就算有 " AS select "
+    /// (字符串字面量内)也不该触发
+    #[test]
+    fn table_ddl_with_as_in_comment_untouched() {
+        let ddl = "CREATE TABLE `t` (\n  `a` int DEFAULT NULL COMMENT '形如 AS select 的注释'\n) ENGINE=InnoDB";
+        assert_eq!(format_view_ddl(ddl), ddl);
+    }
+
+    /// SQLite/PG 风格的 CREATE VIEW .. AS select(单行)同样格式化
+    #[test]
+    fn plain_create_view_formats() {
+        let out = format_view_ddl("CREATE VIEW v AS select a, b from t where a > 1");
+        assert_eq!(out.lines().next().unwrap(), "CREATE VIEW v AS");
+        assert!(out.contains("\nFROM t"), "{out}");
     }
 }

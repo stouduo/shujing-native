@@ -457,6 +457,9 @@ async fn struct_mysql(
         })
         .await
         .map_err(es)?;
+    // 视图的 SHOW CREATE VIEW 定义体是一整行 SELECT(服务器不排版),把
+    // AS 后的体格式化;普通表的 SHOW CREATE TABLE 本身多行,原样通过
+    out.ddl = crate::sql_format::format_view_ddl(&out.ddl);
     Ok(out)
 }
 
