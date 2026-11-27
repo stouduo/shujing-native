@@ -69,6 +69,16 @@ fn conn_context_menu(
     act
 }
 
+/// 连接行拖拽排序的会话态(egui 临时):拖起的连接 + 当前落点 + 累计位移。
+/// 落点只允许同分组的行(拖拽不改变分组归属)
+#[derive(Debug, Clone)]
+struct ConnDrag {
+    dragged: String,
+    group: Option<String>,
+    target: Option<String>,
+    moved: f32,
+}
+
 impl ShujingApp {
     pub fn draw_sidebar_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("sidebar")
@@ -195,6 +205,7 @@ impl ShujingApp {
                 let conns = self.conns.clone();
                 // 分组渲染:按 group 分节(可折叠,状态存 egui memory),组内保持保存顺序;
                 // 未分组的连接排在全部组之后,行为与旧版一致
+                let mut conn_rects: Vec<(String, Option<String>, egui::Rect)> = Vec::new();
                 let mut sections: Vec<(Option<String>, Vec<&shujing_core::ConnInfo>)> = Vec::new();
                 for c in &conns {
                     match sections.iter_mut().find(|(g, _)| *g == c.group) {
@@ -249,15 +260,20 @@ impl ShujingApp {
                             if in_group {
                                 // 分组成员缩进一级(与组头拉开层级;未分组连接保持顶格)
                                 ui.indent(egui::Id::new("conn-grp-indent"), |ui| {
-                                    self.draw_conn_block(ui, &cid, c);
+                                    self.draw_conn_block(ui, &cid, c, &mut conn_rects);
                                 });
                             } else {
-                                self.draw_conn_block(ui, &cid, c);
+                                self.draw_conn_block(ui, &cid, c, &mut conn_rects);
                             }
                         });
                         ui.add_space(10.0);
                     }
                 }
+                // 本帧行矩形表:拖拽落位按松手坐标在此表内找目标行
+                ui.memory_mut(|m| {
+                    m.data
+                        .insert_temp(egui::Id::new("conn-drag-rects"), conn_rects.clone())
+                });
                 if self.conns.is_empty() {
                     ui.add_space(20.0);
                     ui.label(
@@ -296,13 +312,19 @@ impl ShujingApp {
         });
     }
 
-    fn draw_conn_block(&mut self, ui: &mut egui::Ui, conn_id: &str, c: &shujing_core::ConnInfo) {
+    fn draw_conn_block(
+        &mut self,
+        ui: &mut egui::Ui,
+        conn_id: &str,
+        c: &shujing_core::ConnInfo,
+        conn_rects: &mut Vec<(String, Option<String>, egui::Rect)>,
+    ) {
         let p = theme::c();
         let online = self.trees.get(&c.id).map(|t| t.online).unwrap_or(false);
         let w = ui.available_width();
-        // 整行可点(为了整行右键出菜单:egui 只给可点控件报 secondary_clicked);
-        // 行内空白处左键不做任何事
-        let (rect, row_resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::click());
+        // 整行可点可拖(右键菜单需要可点;拖拽 = 在同分组内排序,见下方拖拽块)
+        let (rect, row_resp) = ui.allocate_exact_size(egui::vec2(w, 28.0), Sense::click_and_drag());
+        conn_rects.push((conn_id.to_string(), c.group.clone(), rect));
         let painter = ui.painter().clone();
         // 标识色:在线时状态点与名称用连接色;未设置用默认语义色
         let accent = c.color.as_ref().and_then(|hex| {
@@ -379,7 +401,7 @@ impl ShujingApp {
             egui::pos2(rect.left() + 12.0, rect.top()),
             egui::vec2(name_galley.size().x + 12.0, rect.height()),
         );
-        let name_resp = ui.allocate_rect(name_rect, Sense::click());
+        let name_resp = ui.allocate_rect(name_rect, Sense::click_and_drag());
         // 版本等元信息并入悬停提示(行内不再展示,保持列表克制)
         let ver_line = self
             .trees
@@ -523,6 +545,99 @@ impl ShujingApp {
         }
         let cid = c.id.clone();
         self.draw_tree(ui, &cid, online);
+
+        // ---- 拖拽排序(同分组内):按下源行拖到目标行,松手落位。
+        // 会话态存 egui 临时(拖起 → 移动中每帧更新落点 → 松手重排并落盘)。
+        // 手势教训来自标签栏(v0.12.6):位移不足阈值不算拖,松手即清,点击
+        // 与拖拽由 egui 自己分离(拖过的行 click 不触发)
+        let drag_key = egui::Id::new("conn-drag-session");
+        let rects_key = egui::Id::new("conn-drag-rects");
+        // 无条件加载:任何行都可能成为落点(此前过滤"目标已是自己",
+        // 拖起后其它行永远看不到会话,落点永远不更新)
+        let mut session = ui.memory(|m| m.data.get_temp::<ConnDrag>(drag_key));
+        // 名字是行内的上层控件:按在名字上也要能拖(与行取"或")
+        let drag_started = row_resp.drag_started() || name_resp.drag_started();
+        let drag_delta = if name_resp.dragged() {
+            name_resp.drag_delta()
+        } else {
+            row_resp.drag_delta()
+        };
+        let drag_stopped = row_resp.drag_stopped() || name_resp.drag_stopped();
+        if drag_started {
+            ui.memory_mut(|m| {
+                m.data.insert_temp(
+                    drag_key,
+                    ConnDrag {
+                        dragged: conn_id.to_string(),
+                        group: c.group.clone(),
+                        target: None,
+                        moved: 0.0,
+                    },
+                )
+            });
+        }
+        if let Some(d) = session.as_mut() {
+            if d.dragged == conn_id {
+                d.moved += drag_delta.length();
+                // 累计位移写回 memory:落点行的阈值判断(moved > 8)读的是 memory
+                // 里的会话,不写回则永远 0,拖拽永远不落位
+                let snapshot = d.clone();
+                ui.memory_mut(|m| m.data.insert_temp(drag_key, snapshot));
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            }
+            if drag_stopped {
+                // 落位按松手坐标定目标(行矩形表是上一帧全量收集的;悬停指示线
+                // 只做过程反馈,不作为落位依据——指针瞬移/无中间帧也能正确落位)
+                let mut target = d.target.clone();
+                if target.is_none() && d.moved > 8.0 {
+                    let rects = ui.memory(|m| {
+                        m.data
+                            .get_temp::<Vec<(String, Option<String>, egui::Rect)>>(rects_key)
+                    })
+                    .unwrap_or_default();
+                    if let Some(pt) = ui.input(|i| i.pointer.latest_pos()) {
+                        target = rects
+                            .iter()
+                            .find(|(_, g, r)| *g == d.group && r.contains(pt) && r != &rect)
+                            .map(|(id, _, _)| id.clone());
+                    }
+                }
+                let should_reorder = d.moved > 8.0
+                    && target.as_deref() != Some(conn_id)
+                    && target.is_some();
+                if should_reorder {
+                    let t = target.unwrap();
+                    let list = self
+                        .service
+                        .reorder_connections(&self.conns, conn_id, &t)
+                        .unwrap_or_else(|_| self.conns.clone());
+                    self.conns = list;
+                }
+                ui.memory_mut(|m| m.data.remove::<ConnDrag>(drag_key));
+                session = None;
+            }
+        }
+        if let Some(d) = &session {
+            // 落点:指针悬在哪条同分组的行上(源行自身不算);指示线画在目标行顶缘
+            if let Some(pt) = ui.input(|i| i.pointer.latest_pos()) {
+                if d.group == c.group
+                    && d.dragged != conn_id
+                    && rect.contains(pt)
+                    && d.moved > 8.0
+                {
+                    ui.memory_mut(|m| {
+                        if let Some(mut cur) = m.data.get_temp::<ConnDrag>(drag_key) {
+                            cur.target = Some(conn_id.to_string());
+                            m.data.insert_temp(drag_key, cur);
+                        }
+                    });
+                    ui.painter().line_segment(
+                        [egui::pos2(rect.left(), rect.top() + 0.5), egui::pos2(rect.right(), rect.top() + 0.5)],
+                        egui::Stroke::new(2.0, p.accent),
+                    );
+                }
+            }
+        }
     }
 
     fn draw_tree(&mut self, ui: &mut egui::Ui, conn_id: &str, online: bool) {

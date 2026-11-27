@@ -7307,3 +7307,107 @@ fn data_grid_second_drag_builds_on_first() {
     assert_eq!(&second[1], "role", "{second:?}");
     assert_eq!(&second[2], "id", "id 落在位置 2: {second:?}");
 }
+
+/// 侧栏连接行拖拽排序:按下连接行拖到另一条连接行上松手 → 顺序持久。
+/// 手势护栏:位移 ≤8px 不算拖(点了没拖原样);拖拽不改分组归属(core 层有守卫)
+#[test]
+fn sidebar_conn_rows_drag_reorder() {
+    type H = egui_kittest::Harness<'static, std::cell::RefCell<ShujingApp>>;
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let app = std::cell::RefCell::new(full_app("role"));
+    let setup_done = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            app,
+        );
+    h.run_steps(8);
+    let order_before = {
+        let a = h.state().borrow();
+        a.conns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(order_before.first().map(String::as_str), Some("dramato-dev"));
+
+    // 连接行(行高 28,首行 y≈96..124):按住 dramato-dev 行拖到下一条连接行上松手。
+    // 行距 = 28 + 间距,拖 120px 一定落在第二条连接行内
+    // 行几何(标准密度实测):c1 = y 48..76,c2 = y 649..677;按行中心拖
+    let x = 110.0;
+    let (y_src, y_dst) = (62.0, 663.0);
+    h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y_src)));
+    h.step();
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x, y_src),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.step();
+    for (i, y) in [180.0, 300.0, 420.0, 540.0, 663.0].into_iter().enumerate() {
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y)));
+        h.step();
+        let _ = i;
+    }
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x, y_dst),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    let order_after = {
+        let a = h.state().borrow();
+        a.conns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()
+    };
+    assert_ne!(
+        order_after, order_before,
+        "拖拽后连接顺序应改变: {order_before:?} → {order_after:?}"
+    );
+    assert_eq!(
+        order_after.first().map(String::as_str),
+        Some("本地"),
+        "本地 应被拖到首位: {order_after:?}"
+    );
+
+    // 手势护栏:轻点 + 微位移(<8px)不算拖,顺序不再变
+    let order_before = order_after.clone();
+    let y2 = 62.0;
+    h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y2)));
+    h.step();
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x, y2),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.step();
+    h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, y2 + 4.0)));
+    h.step();
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: egui::pos2(x, y2 + 4.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    let order_final = {
+        let a = h.state().borrow();
+        a.conns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        order_final, order_before,
+        "位移不足阈值的按压不算拖拽: {order_final:?}"
+    );
+}

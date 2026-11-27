@@ -208,6 +208,31 @@ pub struct Service {
     tunnels: std::sync::Mutex<std::collections::HashMap<String, ssh::TunnelGuard>>,
 }
 
+/// 连接列表重排的纯逻辑:把 `dragged` 移到 `target` 所在位置;二者分组不同
+/// (含一方未分组)时原样返回,拖拽不改变分组归属
+pub fn reorder_conn_list(conns: &[ConnInfo], dragged: &str, target: &str) -> Vec<ConnInfo> {
+    if dragged == target {
+        return conns.to_vec();
+    }
+    let group_of = |id: &str| conns.iter().find(|c| c.id == id).map(|c| c.group.clone());
+    let (Some(dg), Some(tg)) = (group_of(dragged), group_of(target)) else {
+        return conns.to_vec();
+    };
+    if dg != tg {
+        return conns.to_vec();
+    }
+    let Some(from) = conns.iter().position(|c| c.id == dragged) else {
+        return conns.to_vec();
+    };
+    let Some(to) = conns.iter().position(|c| c.id == target) else {
+        return conns.to_vec();
+    };
+    let mut out = conns.to_vec();
+    let moved = out.remove(from);
+    out.insert(to, moved);
+    out
+}
+
 impl Service {
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -238,6 +263,23 @@ impl Service {
         Ok(conns)
     }
 
+
+    /// 连接树拖拽排序:基于调用方当前列表(`conns`)重排并落盘。两者必须在同一
+    /// 分组(或都未分组)——拖拽不改变分组归属,跨组落点原样返回
+    pub fn reorder_connections(
+        &self,
+        conns: &[ConnInfo],
+        dragged: &str,
+        target: &str,
+    ) -> Result<Vec<ConnInfo>, String> {
+        let out = reorder_conn_list(conns, dragged, target);
+        let changed = out.len() != conns.len()
+            || out.iter().zip(conns).any(|(a, b)| a.id != b.id);
+        if changed {
+            store::save_conns(&self.config_dir, &out)?;
+        }
+        Ok(out)
+    }
 
     pub fn delete_connection(&self, id: &str) -> Result<Vec<ConnInfo>, String> {
         self.state.remove(id);
@@ -1657,5 +1699,53 @@ mod tests {
         svc.disconnect(&info.id).await;
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::*;
+
+    fn conn(id: &str, group: Option<&str>) -> ConnInfo {
+        ConnInfo {
+            id: id.into(),
+            name: id.into(),
+            db_type: DbType::Sqlite,
+            host: None,
+            port: None,
+            user: None,
+            password: None,
+            database: None,
+            file_path: Some(format!("/{id}.db")),
+            color: None,
+            read_only: false,
+            perm: None,
+            group: group.map(str::to_string),
+            plugin: None,
+            ssh: None,
+        }
+    }
+
+    /// 同分组内拖拽:移到目标位置;跨分组落点被忽略;自落位/未知 id 原样
+    #[test]
+    fn reorder_connections_within_group_and_guards() {
+        let conns = vec![
+            conn("a", None),
+            conn("b", None),
+            conn("g1", Some("组一")),
+            conn("g2", Some("组一")),
+        ];
+        let ids = |out: &[ConnInfo]| -> Vec<String> {
+            out.iter().map(|c| c.id.clone()).collect()
+        };
+        // 未分组内:b 拖到 a 的位置
+        assert_eq!(ids(&reorder_conn_list(&conns, "b", "a")), ["b", "a", "g1", "g2"]);
+        // 跨分组:未分组的 a 拖到 组一 的 g1 → 忽略(拖拽不改分组归属)
+        assert_eq!(ids(&reorder_conn_list(&conns, "a", "g1")), ["a", "b", "g1", "g2"]);
+        // 组内:g2 拖到 g1 前
+        assert_eq!(ids(&reorder_conn_list(&conns, "g2", "g1")), ["a", "b", "g2", "g1"]);
+        // 自落位 / 不存在的 id:原样
+        assert_eq!(reorder_conn_list(&conns, "g2", "g2").len(), 4);
+        assert_eq!(reorder_conn_list(&conns, "nope", "a").len(), 4);
     }
 }
