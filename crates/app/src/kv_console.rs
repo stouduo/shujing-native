@@ -29,16 +29,14 @@ pub fn draw_kv_view(
                     ui_kit::t!("Filter keys…", "过滤键…"),
                     220.0,
                 );
-                let refresh = theme::button(
+                let refresh = theme::tool_button_on(
                     ui,
-                    if k.loading {
-                        ui_kit::t!("Loading…", "加载中…")
-                    } else {
-                        ui_kit::t!("Refresh", "刷新")
-                    },
-                    theme::BtnKind::Primary,
+                    None,
+                    ui_kit::t!("Refresh", "刷新"),
+                    "",
+                    !k.loading,
                 );
-                if refresh.clicked() && !k.loading {
+                if refresh {
                     actions.push(TabAction::KvLoad {
                         tab_id: tab_id.to_string(),
                     });
@@ -117,7 +115,16 @@ pub fn draw_kv_view(
                     } else {
                         ui_kit::t!("Delete Key", "删除键")
                     };
-                    let db2 = theme::button(ui, dlabel, theme::BtnKind::Secondary);
+                    // armed(再点一次确认)时红填充
+                    let db2 = theme::button(
+                        ui,
+                        dlabel,
+                        if k.drop_arm {
+                            theme::BtnKind::Danger
+                        } else {
+                            theme::BtnKind::Secondary
+                        },
+                    );
                     if db2.clicked() && !k.busy {
                         if k.drop_arm {
                             actions.push(TabAction::KvDelete {
@@ -195,33 +202,31 @@ pub fn draw_kv_view(
                 .id_salt(format!("kv-keys-{tab_id}"))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    // 单行条目:键名 + hex/大小 内联(此前键名一行、大小悬空在下一行)
                     for e in shown.iter().take(500) {
                         let selected = k.selected.as_deref() == Some(e.key.as_str());
-                        if ui
-                            .selectable_label(
-                                selected,
-                                RichText::new(&e.key).font(theme::mono(12.0)).color(p.text),
-                            )
-                            .clicked()
-                        {
-                            k.selected = Some(e.key.clone());
-                            k.edit_value = Some(e.value.clone());
-                            k.drop_arm = false;
-                        }
-                        if e.binary {
-                            ui.label(
-                                RichText::new("hex")
-                                    .size(theme::fs_px(10.0))
-                                    .color(theme::c().orange),
-                            );
-                        } else {
-                            ui.label(
-                                RichText::new(format!("{} B", e.value.len()))
-                                    .size(theme::fs_px(10.5))
-                                    .color(p.muted),
-                            );
-                        }
-                        ui.end_row();
+                        ui.horizontal(|ui| {
+                            if ui
+                                .selectable_label(
+                                    selected,
+                                    RichText::new(&e.key).font(theme::mono(12.0)).color(p.text),
+                                )
+                                .clicked()
+                            {
+                                k.selected = Some(e.key.clone());
+                                k.edit_value = Some(e.value.clone());
+                                k.drop_arm = false;
+                            }
+                            if e.binary {
+                                icons::chip(ui, "hex", theme::c().orange);
+                            } else {
+                                ui.label(
+                                    RichText::new(format!("{} B", e.value.len()))
+                                        .size(theme::fs_px(10.5))
+                                        .color(p.muted),
+                                );
+                            }
+                        });
                     }
                 });
         });

@@ -77,8 +77,16 @@ pub fn draw_kafka_view(
                     } else {
                         ui_kit::t!("Delete Topic", "删除 Topic")
                     };
-                    let color = if k.drop_arm { p.red } else { p.text2 };
-                    let db2 = theme::button(ui, dlabel, theme::BtnKind::Secondary);
+                    // armed(再点一次确认)时红填充:文案变了但样式不变很容易顺手点下去
+                    let db2 = theme::button(
+                        ui,
+                        dlabel,
+                        if k.drop_arm {
+                            theme::BtnKind::Danger
+                        } else {
+                            theme::BtnKind::Secondary
+                        },
+                    );
                     if db2.clicked() && !k.topic_busy {
                         if k.drop_arm {
                             actions.push(TabAction::KafkaDeleteTopic {

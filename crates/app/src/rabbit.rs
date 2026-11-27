@@ -57,7 +57,16 @@ pub fn draw_rabbit_view(
                     } else {
                         ui_kit::t!("Purge Queue", "清空队列")
                     };
-                    let db2 = theme::button(ui, dlabel, theme::BtnKind::Secondary);
+                    // armed(再点一次确认)时红填充
+                    let db2 = theme::button(
+                        ui,
+                        dlabel,
+                        if r.drop_arm {
+                            theme::BtnKind::Danger
+                        } else {
+                            theme::BtnKind::Secondary
+                        },
+                    );
                     if db2.clicked() && !r.sending && !r.loading {
                         if r.drop_arm {
                             actions.push(TabAction::RabbitPurge {

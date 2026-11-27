@@ -8223,3 +8223,115 @@ fn sidebar_conn_rows_drag_reorder() {
 
 
 
+
+
+/// KV 控制台的破坏性删除是两击确认:第一次只 arm(按钮变"再点一次确认删除"),
+/// 第二次才发 KvDelete。此前 armed 只换文案、样式不变,很容易顺手点下去
+#[test]
+fn kv_delete_is_two_click_confirm() {
+    use egui_kittest::kittest::Queryable as _;
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let got_delete = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = got_delete.clone();
+    let app = std::cell::RefCell::new(test_app(
+        vec![Tab {
+            id: "kv1".into(),
+            title: "KV 控制台".into(),
+            kind: TabKind::Kv(crate::app::KvTab {
+                conn_id: "c1".into(),
+                entries: vec![shujing_core::kv::KvEntry {
+                    key: "app/config.yaml".into(),
+                    value: "v".into(),
+                    binary: false,
+                }],
+                selected: Some("app/config.yaml".into()),
+                edit_value: Some("v".into()),
+                filter: String::new(),
+                new_key: String::new(),
+                loading: false,
+                busy: false,
+                error: None,
+                drop_arm: false,
+            }),
+        }],
+        0,
+    ));
+    let setup_done = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1100.0, 640.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                let acts = match &mut b.tabs[0].kind {
+                    TabKind::Kv(k) => crate::kv_console::draw_kv_view(ctx, "kv1", k),
+                    _ => unreachable!(),
+                };
+                for a in acts {
+                    match a {
+                        crate::table_view::TabAction::KvDelete { .. } => flag.set(true),
+                        _ => {}
+                    }
+                }
+            },
+            app,
+        );
+    h.run_steps(6);
+    assert!(h.query_by_label("删除键").is_some(), "应看到「删除键」按钮");
+    // 第一击:只 arm,不发动作
+    {
+        h.get_by_label("删除键").simulate_click();
+    }
+    h.run_steps(2);
+    assert!(!got_delete.get(), "第一击不该删除");
+    assert!(h.query_by_label("再点一次确认删除").is_some(), "第一击后应进入确认态");
+    // 第二击:确认删除
+    {
+        h.get_by_label("再点一次确认删除").simulate_click();
+    }
+    h.run_steps(2);
+    assert!(got_delete.get(), "第二击应发出删除动作");
+    assert!(h.query_by_label("删除键").is_some(), "确认后回到常态");
+}
+
+/// KV 控制台:键列表(单行条目)+ 选中键的编辑区 + 新建键行
+#[test]
+fn render_kv_console() {
+    use shujing_core::kv::KvEntry;
+    let app = std::cell::RefCell::new(test_app(
+        vec![Tab {
+            id: "kv1".into(),
+            title: "KV 控制台".into(),
+            kind: TabKind::Kv(crate::app::KvTab {
+                conn_id: "c1".into(),
+                entries: vec![
+                    KvEntry { key: "app/config.yaml".into(), value: "server:\n  port: 8080".into(), binary: false },
+                    KvEntry { key: "app/feature.flags".into(), value: "a,b,c".into(), binary: false },
+                    KvEntry { key: "bin/blob".into(), value: "00aabbcc".into(), binary: true },
+                ],
+                selected: Some("app/config.yaml".into()),
+                edit_value: Some("server:\n  port: 8080".into()),
+                filter: String::new(),
+                new_key: String::new(),
+                loading: false,
+                busy: false,
+                error: None,
+                drop_arm: false,
+            }),
+        }],
+        0,
+    ));
+    render("kv_console", 1100.0, 640.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
+

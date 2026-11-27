@@ -147,16 +147,18 @@ pub fn draw_mqtt_view(
                 .id_salt(format!("mqtt-topics-{tab_id}"))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    // 单行条目:主题 + retained/hex chip + 大小(此前 4 行 1 条分隔线,
+                    // 多主题时被分隔线切碎);载荷仅选中时显示在下方
                     for t in m.topics.clone() {
                         let selected = m.selected.as_deref() == Some(t.topic.as_str());
                         ui.push_id(format!("mqtt-row-{}-{tab_id}", t.topic), |ui| {
-                            let sel = ui
-                                .selectable_label(
-                                    selected,
-                                    RichText::new(&t.topic).font(theme::mono(12.0)).color(p.text),
-                                )
-                                .clicked();
                             ui.horizontal(|ui| {
+                                let sel = ui
+                                    .selectable_label(
+                                        selected,
+                                        RichText::new(&t.topic).font(theme::mono(12.0)).color(p.text),
+                                    )
+                                    .clicked();
                                 if t.retained {
                                     icons::chip(ui, ui_kit::t!("retained", "保留"), p.accent);
                                 }
@@ -168,10 +170,10 @@ pub fn draw_mqtt_view(
                                         .size(theme::fs_px(10.5))
                                         .color(p.muted),
                                 );
+                                if sel {
+                                    m.selected = Some(t.topic.clone());
+                                }
                             });
-                            if sel {
-                                m.selected = Some(t.topic.clone());
-                            }
                             if selected && !t.payload.is_empty() {
                                 ui.add_space(2.0);
                                 ui.label(
@@ -182,7 +184,6 @@ pub fn draw_mqtt_view(
                                 ui.add_space(4.0);
                             }
                         });
-                        ui.separator();
                     }
                 });
         });
