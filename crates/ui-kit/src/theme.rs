@@ -1146,7 +1146,7 @@ pub fn form_row<R>(
         egui::UiBuilder::new()
             .max_rect(egui::Rect::from_min_size(
                 avail.min,
-                egui::vec2(avail.width(), field_h()),
+                egui::vec2(avail.width(), field_h() + 8.0),
             ))
             .layout(egui::Layout::top_down(egui::Align::Min)),
         |ui| {
@@ -1162,11 +1162,13 @@ pub fn form_row<R>(
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             // 控件区间距是 form_row 的布局规则,不是调用方的事:
-            // 横向 8px(输入框+按钮并排),纵向 0(单行)
-            ctrl.spacing_mut().item_spacing.x = 8.0;
+            // 横向 12px(输入框+按钮是两个带边框盒子,8px 视觉上贴死),纵向 0(单行)
+            ctrl.spacing_mut().item_spacing.x = 12.0;
             let out = add(&mut ctrl);
             let h = ctrl.min_rect().height().max(field_h());
-            let _ = ui.allocate_exact_size(egui::vec2(row.width(), h), egui::Sense::hover());
+            // 底部空隙收进行内(输入框和下面的组件之间永远 ≥8px,叠加全局行距 6 后 ≥14px):
+            // 此前行与行只隔全局 6px,两个带边框的输入框上下贴死
+            let _ = ui.allocate_exact_size(egui::vec2(row.width(), h + 8.0), egui::Sense::hover());
             let mut job = egui::text::LayoutJob::simple_singleline(
                 label.to_owned(),
                 egui::FontId::proportional(fs_px(13.0)),
@@ -1353,10 +1355,12 @@ pub fn field_hint_en(
         er.on_hover_text(if show { "隐藏密码" } else { "显示密码" });
     }
     if resp.has_focus() {
+        // 聚焦态:1.5px 强调色描边 + 2px 淡外圈。此前外圈 3px@40% 太重,
+        // 被当成报错/错误框
         ui.painter().rect_stroke(
-            rect.expand(2.5),
+            rect.expand(2.0),
             egui::CornerRadius::same(radius_card() as u8),
-            Stroke::new(3.0, tint(p.accent, 40)),
+            Stroke::new(2.0, tint(p.accent, 50)),
             egui::StrokeKind::Inside,
         );
         ui.painter().rect_stroke(

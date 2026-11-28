@@ -2062,7 +2062,7 @@ pub(crate) fn draw_table_view(
                             ui,
                             "filter-free",
                             &mut tab.free_where,
-                            ui.available_width() - 90.0,
+                            ui.available_width(),
                             false,
                         );
                         if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
