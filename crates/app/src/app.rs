@@ -740,6 +740,20 @@ impl ShujingApp {
                     }
                 }
             }
+            Ok("toolbox-cron") => {
+                app.open_toolbox();
+                let idx = app
+                    .tabs
+                    .iter()
+                    .position(|t| matches!(&t.kind, TabKind::Toolbox(_)));
+                if let Some(i) = idx {
+                    app.active_tab = i;
+                    if let TabKind::Toolbox(tb) = &mut app.tabs[i].kind {
+                        tb.tool = crate::toolbox::Tool::Cron;
+                        tb.cron.expr = "0 9 * * 1-5".into();
+                    }
+                }
+            }
             Ok("toolbox-jwt") => {
                 app.open_toolbox();
                 let idx = app

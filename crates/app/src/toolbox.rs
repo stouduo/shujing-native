@@ -4,19 +4,21 @@
 use crate::app::ToolboxTab;
 use crate::table_view::TabAction;
 use crate::theme;
+use chrono::Datelike;
 use egui::RichText;
 use shujing_core::hashing::Algo;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 工具条目:(分类, 名称)。分类只用于导航分组
-const TOOLS: [(&str, &str, Tool); 6] = [
+const TOOLS: [(&str, &str, Tool); 7] = [
     ("编解码", "Base64 / URL / Hex", Tool::Codec),
     ("时间", "时间戳 ⇄ 日期", Tool::Timestamp),
     ("生成器", "UUID", Tool::Uuid),
     ("格式化", "JSON", Tool::Json),
     ("摘要", "哈希 / HMAC", Tool::Hash),
     ("令牌", "JWT", Tool::Jwt),
+    ("定时", "Cron 表达式", Tool::Cron),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -27,6 +29,7 @@ pub enum Tool {
     Json,
     Hash,
     Jwt,
+    Cron,
 }
 
 pub fn draw_toolbox_view(ctx: &egui::Context, tab_id: &str, tb: &mut ToolboxTab) -> Vec<TabAction> {
@@ -72,6 +75,7 @@ pub fn draw_toolbox_view(ctx: &egui::Context, tab_id: &str, tb: &mut ToolboxTab)
             Tool::Json => draw_json(ui, &mut tb.json, wide),
             Tool::Hash => draw_hash(ui, tab_id, &mut tb.hash, wide, &mut actions),
             Tool::Jwt => draw_jwt(ui, &mut tb.jwt, wide, &mut actions),
+            Tool::Cron => draw_cron(ui, &mut tb.cron, wide, &mut actions),
         }
     });
     actions
@@ -1254,6 +1258,156 @@ fn draw_jwt(ui: &mut egui::Ui, t: &mut JwtTool, wide: f32, actions: &mut Vec<Tab
     });
     ui.add_space(2.0);
     theme::form_field_multiline(ui, "密钥 / 公钥", "jwt-key", &mut t.key, wide, 3);
+}
+
+// ---------------------------------------------------------------- Cron
+
+/// Cron 页状态:表达式输入,解析结果按输入缓存;触发列表每帧从当前时刻算
+#[derive(Default, Clone)]
+pub struct CronTool {
+    pub expr: String,
+    /// 常用表达式下拉的选中下标(仅 UI 态)
+    pub preset: usize,
+    last_expr: String,
+    parsed: Option<Result<shujing_core::cron::Cron, String>>,
+}
+
+const CRON_PRESETS: [&str; 6] = [
+    "*/5 * * * *",
+    "0 * * * *",
+    "30 2 * * *",
+    "0 9 * * 1-5",
+    "0 0 1 * *",
+    "0 0 1 1 *",
+];
+
+impl CronTool {
+    /// 输入变了才重新解析(触发列表依赖时钟,每帧现算)
+    fn refresh(&mut self) {
+        let e = self.expr.trim().to_string();
+        if e == self.last_expr {
+            return;
+        }
+        self.last_expr = e.clone();
+        self.parsed = Some(if e.is_empty() {
+            Err("输入 cron 表达式(分 时 日 月 周)".into())
+        } else {
+            shujing_core::cron::parse(&e).map_err(|err| err)
+        });
+    }
+}
+
+/// 毫秒 → 人话时长(与哈希页共用的口径)
+fn human_duration_ms(ms: i64) -> String {
+    let s = ms / 1000;
+    if s >= 86_400 {
+        format!("{} 天 {} 小时", s / 86_400, s % 86_400 / 3600)
+    } else if s >= 3600 {
+        format!("{} 小时 {} 分", s / 3600, s % 3600 / 60)
+    } else if s >= 60 {
+        format!("{} 分 {} 秒", s / 60, s % 60)
+    } else {
+        format!("{} 秒", s)
+    }
+}
+
+/// Cron 解析与下次触发预演
+fn draw_cron(
+    ui: &mut egui::Ui,
+    t: &mut CronTool,
+    wide: f32,
+    actions: &mut Vec<TabAction>,
+) {
+    let p = theme::c();
+    ui.heading(RichText::new("Cron 表达式").size(theme::fs_px(15.0)));
+    ui.add_space(8.0);
+    theme::form_row(ui, "表达式", |ui| {
+        ui.horizontal(|ui| {
+            theme::field_hint(ui, "cron-expr", &mut t.expr, 320.0, false, "分 时 日 月 周,支持 @daily 等宏");
+            // 常用表达式下拉:选中即填入输入框
+            let sel = if t.expr.trim().is_empty() {
+                "常用表达式".to_string()
+            } else {
+                t.expr.trim().to_string()
+            };
+            let opts: Vec<(String, String)> = CRON_PRESETS
+                .iter()
+                .map(|e| (e.to_string(), e.to_string()))
+                .chain(std::iter::once(("__none".into(), "常用表达式".into())))
+                .collect();
+            if let Some(v) = theme::select(ui, "cron-preset", &sel, &opts, 150.0) {
+                if v != "__none" {
+                    t.expr = v;
+                }
+            }
+        })
+    });
+    t.refresh();
+
+    match &t.parsed {
+        None => {}
+        Some(Err(e)) => {
+            ui.add_space(6.0);
+            ui.label(RichText::new(e).size(theme::fs_px(12.0)).color(p.red));
+        }
+        Some(Ok(c)) => {
+            // 人话描述
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(
+                    RichText::new(c.describe())
+                        .size(theme::fs_px(13.5))
+                        .strong()
+                        .color(p.text),
+                );
+                let d = c.describe();
+                if theme::mini_text_button(ui, "复制描述", p.text2).0 {
+                    actions.push(TabAction::CopyToClipboard {
+                        text: d,
+                        toast: COPIED.into(),
+                    });
+                }
+            });
+            // 接下来几次触发(每次渲染按当前时刻现算)
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("接下来 6 次触发")
+                    .size(theme::fs_px(11.0))
+                    .strong()
+                    .color(p.muted),
+            );
+            ui.add_space(4.0);
+            let now_local = chrono::Local::now();
+            let now = now_local.naive_local();
+            let now_ms = now.and_utc().timestamp_millis();
+            for fire in c.next_n(now, 6) {
+                let fire_ms = fire.and_utc().timestamp_millis();
+                let wd = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
+                    [fire.weekday().num_days_from_sunday() as usize];
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.label(
+                        RichText::new(fire.format("%Y-%m-%d %H:%M").to_string())
+                            .font(theme::mono(12.5))
+                            .color(p.text),
+                    );
+                    ui.label(RichText::new(wd).size(theme::fs_px(11.5)).color(p.text2));
+                    ui.label(
+                        RichText::new(format!("{}后", human_duration_ms(fire_ms - now_ms)))
+                            .size(theme::fs_px(11.5))
+                            .color(p.muted),
+                    );
+                });
+            }
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("按本机时区预演;标准 5 段 crontab(分 时 日 月 周)与 @宏")
+                    .size(theme::fs_px(11.0))
+                    .color(p.muted),
+            );
+        }
+    }
 }
 
 /// 真机自截图用的样例令牌(现算 HS256,落在有效期内,展示"签名有效")

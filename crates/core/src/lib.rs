@@ -5,6 +5,7 @@ pub mod ai;
 pub mod backend;
 pub mod clickhouse;
 pub mod composite;
+pub mod cron;
 #[cfg(feature = "heavy-mw")]
 pub mod kafka;
 pub mod kv;

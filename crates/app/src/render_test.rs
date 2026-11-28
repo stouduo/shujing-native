@@ -8669,6 +8669,12 @@ fn render_toolbox_hash() {
         tb.json.input = r#"{"b":1,"a":[1,2,{"c":true}]}"#.into();
         tb.json.output = "{\n  \"b\": 1,\n  \"a\": [\n    1,\n    2,\n    {\n      \"c\": true\n    }\n  ]\n}".into();
     });
+    shot_tool("toolbox_cron", crate::toolbox::Tool::Cron, |tb| {
+        tb.cron.expr = "0 9 * * 1-5".into();
+    });
+    shot_tool("toolbox_cron_error", crate::toolbox::Tool::Cron, |tb| {
+        tb.cron.expr = "* * 32 * *".into();
+    });
 }
 
 /// 测试用 HS256 令牌:签名现算(core 的 HMAC),只为驱动页面状态;
@@ -8751,6 +8757,54 @@ fn render_toolbox_jwt() {
         let mut b = app.borrow_mut();
         draw_app(&mut b, ctx);
     });
+}
+
+/// Cron 页:合法表达式出描述与触发列表;非法表达式出带字段定位的错误
+#[test]
+fn toolbox_cron_states() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut app, idx) = hash_app(2);
+    app.auto_connect_done = true;
+    if let TabKind::Toolbox(tb) = &mut app.tabs[idx].kind {
+        tb.tool = crate::toolbox::Tool::Cron;
+        tb.cron.expr = "*/15 8-18 * * 1-5".into();
+    }
+    let app = std::cell::RefCell::new(app);
+    let setup = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup.get() {
+                    setup.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            app,
+        );
+    h.run_steps(6);
+    // 人话描述与触发列表都在页面上
+    assert_label_contains(&h, "每周一-周五");
+    assert_label_contains(&h, "接下来 6 次触发");
+    let fired = h.query_all_by(|n: &egui_kittest::kittest::Node| {
+        n.value().map_or(false, |v| v.contains(" 08:15") || v.contains(" 08:30"))
+    });
+    assert!(fired.count() >= 2, "触发列表没有 08:15/08:30 时刻行");
+    // 改成非法:错误带字段定位(说明输入变化被重新解析)
+    {
+        let mut b = h.state().borrow_mut();
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.cron.expr = "* * 32 * *".into();
+        }
+    }
+    h.run_steps(3);
+    assert_label_contains(&h, "日(第 3 段): 32 超出范围 1-31");
 }
 
 /// 断言页面上存在文本包含 `needle` 的节点(状态行/说明文字是 Label,

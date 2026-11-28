@@ -637,6 +637,7 @@ pub struct ToolboxTab {
     pub uuid: crate::toolbox::UuidTool,
     pub json: crate::toolbox::JsonTool,
     pub hash: crate::toolbox::HashTool,
+    pub cron: crate::toolbox::CronTool,
     pub jwt: crate::toolbox::JwtTool,
 }
 
@@ -664,6 +665,7 @@ impl Default for ToolboxTab {
             json: Default::default(),
             hash: Default::default(),
             jwt: Default::default(),
+            cron: Default::default(),
         }
     }
 }
