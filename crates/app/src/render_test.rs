@@ -8571,3 +8571,49 @@ fn render_redis_detail_inline() {
         }, false);
     });
 }
+
+/// 连接/表行右键菜单的菜单项样式快照(平铺行+分隔线,危险项红字)
+#[test]
+fn render_sidebar_menus() {
+    use egui_kittest::kittest::Queryable as _;
+    let app = std::cell::RefCell::new(online_conn_app(
+        conn_of("mg", "MongoDB·shop", shujing_core::DbType::Mongo),
+        &["shop"],
+    ));
+    {
+        let mut b = app.borrow_mut();
+        let tree = b.trees.get_mut("mg").unwrap();
+        tree.expanded_db = Some("shop".into());
+        tree.tables_by_db.insert(
+            "shop".to_string(),
+            vec![shujing_core::TableMeta { name: "users".into(), kind: "table".into(), owner: None }],
+        );
+    }
+    let setup_done = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup_done.get() {
+                    setup_done.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_shell(&mut b, ctx);
+            },
+            app,
+        );
+    h.run_steps(6);
+    right_click_at(&mut h, egui::pos2(150.0, 172.0));
+    h.run_steps(40);
+    std::fs::create_dir_all("/tmp/shujing_ui");
+    h.render()
+        .unwrap()
+        .save("/tmp/shujing_ui/menu_items.png")
+        .unwrap();
+}

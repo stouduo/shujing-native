@@ -24,7 +24,7 @@ fn conn_context_menu(
 ) -> Option<&'static str> {
     let mut act = None;
     let mut item = |ui: &mut egui::Ui, key: &'static str, label: &str| {
-        if ui.button(label).clicked() {
+        if theme::menu_item_ex(ui, label, false, key == "delete", true).clicked() {
             act = Some(key);
             ui.close_menu();
         }
@@ -863,7 +863,7 @@ impl ShujingApp {
                                 ("function", ui_kit::t!("Functions", "函数")),
                                 ("view", ui_kit::t!("Views", "视图")),
                             ] {
-                                if ui.button(label).clicked() {
+                                if theme::menu_item(ui, label).clicked() {
                                     picked = Some(kind);
                                     ui.close_menu();
                                 }
@@ -954,14 +954,13 @@ impl ShujingApp {
         );
         let menu_id = egui::Id::new(format!("progmenu-{conn_id}-{db}-{name}"));
         let _ = resp.clone().context_menu(|ui| {
-            if ui.button(ui_kit::t!("View DDL", "查看 DDL")).clicked() {
+            if theme::menu_item(ui, &ui_kit::t!("View DDL", "查看 DDL")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "ddl".to_string()));
                 ui.close_menu();
             }
-            if ui
-                .button(ui_kit::t!("Delete Object…", "删除对象…"))
-                .clicked()
+            if theme::menu_item(ui, &ui_kit::t!("Delete Object…", "删除对象…")
+)                .clicked()
             {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "drop".to_string()));
@@ -1111,41 +1110,37 @@ impl ShujingApp {
         let mut export_schema = false;
         let mut refresh_tables = false;
         let _ = resp.clone().context_menu(|ui| {
-            if ui.button(ui_kit::t!("New Table…", "新建表…")).clicked() {
+            if theme::menu_item(ui, &ui_kit::t!("New Table…", "新建表…")).clicked() {
                 new_table = true;
                 ui.close_menu();
             }
-            if ui
-                .button(ui_kit::t!("View ER Diagram", "查看 ER 图"))
-                .clicked()
+            if theme::menu_item(ui, &ui_kit::t!("View ER Diagram", "查看 ER 图")
+)                .clicked()
             {
                 er = true;
                 ui.close_menu();
             }
             ui.separator();
-            if ui
-                .button(ui_kit::t!(
+            if theme::menu_item(ui, &ui_kit::t!(
                     "Export Database SQL (Schema+Data)",
                     "导出数据库 SQL(结构+数据)"
-                ))
-                .clicked()
+                )
+)                .clicked()
             {
                 export_full = true;
                 ui.close_menu();
             }
-            if ui
-                .button(ui_kit::t!(
+            if theme::menu_item(ui, &ui_kit::t!(
                     "Export Database SQL (Schema Only)",
                     "导出数据库 SQL(仅结构)"
-                ))
-                .clicked()
+                )
+)                .clicked()
             {
                 export_schema = true;
                 ui.close_menu();
             }
-            if ui
-                .button(ui_kit::t!("Refresh Table List", "刷新表列表"))
-                .clicked()
+            if theme::menu_item(ui, &ui_kit::t!("Refresh Table List", "刷新表列表")
+)                .clicked()
             {
                 refresh_tables = true;
                 ui.close_menu();
@@ -1244,34 +1239,31 @@ impl ShujingApp {
         let mut export_full = false;
         let mut export_schema = false;
         let _ = resp.clone().context_menu(|ui| {
-            if ui.button(ui_kit::t!("New Table…", "新建表…")).clicked() {
+            if theme::menu_item(ui, &ui_kit::t!("New Table…", "新建表…")).clicked() {
                 new_table = true;
                 ui.close_menu();
             }
-            if ui
-                .button(ui_kit::t!("View ER Diagram", "查看 ER 图"))
-                .clicked()
+            if theme::menu_item(ui, &ui_kit::t!("View ER Diagram", "查看 ER 图")
+)                .clicked()
             {
                 er = true;
                 ui.close_menu();
             }
             ui.separator();
-            if ui
-                .button(ui_kit::t!(
+            if theme::menu_item(ui, &ui_kit::t!(
                     "Export Database SQL (Schema+Data)",
                     "导出数据库 SQL(结构+数据)"
-                ))
-                .clicked()
+                )
+)                .clicked()
             {
                 export_full = true;
                 ui.close_menu();
             }
-            if ui
-                .button(ui_kit::t!(
+            if theme::menu_item(ui, &ui_kit::t!(
                     "Export Database SQL (Schema Only)",
                     "导出数据库 SQL(仅结构)"
-                ))
-                .clicked()
+                )
+)                .clicked()
             {
                 export_schema = true;
                 ui.close_menu();
@@ -1557,39 +1549,37 @@ impl ShujingApp {
         let clicked_resp = resp.clone();
         let _ = clicked_resp.context_menu(|ui| {
             if sql_surface
-                && ui
-                    .button(ui_kit::t!("Table Statistics…", "表统计…"))
-                    .clicked()
+                && theme::menu_item(ui, &ui_kit::t!("Table Statistics…", "表统计…")
+)                    .clicked()
             {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "stats".to_string()));
                 ui.close_menu();
             }
             if sql_surface
-                && ui
-                    .button(ui_kit::t!("Import Table (CSV/Excel)…", "导入表格(CSV/Excel)…"))
-                    .clicked()
+                && theme::menu_item(ui, &ui_kit::t!("Import Table (CSV/Excel)…", "导入表格(CSV/Excel)…")
+)                    .clicked()
             {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "import".to_string()));
                 ui.close_menu();
             }
-            if ui.button(ui_kit::t!("Table Structure", "表结构")).clicked() {
+            if theme::menu_item(ui, &ui_kit::t!("Table Structure", "表结构")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "struct".to_string()));
                 ui.close_menu();
             }
-            if sql_surface && ui.button(ui_kit::t!("Design Table", "设计表")).clicked() {
+            if sql_surface && theme::menu_item(ui, &ui_kit::t!("Design Table", "设计表")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "design".to_string()));
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button(ui_kit::t!("Copy Table Name", "复制表名")).clicked() {
+            if theme::menu_item(ui, &ui_kit::t!("Copy Table Name", "复制表名")).clicked() {
                 ui.ctx().copy_text(name.to_string());
                 ui.close_menu();
             }
-            if sql_surface && ui.button(ui_kit::t!("Copy SELECT *", "复制 SELECT *")).clicked() {
+            if sql_surface && theme::menu_item(ui, &ui_kit::t!("Copy SELECT *", "复制 SELECT *")).clicked() {
                 let mysql = crate::app::mysql_quote(&self.conns, conn_id);
                 let ident = crate::app::quote_ident_by(name, mysql);
                 // SQL Server 没有 LIMIT,取前 N 行用 TOP
@@ -1602,27 +1592,24 @@ impl ShujingApp {
                 ui.close_menu();
             }
             if sql_surface
-                && ui
-                    .button(ui_kit::t!("Insert Table Name into Query", "插入表名到查询"))
-                    .clicked()
+                && theme::menu_item(ui, &ui_kit::t!("Insert Table Name into Query", "插入表名到查询")
+)                    .clicked()
             {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "insname".to_string()));
                 ui.close_menu();
             }
             if sql_surface
-                && ui
-                    .button(ui_kit::t!("Export SQL (Schema+Data)", "导出 SQL(结构+数据)"))
-                    .clicked()
+                && theme::menu_item(ui, &ui_kit::t!("Export SQL (Schema+Data)", "导出 SQL(结构+数据)")
+)                    .clicked()
             {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "exportsql".to_string()));
                 ui.close_menu();
             }
             if sql_surface
-                && ui
-                    .button(ui_kit::t!("Copy Table as…", "复制表为…"))
-                    .clicked()
+                && theme::menu_item(ui, &ui_kit::t!("Copy Table as…", "复制表为…")
+)                    .clicked()
             {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "copytable".to_string()));
@@ -1630,36 +1617,35 @@ impl ShujingApp {
             }
             if sql_surface
                 && !is_view
-                && ui
-                    .button(ui_kit::t!(
+                && theme::menu_item(ui, &ui_kit::t!(
                         "Maintenance: Update Statistics (ANALYZE)",
                         "维护:更新统计 (ANALYZE)"
-                    ))
-                    .clicked()
+                    )
+)                    .clicked()
             {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "analyze".to_string()));
                 ui.close_menu();
             }
             ui.separator();
-            if sql_surface && ui.button(ui_kit::t!("Rename…", "重命名…")).clicked() {
+            if sql_surface && theme::menu_item(ui, &ui_kit::t!("Rename…", "重命名…")).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "rename".to_string()));
                 ui.close_menu();
             }
-            if sql_surface && !is_view && ui.button(ui_kit::t!("Truncate Table…", "清空表数据…")).clicked() {
+            if sql_surface && !is_view && theme::menu_item_ex(ui, &ui_kit::t!("Truncate Table…", "清空表数据…"), false, true, true).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "truncate".to_string()));
                 ui.close_menu();
             }
             if is_view {
                 // 视图没有数据可清空,DROP TABLE 对视图也报错:给专用的 DROP VIEW
-                if sql_surface && ui.button(ui_kit::t!("Delete View…", "删除视图…")).clicked() {
+                if sql_surface && theme::menu_item_ex(ui, &ui_kit::t!("Delete View…", "删除视图…"), false, true, true).clicked() {
                     ui.ctx()
                         .memory_mut(|m| m.data.insert_temp(menu_id, "dropview".to_string()));
                     ui.close_menu();
                 }
-            } else if sql_surface && ui.button(ui_kit::t!("Delete Table…", "删除表…")).clicked() {
+            } else if sql_surface && theme::menu_item_ex(ui, &ui_kit::t!("Delete Table…", "删除表…"), false, true, true).clicked() {
                 ui.ctx()
                     .memory_mut(|m| m.data.insert_temp(menu_id, "drop".to_string()));
                 ui.close_menu();

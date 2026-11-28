@@ -110,7 +110,7 @@ impl ShujingApp {
                                     10,
                                 ),
                             ] {
-                                if ui.button(label).clicked() {
+                                if theme::menu_item(ui, label).clicked() {
                                     menu_act = Some(a);
                                     ui.close_menu();
                                 }

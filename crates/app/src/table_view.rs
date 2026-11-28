@@ -933,21 +933,20 @@ fn draw_one_tab(
     let mut rename_cancel = false;
     let mut menu: Option<u8> = None;
     let _ = resp.clone().context_menu(|ui| {
-        if ui.button(ui_kit::t!("Close Others", "关闭其他")).clicked() {
+        if theme::menu_item(ui, &ui_kit::t!("Close Others", "关闭其他")).clicked() {
             menu = Some(0);
             ui.close_menu();
         }
-        if ui.button(ui_kit::t!("Close Left", "关闭左侧")).clicked() {
+        if theme::menu_item(ui, &ui_kit::t!("Close Left", "关闭左侧")).clicked() {
             menu = Some(1);
             ui.close_menu();
         }
-        if ui.button(ui_kit::t!("Close Right", "关闭右侧")).clicked() {
+        if theme::menu_item(ui, &ui_kit::t!("Close Right", "关闭右侧")).clicked() {
             menu = Some(2);
             ui.close_menu();
         }
         // 重命名从双击迁来:双击易误触(快连点两下就弹输入框还取消切换)
-        if ui
-            .button(ui_kit::t!("Rename Tab…", "重命名标签…"))
+        if theme::menu_item(ui, &ui_kit::t!("Rename Tab…", "重命名标签…"))
             .clicked()
         {
             menu = Some(3);
@@ -1118,8 +1117,7 @@ fn order_chip(ui: &mut egui::Ui, tab: &mut TableTab) -> bool {
             }
             if tab.sort.is_some() {
                 ui.separator();
-                if ui
-                    .button(RichText::new(ui_kit::t!("Clear Sort", "清除排序")).size(theme::fs_px(12.0)))
+                if theme::menu_item_rich(ui, RichText::new(ui_kit::t!("Clear Sort", "清除排序")).size(theme::fs_px(12.0)))
                     .clicked()
                 {
                     clear = true;
@@ -1381,7 +1379,7 @@ pub(crate) fn draw_table_view(
                             // 单元格右键菜单——此前各有一份,是重复入口
                             ui.set_min_width(180.0);
                             if compact {
-                                if ui.button(ui_kit::t!("Add Row", "新增行")).clicked() {
+                                if theme::menu_item(ui, &ui_kit::t!("Add Row", "新增行")).clicked() {
                                     tab.insert_form = Some(
                                         tab.columns
                                             .iter()
@@ -1395,8 +1393,7 @@ pub(crate) fn draw_table_view(
                             // Mongo 文档操作(只读浏览之外的 v2 编辑)
                             if conn_is_mongo {
                                 ui.separator();
-                                if ui
-                                    .button(ui_kit::t!(
+                                if theme::menu_item(ui, &ui_kit::t!(
                                         "Insert Document (JSON)…",
                                         "插入文档(JSON)…"
                                     ))
@@ -1407,8 +1404,7 @@ pub(crate) fn draw_table_view(
                                     });
                                     ui.close_menu();
                                 }
-                                if ui
-                                    .button(ui_kit::t!("Edit Selected Document…", "编辑选中文档…"))
+                                if theme::menu_item(ui, &ui_kit::t!("Edit Selected Document…", "编辑选中文档…"))
                                     .clicked()
                                 {
                                     actions.push(TabAction::MongoEditDoc {
@@ -1416,8 +1412,7 @@ pub(crate) fn draw_table_view(
                                     });
                                     ui.close_menu();
                                 }
-                                if ui
-                                    .button(ui_kit::t!(
+                                if theme::menu_item(ui, &ui_kit::t!(
                                         "Delete Selected Documents…",
                                         "删除选中文档…"
                                     ))
@@ -1428,8 +1423,7 @@ pub(crate) fn draw_table_view(
                                     });
                                     ui.close_menu();
                                 }
-                                if ui
-                                    .button(ui_kit::t!(
+                                if theme::menu_item(ui, &ui_kit::t!(
                                         "Import Documents (JSON)…",
                                         "批量导入文档(JSON)…"
                                     ))
@@ -1440,8 +1434,7 @@ pub(crate) fn draw_table_view(
                                     });
                                     ui.close_menu();
                                 }
-                                if ui
-                                    .button(ui_kit::t!("Manage Indexes…", "索引管理…"))
+                                if theme::menu_item(ui, &ui_kit::t!("Manage Indexes…", "索引管理…"))
                                     .clicked()
                                 {
                                     actions.push(TabAction::MongoIndexes {
@@ -1449,8 +1442,7 @@ pub(crate) fn draw_table_view(
                                     });
                                     ui.close_menu();
                                 }
-                                if ui
-                                    .button(ui_kit::t!("Export Collection JSON…", "导出集合 JSON…"))
+                                if theme::menu_item(ui, &ui_kit::t!("Export Collection JSON…", "导出集合 JSON…"))
                                     .clicked()
                                 {
                                     actions.push(TabAction::MongoExportJson {
@@ -1460,7 +1452,7 @@ pub(crate) fn draw_table_view(
                                 }
                             }
                             ui.separator();
-                            if ui.button(ui_kit::t!("Copy page as TSV", "复制本页为 TSV")).clicked() {
+                            if theme::menu_item(ui, &ui_kit::t!("Copy page as TSV", "复制本页为 TSV")).clicked() {
                                 toolbar_copy = Some(export_rows_text(
                                     tab.columns.as_slice(),
                                     tab.rows.as_slice(),
@@ -1468,8 +1460,7 @@ pub(crate) fn draw_table_view(
                                 ));
                                 ui.close_menu();
                             }
-                            if ui
-                                .button(ui_kit::t!("Copy page as Markdown", "复制本页为 Markdown"))
+                            if theme::menu_item(ui, &ui_kit::t!("Copy page as Markdown", "复制本页为 Markdown"))
                                 .clicked()
                             {
                                 toolbar_copy = Some(export_rows_markdown(
@@ -1478,8 +1469,7 @@ pub(crate) fn draw_table_view(
                                 ));
                                 ui.close_menu();
                             }
-                            if ui
-                                .button(ui_kit::t!("Copy page as JSON", "复制本页为 JSON"))
+                            if theme::menu_item(ui, &ui_kit::t!("Copy page as JSON", "复制本页为 JSON"))
                                 .clicked()
                             {
                                 toolbar_copy = Some(export_rows_json(
@@ -1488,8 +1478,7 @@ pub(crate) fn draw_table_view(
                                 ));
                                 ui.close_menu();
                             }
-                            if ui
-                                .button(ui_kit::t!("Copy page as INSERT", "复制本页为 INSERT 语句"))
+                            if theme::menu_item(ui, &ui_kit::t!("Copy page as INSERT", "复制本页为 INSERT 语句"))
                                 .clicked()
                             {
                                 toolbar_copy = Some(export_rows_inserts(
@@ -1527,8 +1516,7 @@ pub(crate) fn draw_table_view(
                                 &mut tab.show_rowno,
                                 ui_kit::t!("Row Numbers", "行号"),
                             );
-                            if ui
-                                .small_button(ui_kit::t!("Show All Columns", "显示全部列"))
+                            if theme::menu_item(ui, &ui_kit::t!("Show All Columns", "显示全部列"))
                                 .clicked()
                             {
                                 let had_hidden = !tab.hidden_cols.is_empty();
@@ -1553,23 +1541,21 @@ pub(crate) fn draw_table_view(
                         "",
                         |ui| {
                             ui.set_min_width(170.0);
-                            if ui.button(ui_kit::t!("Export CSV", "导出 CSV")).clicked() {
+                            if theme::menu_item(ui, &ui_kit::t!("Export CSV", "导出 CSV")).clicked() {
                                 export = Some(0);
                                 ui.close_menu();
                             }
-                            if ui
-                                .button(ui_kit::t!("Export Excel (.xlsx)", "导出 Excel(.xlsx)"))
+                            if theme::menu_item(ui, &ui_kit::t!("Export Excel (.xlsx)", "导出 Excel(.xlsx)"))
                                 .clicked()
                             {
                                 export = Some(1);
                                 ui.close_menu();
                             }
-                            if ui.button(ui_kit::t!("Export SQL", "导出 SQL")).clicked() {
+                            if theme::menu_item(ui, &ui_kit::t!("Export SQL", "导出 SQL")).clicked() {
                                 export = Some(2);
                                 ui.close_menu();
                             }
-                            if ui
-                                .button(ui_kit::t!("Preview Parquet File…", "预览 Parquet 文件…"))
+                            if theme::menu_item(ui, &ui_kit::t!("Preview Parquet File…", "预览 Parquet 文件…"))
                                 .clicked()
                             {
                                 toolbar_menu = Some(TabAction::PreviewParquet);
@@ -4278,27 +4264,24 @@ fn header_col_menu(
 ) {
     let mut col_menu: Option<u8> = None;
     let _ = resp.clone().context_menu(|ui| {
-        if ui
-            .button(ui_kit::t!("Sort Ascending", "升序排序"))
+        if theme::menu_item(ui, &ui_kit::t!("Sort Ascending", "升序排序"))
             .clicked()
         {
             col_menu = Some(0);
             ui.close_menu();
         }
-        if ui
-            .button(ui_kit::t!("Sort Descending", "降序排序"))
+        if theme::menu_item(ui, &ui_kit::t!("Sort Descending", "降序排序"))
             .clicked()
         {
             col_menu = Some(1);
             ui.close_menu();
         }
-        if ui.button(ui_kit::t!("Clear Sort", "取消排序")).clicked() {
+        if theme::menu_item(ui, &ui_kit::t!("Clear Sort", "取消排序")).clicked() {
             col_menu = Some(2);
             ui.close_menu();
         }
         ui.separator();
-        if ui
-            .button(ui_kit::t!(
+        if theme::menu_item(ui, &ui_kit::t!(
                 "Filter by This Value (= first row)",
                 "筛选此值(=当前页首行值)"
             ))
@@ -4307,23 +4290,20 @@ fn header_col_menu(
             col_menu = Some(3);
             ui.close_menu();
         }
-        if ui
-            .button(ui_kit::t!("Filter NULL Values", "筛选 NULL 值"))
+        if theme::menu_item(ui, &ui_kit::t!("Filter NULL Values", "筛选 NULL 值"))
             .clicked()
         {
             col_menu = Some(4);
             ui.close_menu();
         }
-        if ui
-            .button(ui_kit::t!("Filter Non-NULL Values", "筛选非空值"))
+        if theme::menu_item(ui, &ui_kit::t!("Filter Non-NULL Values", "筛选非空值"))
             .clicked()
         {
             col_menu = Some(5);
             ui.close_menu();
         }
         ui.separator();
-        if ui
-            .button(ui_kit::t!("Column Stats (Current Page)", "列统计(当前页)"))
+        if theme::menu_item(ui, &ui_kit::t!("Column Stats (Current Page)", "列统计(当前页)"))
             .clicked()
         {
             col_menu = Some(6);
@@ -4331,16 +4311,14 @@ fn header_col_menu(
         }
         ui.separator();
         if vw + 1 < vis_len
-            && ui
-                .button(ui_kit::t!("Freeze to This Column", "冻结到此列"))
+            && theme::menu_item(ui, &ui_kit::t!("Freeze to This Column", "冻结到此列"))
                 .clicked()
         {
             col_menu = Some(7);
             ui.close_menu();
         }
         if frozen_vis > 0
-            && ui
-                .button(ui_kit::t!("Unfreeze Columns", "取消冻结列"))
+            && theme::menu_item(ui, &ui_kit::t!("Unfreeze Columns", "取消冻结列"))
                 .clicked()
         {
             col_menu = Some(8);
@@ -4654,15 +4632,13 @@ fn draw_data_cell(
             *col_where_out = Some((col_name.to_string(), "LIKE".to_string(), val));
             ui.close_menu();
         }
-        if ui
-            .button(egui::RichText::new(ui_kit::t!("IS NULL", "此列为 NULL")).size(theme::fs_px(12.0)))
+        if theme::menu_item_rich(ui, RichText::new(ui_kit::t!("IS NULL", "此列为 NULL")).size(theme::fs_px(12.0)))
             .clicked()
         {
             *col_where_out = Some((col_name.to_string(), "IS NULL".to_string(), String::new()));
             ui.close_menu();
         }
-        if ui
-            .button(egui::RichText::new(ui_kit::t!("IS NOT NULL", "此列非空")).size(theme::fs_px(12.0)))
+        if theme::menu_item_rich(ui, RichText::new(ui_kit::t!("IS NOT NULL", "此列非空")).size(theme::fs_px(12.0)))
             .clicked()
         {
             *col_where_out = Some((
@@ -4673,27 +4649,24 @@ fn draw_data_cell(
             ui.close_menu();
         }
         ui.separator();
-        if ui
-            .button(ui_kit::t!("View Full Content…", "查看完整内容…"))
+        if theme::menu_item(ui, &ui_kit::t!("View Full Content…", "查看完整内容…"))
             .clicked()
         {
             let text = v.as_deref().unwrap_or("").to_string();
             *view_cell = Some((col_name.to_string(), text));
             ui.close_menu();
         }
-        if ui
-            .button(ui_kit::t!("View Row Details…", "查看整行详情…"))
+        if theme::menu_item(ui, &ui_kit::t!("View Row Details…", "查看整行详情…"))
             .clicked()
         {
             *detail = true;
             ui.close_menu();
         }
-        if ui.button(ui_kit::t!("Copy Cell", "复制单元格")).clicked() {
+        if theme::menu_item(ui, &ui_kit::t!("Copy Cell", "复制单元格")).clicked() {
             *copy_text = v.clone();
             ui.close_menu();
         }
-        if ui
-            .button(ui_kit::t!("Copy Row (TSV)", "复制整行 (TSV)"))
+        if theme::menu_item(ui, &ui_kit::t!("Copy Row (TSV)", "复制整行 (TSV)"))
             .clicked()
         {
             let tsv: Vec<String> = rowdata

@@ -1719,21 +1719,9 @@ pub fn select(
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (val, label) in options {
                     let is_sel = val == selected;
-                    let item =
-                        egui::Button::new(RichText::new(label).size(fs_px(12.5)).color(if is_sel {
-                            p.text
-                        } else {
-                            p.text2
-                        }))
-                        .fill(if is_sel {
-                            tint(p.accent, 48)
-                        } else {
-                            Color32::TRANSPARENT
-                        })
-                        .stroke(Stroke::NONE)
-                        .corner_radius(egui::CornerRadius::same(radius_ctrl() as u8))
-                        .min_size(egui::vec2(width - 20.0, 26.0));
-                    if ui.add(item).clicked() {
+                    // 菜单项平铺样式(此前是带底的 egui::Button,和右键菜单两张皮)
+                    let b = menu_item_ex(ui, label, is_sel, false, true);
+                    if b.clicked() {
                         picked = Some(val.clone());
                         ui.memory_mut(|m| m.close_popup());
                     }
@@ -1742,6 +1730,111 @@ pub fn select(
         );
     }
     picked
+}
+
+// ---------------------------------------------------------------- 菜单项
+
+/// 菜单项(右键菜单/下拉弹层用):全行宽平铺文字行,悬停垫淡底。
+/// 此前菜单里用 ui.button,菜单项画成一个个带底的按钮,和标准菜单两张皮。
+/// 行宽跨帧收敛:第一帧贴文字,菜单打开后按本弹层最宽项对齐(内存逐帧记录)
+pub fn menu_item(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    menu_item_ex(ui, label, false, false, true)
+}
+
+/// menu_item 的富文本版(菜单里需要自定义字号/颜色的项)
+pub fn menu_item_rich(ui: &mut egui::Ui, label: RichText) -> egui::Response {
+    menu_item_rich_ex(ui, label, false, true)
+}
+
+/// menu_item_rich 全参版
+pub fn menu_item_rich_ex(ui: &mut egui::Ui, label: RichText, selected: bool, enabled: bool) -> egui::Response {
+    let p = c();
+    let popup_id = ui.id().with("menu-item-w");
+    let text = label.color(Color32::PLACEHOLDER).size(fs_px(12.5));
+    let g = ui.painter().layout_no_wrap(
+        text.text().to_string(),
+        egui::FontId::proportional(fs_px(12.5)),
+        Color32::PLACEHOLDER,
+    );
+    let known = ui.memory(|m| m.data.get_temp::<f32>(popup_id).unwrap_or(0.0));
+    let row_w = known.max(g.size().x) + 26.0;
+    ui.memory_mut(|m| m.data.insert_temp(popup_id, known.max(g.size().x)));
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(row_w, 24.0), sense);
+    let hot = enabled && resp.hovered();
+    if selected {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(radius_small() as u8), tint(p.accent, 48));
+    } else if hot {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(radius_small() as u8), p.hover);
+    }
+    // 富文本原色不取(RichText 无 getter):非悬停统一 text2,与 menu_item 同节奏
+    let color = if !enabled {
+        p.muted
+    } else if selected || hot {
+        p.text
+    } else {
+        p.text2
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + 12.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text.text(),
+        egui::FontId::proportional(fs_px(12.5)),
+        color,
+    );
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, text.text()));
+    resp
+}
+
+/// menu_item 全参版:selected 高亮(下拉当前项)/danger 红字(破坏性)/disabled 置灰
+pub fn menu_item_ex(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: bool,
+    danger: bool,
+    enabled: bool,
+) -> egui::Response {
+    let p = c();
+    let popup_id = ui.id().with("menu-item-w");
+    let g = ui.painter().layout_no_wrap(
+        label.to_string(),
+        egui::FontId::proportional(fs_px(12.5)),
+        Color32::PLACEHOLDER,
+    );
+    // 行宽 = 弹层内已知最宽项(上一帧记忆 ∪ 本帧已画行);首帧贴文字,下一帧起全行宽
+    let known = ui.memory(|m| m.data.get_temp::<f32>(popup_id).unwrap_or(0.0));
+    let row_w = known.max(g.size().x) + 26.0;
+    ui.memory_mut(|m| m.data.insert_temp(popup_id, known.max(g.size().x)));
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(row_w, 24.0), sense);
+    let hot = enabled && resp.hovered();
+    if selected {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(radius_small() as u8), tint(p.accent, 48));
+    } else if hot {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(radius_small() as u8), p.hover);
+    }
+    let text = if !enabled {
+        p.muted
+    } else if danger {
+        p.red
+    } else if selected || hot {
+        p.text
+    } else {
+        p.text2
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + 12.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(fs_px(12.5)),
+        text,
+    );
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp
 }
 
 // ---------------------------------------------------------------- 弹窗

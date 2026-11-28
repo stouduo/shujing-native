@@ -564,15 +564,13 @@ fn cell_menu(
     };
     if sel.is_some_and(|s| s.spanning() && s.contains(ri, ci_vis)) {
         let norm = sel.map_or(((ri, ci_vis), (ri, ci_vis)), GridSel::norm);
-        if ui
-            .button(ui_kit::t!("Copy Selection", "复制选区"))
+        if theme::menu_item(ui, &ui_kit::t!("Copy Selection", "复制选区"))
             .clicked()
         {
             ctx.copy_text(selection_tsv_vis(columns, rows, vis, norm, false));
             act(ui);
         }
-        if ui
-            .button(ui_kit::t!(
+        if theme::menu_item(ui, &ui_kit::t!(
                 "Copy Selection with Headers",
                 "复制选区(带列名)"
             ))
@@ -581,21 +579,19 @@ fn cell_menu(
             ctx.copy_text(selection_tsv_vis(columns, rows, vis, norm, true));
             act(ui);
         }
-    } else if ui.button(ui_kit::t!("Copy Cell", "复制单元格")).clicked() {
+    } else if theme::menu_item(ui, &ui_kit::t!("Copy Cell", "复制单元格")).clicked() {
         // NULL 格复制成 "NULL" 文本(与 ⌘C 一致)
         ctx.copy_text(shown.clone().unwrap_or_else(|| "NULL".into()));
         act(ui);
     }
-    if ui
-        .button(ui_kit::t!("Copy Row (TSV)", "复制整行 (TSV)"))
+    if theme::menu_item(ui, &ui_kit::t!("Copy Row (TSV)", "复制整行 (TSV)"))
         .clicked()
     {
         let last = vis.len().saturating_sub(1);
         ctx.copy_text(selection_tsv_vis(columns, rows, vis, ((ri, 0), (ri, last)), false));
         act(ui);
     }
-    if ui
-        .button(ui_kit::t!("View Full Content…", "查看完整内容…"))
+    if theme::menu_item(ui, &ui_kit::t!("View Full Content…", "查看完整内容…"))
         .clicked()
     {
         out.view.set(Some((
@@ -606,7 +602,7 @@ fn cell_menu(
     }
     if editable {
         ui.separator();
-        if ui.button(ui_kit::t!("Edit Cell", "编辑此格")).clicked() {
+        if theme::menu_item(ui, &ui_kit::t!("Edit Cell", "编辑此格")).clicked() {
             // 编辑坐标是显示序(与渲染循环/键盘导航同一坐标系)
             out.start_edit
                 .set(Some((ri, ci_vis, shown.clone().unwrap_or_default())));
@@ -1734,16 +1730,14 @@ fn grid_header_freeze_menu(
             ui.close_menu();
         };
         if vw + 1 < vis_len
-            && ui
-                .button(ui_kit::t!("Freeze to This Column", "冻结到此列"))
+            && theme::menu_item(ui, &ui_kit::t!("Freeze to This Column", "冻结到此列"))
                 .clicked()
         {
             act = Some(0);
             act_once(ui);
         }
         if *frozen > 0
-            && ui
-                .button(ui_kit::t!("Unfreeze Columns", "取消冻结列"))
+            && theme::menu_item(ui, &ui_kit::t!("Unfreeze Columns", "取消冻结列"))
                 .clicked()
         {
             act = Some(1);

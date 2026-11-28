@@ -412,11 +412,11 @@ fn draw_key_row(
         });
     }
     let _ = resp.clone().context_menu(|ui| {
-        if ui.button(ui_kit::t!("Copy Key Name", "复制 key 名")).clicked() {
+        if theme::menu_item(ui, &ui_kit::t!("Copy Key Name", "复制 key 名")).clicked() {
             ui.ctx().copy_text(key.to_string());
             ui.close_menu();
         }
-        if ui.button(ui_kit::t!("Scan by This Key Prefix", "按此 key 前缀扫描")).clicked() {
+        if theme::menu_item(ui, &ui_kit::t!("Scan by This Key Prefix", "按此 key 前缀扫描")).clicked() {
             let prefix = if key.contains(':') {
                 format!("{}*", &key[..key.rfind(':').unwrap() + 1])
             } else {
@@ -429,7 +429,7 @@ fn draw_key_row(
             });
             ui.close_menu();
         }
-        if ui.button(ui_kit::t!("Exact Match This Key", "以此 key 精确匹配")).clicked() {
+        if theme::menu_item(ui, &ui_kit::t!("Exact Match This Key", "以此 key 精确匹配")).clicked() {
             rt.pattern = key.to_string();
             actions.push(TabAction::RedisScan {
                 tab_id: tab_id.to_string(),

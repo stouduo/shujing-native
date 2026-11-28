@@ -138,13 +138,7 @@ pub fn draw_query_view(
                             ui.set_min_width(180.0);
                             macro_rules! item {
                                 ($label:expr, $enabled:expr) => {{
-                                    let b = ui.add_enabled(
-                                        $enabled,
-                                        egui::Button::new(RichText::new($label).size(theme::fs_px(12.0)).color(
-                                            if $enabled { p.text } else { p.muted },
-                                        )),
-                                    );
-                                    b.clicked()
+                                    theme::menu_item_ex(ui, $label, false, false, $enabled).clicked()
                                 }};
                             }
                             if item!(ui_kit::t!("Export CSV", "导出 CSV"), has_grid) {
@@ -212,12 +206,7 @@ pub fn draw_query_view(
                             ui.set_min_width(200.0);
                             macro_rules! low_item {
                                 ($label:expr, $tip:expr, $enabled:expr) => {{
-                                    let b = ui.add_enabled(
-                                        $enabled,
-                                        egui::Button::new(RichText::new($label).size(theme::fs_px(12.0)).color(
-                                            if $enabled { p.text } else { p.muted },
-                                        )),
-                                    );
+                                    let b = theme::menu_item_ex(ui, $label, false, false, $enabled);
                                     b.clone().on_hover_text($tip);
                                     b.clicked()
                                 }};
@@ -314,8 +303,7 @@ pub fn draw_query_view(
                         |ui| {
                             ui.set_min_width(300.0);
                             if !is_redis && !q.sql.trim().is_empty() {
-                                if ui
-                                    .button(ui_kit::t!(
+                                if theme::menu_item(ui, &ui_kit::t!(
                                         "Save Current SQL as Snippet",
                                         "保存当前 SQL 为片段"
                                     ))
