@@ -1393,26 +1393,38 @@ fn multiline_box(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), p.input_bg);
-    let inner = egui::Rect::from_min_max(
-        egui::pos2(rect.left() + 10.0, rect.top() + 6.0),
-        egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
-    );
-    // add_sized 钉死尺寸:TextEdit 按字体行高自撑会越过预留框压到下一个控件
-    // (宿主字体恰好装得下时不显,默认字体 metrics 下必现),钉死后框内滚动
+    // 多行 TextEdit 的高度是 max(内容高, desired_rows 行高),会随内容无限撑大:
+    // 套限高滚动区,内容超出预留框时在框内滚动(此前 add_sized"钉尺寸"给的是
+    // 下限,内容照样越过框画到外面)。
+    // 内容子区域用整框 rect 作 max_rect:若用内缩后的矩形,allocate_new_ui 会把
+    // 父 cursor 拉回 inner.max+spacing,吃掉框与下一控件的间距(实测);
+    // 内边距移进 TextEdit 的 margin,裁剪显式收到框内
     let resp = ui
         .allocate_new_ui(
             egui::UiBuilder::new()
-                .max_rect(inner)
+                .max_rect(rect)
                 .layout(egui::Layout::left_to_right(egui::Align::TOP)),
             |ui| {
-                ui.add_sized(
-                    inner.size(),
-                    egui::TextEdit::multiline(text)
-                        .id(egui::Id::new(id_salt))
-                        .frame(false)
-                        .margin(egui::Margin::ZERO)
-                        .font(egui::FontId::proportional(fs_px(13.0))),
-                )
+                ui.set_clip_rect(rect);
+                egui::ScrollArea::vertical()
+                    .id_salt(id_salt)
+                    .max_height(rect.height())
+                    // 默认 min_scrolled_size=64×64 会把矮框撑到 64 高:归零
+                    .min_scrolled_height(0.0)
+                    .auto_shrink([false, false])
+                    .animated(false)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(text)
+                                .id(egui::Id::new(id_salt))
+                                .frame(false)
+                                .margin(egui::Margin::symmetric(10, 6))
+                                .font(egui::FontId::proportional(fs_px(13.0)))
+                                .desired_width(rect.width() - 20.0)
+                                .desired_rows(rows),
+                        )
+                    })
+                    .inner
             },
         )
         .inner;
@@ -1445,28 +1457,37 @@ pub fn code_box(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(radius_ctrl() as u8), p.input_bg);
-    let inner = egui::Rect::from_min_max(
-        egui::pos2(rect.left() + 10.0, rect.top() + 6.0),
-        egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
-    );
+    // 内容子区域用整框 rect 作 max_rect(同 multiline_box:用内缩矩形会被
+    // allocate_new_ui 把父 cursor 拉回,吃掉框与下一控件的间距);
+    // 内边距移进 TextEdit 的 margin,裁剪显式收到框内
     let resp = ui
         .allocate_new_ui(
             egui::UiBuilder::new()
-                .max_rect(inner)
+                .max_rect(rect)
                 .layout(egui::Layout::left_to_right(egui::Align::TOP)),
             |ui| {
+                ui.set_clip_rect(rect);
                 let mut te = egui::TextEdit::multiline(text)
                     .id(egui::Id::new(id_salt))
                     .code_editor()
                     .frame(false)
-                    .margin(egui::Margin::ZERO)
+                    .margin(egui::Margin::symmetric(10, 6))
                     .font(FontId::monospace(fs_px(12.5)))
-                    .desired_width(inner.width())
+                    .desired_width(rect.width() - 20.0)
                     .desired_rows(rows);
                 if !hint.is_empty() {
                     te = te.hint_text(RichText::new(hint).font(FontId::monospace(fs_px(12.0))).color(p.muted));
                 }
-                ui.add_sized(inner.size(), te)
+                // 限高滚动区:内容超出预留行数时在框内滚动,不越过框(同 multiline_box)
+                egui::ScrollArea::vertical()
+                    .id_salt(id_salt)
+                    .max_height(rect.height())
+                    // 默认 min_scrolled_size=64×64 会把矮框撑到 64 高:归零
+                    .min_scrolled_height(0.0)
+                    .auto_shrink([false, false])
+                    .animated(false)
+                    .show(ui, |ui| ui.add(te))
+                    .inner
             },
         )
         .inner;

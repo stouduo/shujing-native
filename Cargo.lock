@@ -5814,6 +5814,7 @@ dependencies = [
  "rdkafka",
  "redis",
  "reqwest",
+ "ring",
  "rumqttc",
  "rusqlite",
  "russh",

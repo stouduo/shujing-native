@@ -10,12 +10,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 工具条目:(分类, 名称)。分类只用于导航分组
-const TOOLS: [(&str, &str, Tool); 5] = [
+const TOOLS: [(&str, &str, Tool); 6] = [
     ("编解码", "Base64 / URL / Hex", Tool::Codec),
     ("时间", "时间戳 ⇄ 日期", Tool::Timestamp),
     ("生成器", "UUID", Tool::Uuid),
     ("格式化", "JSON", Tool::Json),
     ("摘要", "哈希 / HMAC", Tool::Hash),
+    ("令牌", "JWT", Tool::Jwt),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,7 @@ pub enum Tool {
     Uuid,
     Json,
     Hash,
+    Jwt,
 }
 
 pub fn draw_toolbox_view(ctx: &egui::Context, tab_id: &str, tb: &mut ToolboxTab) -> Vec<TabAction> {
@@ -69,6 +71,7 @@ pub fn draw_toolbox_view(ctx: &egui::Context, tab_id: &str, tb: &mut ToolboxTab)
             Tool::Uuid => draw_uuid(ui, &mut tb.uuid, wide),
             Tool::Json => draw_json(ui, &mut tb.json, wide),
             Tool::Hash => draw_hash(ui, tab_id, &mut tb.hash, wide, &mut actions),
+            Tool::Jwt => draw_jwt(ui, &mut tb.jwt, wide, &mut actions),
         }
     });
     actions
@@ -942,6 +945,333 @@ fn progress_text(done: u64, total: u64) -> String {
     } else {
         format!("{}…", crate::app::fmt_bytes(done))
     }
+}
+
+// ---------------------------------------------------------------- JWT
+
+/// JWT 解码与验签的页面状态。解码/验签结果按输入缓存,输入变了才重算
+#[derive(Default, Clone)]
+pub struct JwtTool {
+    pub token: String,
+    /// HS 系列填共享密钥,RS/PS/ES/EdDSA 填 PEM 公钥;为空 = 不验签
+    pub key: String,
+    last_token: String,
+    last_key: String,
+    decoded: Option<shujing_core::jwt::DecodedJwt>,
+    decode_error: Option<String>,
+    /// None = 没验(密钥为空,或令牌解不开)
+    verify: Option<Result<shujing_core::jwt::VerifyResult, String>>,
+}
+
+impl JwtTool {
+    /// 输入变了才重新解码、重新验签
+    fn refresh(&mut self) {
+        let (tok, key) = (self.token.trim().to_string(), self.key.trim().to_string());
+        if tok == self.last_token && key == self.last_key {
+            return;
+        }
+        (self.last_token, self.last_key) = (tok.clone(), key.clone());
+        self.decoded = None;
+        self.decode_error = None;
+        if !tok.is_empty() {
+            match shujing_core::jwt::decode(&tok) {
+                Ok(j) => self.decoded = Some(j),
+                Err(e) => self.decode_error = Some(e),
+            }
+        }
+        // 密钥为空就是没验:不给任何"签名有效/无效"的结论
+        self.verify = match (&self.decoded, key.is_empty()) {
+            (Some(j), false) => Some(shujing_core::jwt::verify(j, &key)),
+            _ => None,
+        };
+    }
+}
+
+/// 毫秒 → 人话时长(天 / 小时分 / 分秒 / 秒)
+fn human_duration(ms: i64) -> String {
+    let s = ms / 1000;
+    if s >= 86_400 {
+        format!("{} 天", s / 86_400)
+    } else if s >= 3600 {
+        format!("{} 小时 {} 分", s / 3600, s % 3600 / 60)
+    } else if s >= 60 {
+        format!("{} 分 {} 秒", s / 60, s % 60)
+    } else {
+        format!("{} 秒", s)
+    }
+}
+
+/// 图标 + 文字的状态标记。不用 ● ✓ 之类字符:字体回退会把行高撑乱(批次90 踩过)
+fn status(
+    ui: &mut egui::Ui,
+    icon: &crate::icons::Icon,
+    color: egui::Color32,
+    text: impl Into<String>,
+) {
+    let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+    crate::icons::paint_icon(ui.painter(), icon, r.center(), 14.0, color);
+    ui.label(RichText::new(text).size(theme::fs_px(12.0)).color(color));
+}
+
+/// 一段内容的展示块:标题行(名称 + 备注 + 右侧"复制")+ 等宽框
+#[allow(clippy::too_many_arguments)]
+fn jwt_part(
+    ui: &mut egui::Ui,
+    title: &str,
+    note: &str,
+    id: &str,
+    text: &mut String,
+    width: f32,
+    rows: usize,
+    actions: &mut Vec<TabAction>,
+) {
+    let p = theme::c();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(
+            RichText::new(title)
+                .size(theme::fs_px(11.0))
+                .strong()
+                .color(p.muted),
+        );
+        if !note.is_empty() {
+            ui.label(RichText::new(note).size(theme::fs_px(11.0)).color(p.muted));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if theme::mini_text_button(ui, "复制", p.text2).0 {
+                actions.push(TabAction::CopyToClipboard {
+                    text: text.clone(),
+                    toast: COPIED.into(),
+                });
+            }
+        });
+    });
+    ui.add_space(2.0);
+    theme::code_box(
+        ui,
+        id,
+        text,
+        theme::fit_width(width, ui.available_width()),
+        rows,
+        "",
+    );
+}
+
+/// payload 里的时间声明,一声明一行(本地时间;悬停看原始秒数)
+fn jwt_time_claims(ui: &mut egui::Ui, claims: &[shujing_core::jwt::TimeClaim]) {
+    let p = theme::c();
+    if claims.is_empty() {
+        return;
+    }
+    ui.add_space(12.0);
+    ui.label(
+        RichText::new("时间声明")
+            .size(theme::fs_px(11.0))
+            .strong()
+            .color(p.muted),
+    );
+    ui.add_space(4.0);
+    for c in claims {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(RichText::new(c.name).font(theme::mono(12.0)).color(p.text2));
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&c.local)
+                        .font(theme::mono(11.5))
+                        .color(p.text),
+                )
+                .sense(egui::Sense::hover()),
+            )
+            .on_hover_text(format!("{} (秒)", c.ts));
+        });
+    }
+}
+
+/// JWT 解码与验签。解码 ≠ 可信:没验签时状态行明说"内容可被伪造"
+fn draw_jwt(ui: &mut egui::Ui, t: &mut JwtTool, wide: f32, actions: &mut Vec<TabAction>) {
+    let p = theme::c();
+    ui.heading(RichText::new("JWT").size(theme::fs_px(15.0)));
+    ui.add_space(8.0);
+    theme::form_field_multiline(ui, "令牌", "jwt-token", &mut t.token, wide, 3);
+    t.refresh();
+
+    let Some(jwt) = &t.decoded else {
+        ui.add_space(6.0);
+        let text = t.decode_error.as_deref().unwrap_or(
+            "粘贴 JWT(eyJ 开头的三段式)后自动拆开 header、payload 与签名",
+        );
+        let color = if t.decode_error.is_some() { p.red } else { p.muted };
+        ui.label(RichText::new(text).size(theme::fs_px(12.0)).color(color));
+        return;
+    };
+
+    // 摘要行:算法 + 验签状态 + 有效期
+    let unsigned = jwt.alg == "none";
+    let now_ms = chrono::Local::now().timestamp_millis();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(14.0, 6.0);
+        ui.label(
+            RichText::new(&jwt.alg)
+                .font(theme::mono(12.5))
+                .strong()
+                .color(if unsigned { p.orange } else { p.text }),
+        );
+        match &t.verify {
+            // 没验签就不给"可信"的暗示
+            None if unsigned => status(
+                ui,
+                &crate::icons::TRIANGLE_ALERT,
+                p.orange,
+                "未签名:任何人都能伪造其内容",
+            ),
+            None => status(
+                ui,
+                &crate::icons::INFO,
+                p.muted,
+                "未验证签名:以下内容可被伪造",
+            ),
+            Some(Ok(shujing_core::jwt::VerifyResult::Valid)) => {
+                status(ui, &crate::icons::CIRCLE_CHECK, p.green, "签名有效")
+            }
+            Some(Ok(shujing_core::jwt::VerifyResult::Invalid)) => status(
+                ui,
+                &crate::icons::CIRCLE_X,
+                p.red,
+                "签名无效:密钥不对,或内容被改过",
+            ),
+            Some(Ok(shujing_core::jwt::VerifyResult::Unsupported(m))) => {
+                status(ui, &crate::icons::TRIANGLE_ALERT, p.orange, m.clone())
+            }
+            Some(Err(e)) => status(ui, &crate::icons::TRIANGLE_ALERT, p.orange, e.clone()),
+        }
+        match shujing_core::jwt::validity(&jwt.payload, now_ms) {
+            shujing_core::jwt::Validity::NoExpiry => {
+                status(ui, &crate::icons::INFO, p.muted, "未设置过期时间")
+            }
+            shujing_core::jwt::Validity::NotYetValid(ms) => status(
+                ui,
+                &crate::icons::TRIANGLE_ALERT,
+                p.orange,
+                format!("{}后生效", human_duration(ms)),
+            ),
+            shujing_core::jwt::Validity::Expired(ms) => status(
+                ui,
+                &crate::icons::CIRCLE_X,
+                p.red,
+                format!("已过期 {}", human_duration(ms)),
+            ),
+            shujing_core::jwt::Validity::Valid(ms) => status(
+                ui,
+                &crate::icons::CIRCLE_CHECK,
+                p.green,
+                format!("{}后过期", human_duration(ms)),
+            ),
+        }
+    });
+
+    // header 在左、payload 在右(宽时并排,窄了上下排);时间声明跟在 header 下面
+    let mut header_text = serde_json::to_string_pretty(&jwt.header).unwrap_or_default();
+    let mut payload_text = if jwt.payload_is_json {
+        serde_json::to_string_pretty(&jwt.payload).unwrap_or_default()
+    } else {
+        jwt.payload.as_str().unwrap_or_default().to_string()
+    };
+    let payload_note = if jwt.payload_is_json { "" } else { "非 JSON 文本" };
+    let claims = shujing_core::jwt::time_claims(&jwt.payload);
+    let header_rows = header_text.lines().count().clamp(3, 10);
+    let payload_rows = payload_text.lines().count().clamp(3, 12);
+    ui.add_space(4.0);
+    if ui.available_width() >= 640.0 {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            let left = 236.0;
+            let origin = ui.cursor().min;
+            ui.allocate_new_ui(
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(
+                        origin,
+                        egui::vec2(left, f32::INFINITY),
+                    ))
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                |ui| {
+                    jwt_part(ui, "HEADER", "", "jwt-header", &mut header_text, left, header_rows, actions);
+                    jwt_time_claims(ui, &claims);
+                },
+            );
+            // 两列都要各自包一层纵向子区域:horizontal 本身沿 x 排,
+            // 直接往里画"标题行 + 框"会被排成一行
+            let right = ui.available_width();
+            let origin = ui.cursor().min;
+            ui.allocate_new_ui(
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(
+                        origin,
+                        egui::vec2(right, f32::INFINITY),
+                    ))
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                |ui| {
+                    jwt_part(ui, "PAYLOAD", payload_note, "jwt-payload", &mut payload_text, right, payload_rows, actions);
+                },
+            );
+        });
+    } else {
+        let w = ui.available_width();
+        jwt_part(ui, "HEADER", "", "jwt-header", &mut header_text, w, header_rows, actions);
+        ui.add_space(6.0);
+        jwt_part(ui, "PAYLOAD", payload_note, "jwt-payload", &mut payload_text, w, payload_rows, actions);
+        jwt_time_claims(ui, &claims);
+    }
+
+    // 签名段原样展示
+    ui.add_space(12.0);
+    if jwt.signature_b64.is_empty() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(RichText::new("签名").size(theme::fs_px(11.0)).strong().color(p.muted));
+            ui.label(RichText::new("没有签名段").size(theme::fs_px(11.0)).color(p.muted));
+        });
+    } else {
+        let mut sig = jwt.signature_b64.clone();
+        let note = format!("base64url · {} 字节", jwt.signature.len());
+        let w = ui.available_width();
+        // 签名是一整行长文本:按框内每行放得下的字符数估折行数(HS 一行,RS 要三四行)
+        let per_line = ((w - 24.0) / 7.5).max(20.0);
+        let rows = ((sig.len() as f32 / per_line).ceil() as usize).clamp(2, 8);
+        jwt_part(ui, "签名", &note, "jwt-sig", &mut sig, w, rows, actions);
+    }
+
+    // 验签:填了密钥/公钥即自动验
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(RichText::new("验签").size(theme::fs_px(11.0)).strong().color(p.muted));
+        ui.label(
+            RichText::new("HS 系列填共享密钥;RS / PS / ES / EdDSA 填 PEM 公钥。填入即自动验签")
+                .size(theme::fs_px(11.0))
+                .color(p.muted),
+        );
+    });
+    ui.add_space(2.0);
+    theme::form_field_multiline(ui, "密钥 / 公钥", "jwt-key", &mut t.key, wide, 3);
+}
+
+/// 真机自截图用的样例令牌(现算 HS256,落在有效期内,展示"签名有效")
+pub fn toolbox_jwt_sample_for_shot() -> String {
+    use base64::Engine as _;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+    let h = b64(br#"{"alg":"HS256","typ":"JWT"}"#);
+    let now = chrono::Local::now().timestamp();
+    let p = b64(
+        format!(r#"{{"sub":"demo","name":"数镜 样例","iat":{},"exp":{}}}"#, now - 300, now + 3600)
+            .as_bytes(),
+    );
+    let sig = shujing_core::hashing::hmac_bytes(
+        shujing_core::hashing::Algo::Sha256,
+        b"k",
+        format!("{h}.{p}").as_bytes(),
+    );
+    format!("{h}.{p}.{}", b64(&sig))
 }
 
 /// 测试入口:直接调用转换纯函数(渲染层每帧算,这里给行为测试用)

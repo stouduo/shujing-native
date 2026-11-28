@@ -8671,6 +8671,182 @@ fn render_toolbox_hash() {
     });
 }
 
+/// 测试用 HS256 令牌:签名现算(core 的 HMAC),只为驱动页面状态;
+/// 跨实现的正确性由 core::jwt 的 openssl/python 基准向量负责
+fn hs256_token(payload_json: &str) -> String {
+    use base64::Engine as _;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+    let h = b64(br#"{"alg":"HS256","typ":"JWT"}"#);
+    let p = b64(payload_json.as_bytes());
+    let sig = shujing_core::hashing::hmac_bytes(
+        shujing_core::hashing::Algo::Sha256,
+        b"k",
+        format!("{h}.{p}").as_bytes(),
+    );
+    format!("{h}.{p}.{}", b64(&sig))
+}
+
+/// JWT 页夹具:打开工具箱停在 JWT 页,预填令牌与密钥
+fn jwt_app(token: &str, key: &str) -> (ShujingApp, usize) {
+    let (mut app, idx) = hash_app(2);
+    if let TabKind::Toolbox(tb) = &mut app.tabs[idx].kind {
+        tb.tool = crate::toolbox::Tool::Jwt;
+        tb.jwt.token = token.into();
+        tb.jwt.key = key.into();
+    }
+    (app, idx)
+}
+
+fn jwt_vectors() -> serde_json::Value {
+    serde_json::from_str(include_str!("../../core/tests/data/jwt_vectors.json")).unwrap()
+}
+
+/// 基准令牌还原成完整 token(payload 段共用)
+fn jwt_vector_token(v: &serde_json::Value, alg: &str) -> String {
+    let (h, s) = v["tokens"][alg].as_str().unwrap().split_once('.').unwrap();
+    format!("{}.{}.{}", h, v["payload_b64"].as_str().unwrap(), s)
+}
+
+/// 工具箱快照:JWT 页各个状态——空 / 未验签 / 验签有效 / 验签无效 / RSA /
+/// 未签名(alg=none) / 格式错 / 有效期内 / 尚未生效 / 窄窗口两列退回上下排
+#[test]
+fn render_toolbox_jwt() {
+    use base64::Engine as _;
+    let v = jwt_vectors();
+    let now = chrono::Local::now().timestamp();
+    let unsigned = format!(
+        "{}.{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#),
+        v["payload_b64"].as_str().unwrap()
+    );
+    let shot = |name: &str, token: &str, key: &str| {
+        let (app, _) = jwt_app(token, key);
+        let app = std::cell::RefCell::new(app);
+        render(name, 1200.0, 720.0, true, move |ctx| {
+            let mut b = app.borrow_mut();
+            draw_app(&mut b, ctx);
+        });
+    };
+    shot("toolbox_jwt_empty", "", "");
+    shot("toolbox_jwt_unverified", &jwt_vector_token(&v, "HS256"), "");
+    shot("toolbox_jwt_valid", &jwt_vector_token(&v, "HS256"), v["secret"].as_str().unwrap());
+    shot("toolbox_jwt_invalid", &jwt_vector_token(&v, "HS256"), "wrong-secret");
+    shot("toolbox_jwt_rs256", &jwt_vector_token(&v, "RS256"), v["pub"]["RS256"].as_str().unwrap());
+    shot("toolbox_jwt_none", &unsigned, "");
+    shot("toolbox_jwt_error", "eyJhbGciOiJIUzI1NiJ9.broken", "");
+    shot(
+        "toolbox_jwt_live",
+        &hs256_token(&format!(r#"{{"sub":"u1","name":"数镜","role":"admin","iat":{},"exp":{}}}"#, now - 60, now + 3600)),
+        "k",
+    );
+    shot(
+        "toolbox_jwt_nbf",
+        &hs256_token(&format!(r#"{{"sub":"u1","nbf":{}}}"#, now + 7200)),
+        "k",
+    );
+    // 窄窗口:可用宽度不足时 header/payload 上下排
+    let (app, _) = jwt_app(&jwt_vector_token(&v, "HS256"), v["secret"].as_str().unwrap());
+    let app = std::cell::RefCell::new(app);
+    render("toolbox_jwt_narrow", 820.0, 900.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
+/// 断言页面上存在文本包含 `needle` 的节点(状态行/说明文字是 Label,
+/// 其文本落在 accesskit 节点的 value 上,不在 label)
+fn assert_label_contains(
+    h: &egui_kittest::Harness<'static, std::cell::RefCell<ShujingApp>>,
+    needle: &str,
+) {
+    let hit = h.query_all_by(|n: &egui_kittest::kittest::Node| {
+        n.value().map_or(false, |v| v.contains(needle))
+    });
+    assert!(hit.count() > 0, "页面上没有文本包含 {needle} 的节点");
+}
+
+/// JWT 页:解码状态行、header/payload 内容、验签随密钥变化、垃圾输入报错
+#[test]
+fn toolbox_jwt_states_and_verify() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let v = jwt_vectors();
+    let (mut app, idx) = jwt_app(&jwt_vector_token(&v, "HS256"), "");
+    app.auto_connect_done = true;
+    let app = std::cell::RefCell::new(app);
+    let setup = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup.get() {
+                    setup.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            app,
+        );
+    h.run_steps(6);
+    // 未验签:明说不代表可信
+    assert_label_contains(&h, "未验证签名");
+    // header/payload 内容已拆出(header 框是 TextEdit,值含 JSON 键)
+    {
+        let hit = h.query_all_by(|n: &egui_kittest::kittest::Node| {
+            n.value().map_or(false, |v| v.contains(r#""alg": "HS256""#))
+        });
+        assert!(hit.count() > 0, "页面上没有 header 内容");
+    }
+    // 填正确密钥 → 签名有效
+    {
+        let secret = v["secret"].as_str().unwrap().to_string();
+        let mut b = h.state().borrow_mut();
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.jwt.key = secret;
+        }
+    }
+    h.run_steps(3);
+    assert_label_contains(&h, "签名有效");
+    // 填错误密钥 → 签名无效(而不是"无法验证"或静默)
+    {
+        let mut b = h.state().borrow_mut();
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.jwt.key = "wrong-secret".into();
+        }
+    }
+    h.run_steps(3);
+    assert_label_contains(&h, "签名无效");
+    // 令牌改成段数不对的垃圾 → 解码错误展示
+    {
+        let mut b = h.state().borrow_mut();
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.jwt.token = "xyz".into();
+            tb.jwt.key = String::new();
+        }
+    }
+    h.run_steps(3);
+    assert_label_contains(&h, "不是 JWT");
+    // 两段式但 payload 不是 JSON:不报错,按文本展示 payload
+    {
+        use base64::Engine as _;
+        let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+        let mut b = h.state().borrow_mut();
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.jwt.token = format!(
+                "{}.{}",
+                b64(br#"{"alg":"HS256","typ":"JWT"}"#),
+                b64(b"broken but valid b64")
+            );
+        }
+    }
+    h.run_steps(3);
+    assert_label_contains(&h, "非 JSON 文本");
+}
+
 /// 工具箱·哈希页的行为夹具:打开工具箱并停在哈希页。
 /// 返回 (harness, 开HMAC算法弹层的开关, 聚焦输入框的开关)。调用方须持 RENDER_LOCK
 fn hash_fixture() -> (

@@ -637,6 +637,7 @@ pub struct ToolboxTab {
     pub uuid: crate::toolbox::UuidTool,
     pub json: crate::toolbox::JsonTool,
     pub hash: crate::toolbox::HashTool,
+    pub jwt: crate::toolbox::JwtTool,
 }
 
 impl Drop for ToolboxTab {
@@ -662,6 +663,7 @@ impl Default for ToolboxTab {
             uuid: Default::default(),
             json: Default::default(),
             hash: Default::default(),
+            jwt: Default::default(),
         }
     }
 }

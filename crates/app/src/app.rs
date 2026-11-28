@@ -740,6 +740,21 @@ impl ShujingApp {
                     }
                 }
             }
+            Ok("toolbox-jwt") => {
+                app.open_toolbox();
+                let idx = app
+                    .tabs
+                    .iter()
+                    .position(|t| matches!(&t.kind, TabKind::Toolbox(_)));
+                if let Some(i) = idx {
+                    app.active_tab = i;
+                    if let TabKind::Toolbox(tb) = &mut app.tabs[i].kind {
+                        tb.tool = crate::toolbox::Tool::Jwt;
+                        tb.jwt.token = crate::toolbox::toolbox_jwt_sample_for_shot();
+                        tb.jwt.key = "k".into();
+                    }
+                }
+            }
             _ => {}
         }
         app

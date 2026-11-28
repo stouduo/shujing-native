@@ -18,6 +18,7 @@ pub mod edits;
 pub mod excel;
 pub mod exec;
 pub mod hashing;
+pub mod jwt;
 mod model;
 pub mod redis_ops;
 pub mod config_crypto;
