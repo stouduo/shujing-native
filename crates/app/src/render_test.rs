@@ -6,6 +6,7 @@ use crate::query;
 use crate::structure;
 use crate::table_view;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -438,6 +439,8 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
     }
     let idx = app.active_tab.min(app.tabs.len() - 1);
     let tab_id = app.tabs[idx].id.clone();
+    // 工具箱的动作(文件摘要等)要真实执行,其他视图臂保持历史语义(丢弃)
+    let mut toolbox_actions = Vec::new();
     match &mut app.tabs[idx].kind {
         TabKind::Table(t) => {
             let conns = app.conns.clone();
@@ -487,15 +490,15 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         TabKind::Mqtt(m) => {
             let _ = crate::mqtt_console::draw_mqtt_view(ctx, &tab_id, m);
         }
-        TabKind::Kv(k) => {
-            let _ = crate::kv_console::draw_kv_view(ctx, &tab_id, k);
-        }
         TabKind::Toolbox(tb) => {
-            let _ = crate::toolbox::draw_toolbox_view(ctx, &tab_id, tb);
+            toolbox_actions = crate::toolbox::draw_toolbox_view(ctx, &tab_id, tb);
         }
         TabKind::Ddl(d) => {
             let _ = crate::structure::draw_ddl_view(ctx, &tab_id, d);
         }
+    }
+    for a in toolbox_actions {
+        table_view::execute_tab_action(app, ctx, a);
     }
 }
 
@@ -8570,6 +8573,406 @@ fn render_toolbox() {
         let mut b = app.borrow_mut();
         draw_app(&mut b, ctx);
     });
+}
+
+/// 哈希工具的工具箱标签(切到哈希页)
+fn hash_app(mode: usize) -> (ShujingApp, usize) {
+    let mut app = test_app(vec![], 0);
+    app.open_toolbox();
+    let idx = app.tabs.len() - 1;
+    if let TabKind::Toolbox(tb) = &mut app.tabs[idx].kind {
+        tb.tool = crate::toolbox::Tool::Hash;
+        tb.hash.mode = mode;
+    }
+    (app, idx)
+}
+
+/// 工具箱快照:哈希工具四个状态(文本摘要 / HMAC / 文件计算中 / 文件完成)
+#[test]
+fn render_toolbox_hash() {
+    use crate::toolbox::{FileHash, HashTool};
+    const ABC: [&str; 4] = [
+        "900150983cd24fb0d6963f7d28e17f72",
+        "a9993e364706816aba3e25717850c26c9cd0d89d",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+    ];
+    let shot = |name: &str, setup: fn(&mut HashTool)| {
+        let (mut app, idx) = hash_app(2);
+        if let TabKind::Toolbox(tb) = &mut app.tabs[idx].kind {
+            setup(&mut tb.hash);
+        }
+        let app = std::cell::RefCell::new(app);
+        render(name, 1200.0, 720.0, true, move |ctx| {
+            let mut b = app.borrow_mut();
+            draw_app(&mut b, ctx);
+        });
+    };
+    shot("toolbox_hash_text", |h| {
+        h.mode = 0;
+        h.input = "hello 数镜".into();
+    });
+    shot("toolbox_hash_hmac", |h| {
+        h.mode = 1;
+        h.hmac_key = "secret".into();
+        h.input = "The quick brown fox jumps over the lazy dog".into();
+    });
+    shot("toolbox_hash_file_running", |h| {
+        h.file = Some(FileHash {
+            path: "/Users/demo/Downloads/release-2026.11.0.dmg".into(),
+            name: "release-2026.11.0.dmg".into(),
+            total: 198 * 1024 * 1024,
+            done: 83 * 1024 * 1024,
+            digests: Default::default(),
+            error: None,
+            cancelled: false,
+            running: Some(1),
+        });
+    });
+    shot("toolbox_hash_file_done", |h| {
+        h.file = Some(FileHash {
+            path: "/Users/demo/Downloads/release-2026.11.0.dmg".into(),
+            name: "release-2026.11.0.dmg".into(),
+            total: 198 * 1024 * 1024,
+            done: 198 * 1024 * 1024,
+            digests: std::array::from_fn(|i| ABC[i].to_string()),
+            error: None,
+            cancelled: false,
+            running: None,
+        });
+    });
+    // 其余工具页:批次101 只验收了默认的编解码页,这里逐页留档
+    let shot_tool = |name: &str, tool: crate::toolbox::Tool, setup: fn(&mut crate::app::ToolboxTab)| {
+        let (mut app, idx) = hash_app(2);
+        if let TabKind::Toolbox(tb) = &mut app.tabs[idx].kind {
+            tb.tool = tool;
+            setup(tb);
+        }
+        let app = std::cell::RefCell::new(app);
+        render(name, 1200.0, 720.0, true, move |ctx| {
+            let mut b = app.borrow_mut();
+            draw_app(&mut b, ctx);
+        });
+    };
+    shot_tool("toolbox_uuid", crate::toolbox::Tool::Uuid, |tb| {
+        tb.uuid.count = "5".into();
+        tb.uuid.output = (1..=5)
+            .map(|i| format!("0000000{i}-0000-4000-8000-00000000000{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    });
+    shot_tool("toolbox_timestamp", crate::toolbox::Tool::Timestamp, |tb| {
+        tb.ts.stamp_in = "1791000000".into();
+        tb.ts.date_in = "2026-11-28 10:30:00".into();
+    });
+    shot_tool("toolbox_json", crate::toolbox::Tool::Json, |tb| {
+        tb.json.input = r#"{"b":1,"a":[1,2,{"c":true}]}"#.into();
+        tb.json.output = "{\n  \"b\": 1,\n  \"a\": [\n    1,\n    2,\n    {\n      \"c\": true\n    }\n  ]\n}".into();
+    });
+}
+
+/// 工具箱·哈希页的行为夹具:打开工具箱并停在哈希页。
+/// 返回 (harness, 开HMAC算法弹层的开关, 聚焦输入框的开关)。调用方须持 RENDER_LOCK
+fn hash_fixture() -> (
+    egui_kittest::Harness<'static, std::cell::RefCell<ShujingApp>>,
+    std::rc::Rc<std::cell::Cell<bool>>,
+    std::rc::Rc<std::cell::Cell<bool>>,
+) {
+    let (mut app, _) = hash_app(0);
+    app.auto_connect_done = true;
+    let popup_arm = std::rc::Rc::new(std::cell::Cell::new(false));
+    let focus_arm = std::rc::Rc::new(std::cell::Cell::new(false));
+    let (pa, fa) = (popup_arm.clone(), focus_arm.clone());
+    let setup = std::cell::Cell::new(false);
+    let h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup.get() {
+                    setup.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                if pa.take() {
+                    // 帧尾打开,下一帧弹层绘制
+                    ctx.memory_mut(|m| {
+                        m.open_popup(egui::Id::new("hash-hmac-algo").with("popup"))
+                    });
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+                if fa.take() {
+                    // 帧尾请求焦点,下一帧 TextEdit 创建后生效
+                    ctx.memory_mut(|m| m.request_focus(egui::Id::new("hash-in")));
+                }
+            },
+            std::cell::RefCell::new(app),
+        );
+    (h, popup_arm, focus_arm)
+}
+
+/// 断言页面上存在一个值包含 `needle` 的节点(摘要输出框/输入框都走文本值)
+fn assert_value_contains(h: &egui_kittest::Harness<'static, std::cell::RefCell<ShujingApp>>, needle: &str) {
+    let hit = h.query_all_by(|n: &egui_kittest::kittest::Node| {
+        n.value().map_or(false, |v| v.contains(needle))
+    });
+    assert!(hit.count() > 0, "页面上没有值包含 {needle} 的节点");
+}
+
+/// 哈希工具·文本摘要:真实键入 → 输出框出现四种摘要
+#[test]
+fn toolbox_hash_text_types_and_digests() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut h, _popup, focus) = hash_fixture();
+    h.run_steps(6);
+    // 聚焦输入框并键入
+    focus.set(true);
+    h.run_steps(2);
+    h.input_mut()
+        .events
+        .push(egui::Event::Text("hello 数镜".into()));
+    h.run_steps(3);
+    let want = shujing_core::hashing::digest_bytes("hello 数镜".as_bytes());
+    assert_value_contains(&h, &want[0]);
+    // SHA-512 在显示块里折成两行(续行缩进 8 空格):分段断言
+    assert_value_contains(&h, &want[3][..64]);
+    assert_value_contains(&h, &want[3][64..]);
+}
+
+/// 哈希工具·HMAC:默认 SHA-256;算法下拉切到 SHA-512 后重算;大写格式生效
+#[test]
+fn toolbox_hash_hmac_algo_switch() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut h, popup, _focus) = hash_fixture();
+    h.run_steps(6);
+    let fox = "The quick brown fox jumps over the lazy dog";
+    {
+        let mut b = h.state().borrow_mut();
+        let idx = b.tabs.len() - 1;
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.hash.mode = 1;
+            tb.hash.hmac_key = "secret".into();
+            tb.hash.input = fox.into();
+        }
+    }
+    h.run_steps(3);
+    let want256 = shujing_core::hashing::hmac(
+        shujing_core::hashing::Algo::Sha256,
+        b"secret",
+        fox.as_bytes(),
+    );
+    assert_value_contains(&h, &want256);
+    // 打开算法下拉,点 SHA-512
+    popup.set(true);
+    h.run_steps(4);
+    h.get_by_label("SHA-512").click();
+    h.run_steps(4);
+    let want512 = shujing_core::hashing::hmac(
+        shujing_core::hashing::Algo::Sha512,
+        b"secret",
+        fox.as_bytes(),
+    );
+    assert_value_contains(&h, &want512);
+    // 输出格式切大写
+    {
+        let mut b = h.state().borrow_mut();
+        let idx = b.tabs.len() - 1;
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.hash.hmac_fmt = 1;
+        }
+    }
+    h.run_steps(3);
+    assert_value_contains(&h, &want512.to_uppercase());
+}
+
+/// 哈希工具·文件:拖入文件 → 后台流式计算 → 结果回填(全链路真线程)
+#[test]
+fn toolbox_hash_file_drop_and_complete() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("shujing_hash_ui_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("ui.dat");
+    let data: Vec<u8> = (0..300_000u32).map(|i| (i * 13 + i / 257) as u8).collect();
+    std::fs::write(&path, &data).unwrap();
+    let want = shujing_core::hashing::digest_bytes(&data);
+
+    let (mut app, _) = hash_app(2);
+    app.auto_connect_done = true;
+    let app = std::cell::RefCell::new(app);
+    let setup = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup.get() {
+                    setup.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+                // 真实路径在 draw_shell 里消费后台事件;夹具 draw_app 不含,补上
+                b.drain_events(ctx);
+            },
+            app,
+        );
+    h.run_steps(6);
+    {
+        // 区内说明文字也是同名 Label 节点:按 Button 角色过滤出拖放区本身。
+        // raw_bounds 已是逻辑坐标(实测 x1<窗口宽):直接取中心
+        let zone = h
+            .get_all_by_role_and_label(egui::accesskit::Role::Button, "把文件拖到这里计算摘要")
+            .into_iter()
+            .next()
+            .unwrap();
+        let b = zone.raw_bounds().unwrap();
+        let center = egui::pos2(
+            ((b.x0 + b.x1) / 2.0) as f32,
+            ((b.y0 + b.y1) / 2.0) as f32,
+        );
+        h.input_mut().events.push(egui::Event::PointerMoved(center));
+    }
+    h.run_steps(2);
+    h.input_mut().dropped_files.push(egui::DroppedFile {
+        path: Some(path.clone()),
+        ..Default::default()
+    });
+    // 后台线程算完发事件,页面帧循环消费:小文件几百帧内必完成
+    let mut done = false;
+    for _ in 0..600 {
+        h.step();
+        let b = h.state().borrow();
+        let idx = b.tabs.len() - 1;
+        if let TabKind::Toolbox(tb) = &b.tabs[idx].kind {
+            if let Some(f) = &tb.hash.file {
+                if f.running.is_none() && !f.digests[0].is_empty() {
+                    assert_eq!(f.digests, want, "文件摘要与一次性计算不一致");
+                    assert_eq!(f.total, data.len() as u64);
+                    assert_eq!(f.done, data.len() as u64);
+                    assert_eq!(f.name, "ui.dat");
+                    done = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(done, "拖入文件后后台计算没有在限时内完成");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 哈希工具·文件:用户取消后,迟到的进度与结果按代次丢弃
+#[test]
+fn toolbox_hash_stale_events_discarded() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("shujing_hash_stale_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("stale.dat");
+    std::fs::write(&path, vec![9u8; 4096]).unwrap();
+
+    let (mut app, idx) = hash_app(2);
+    app.auto_connect_done = true;
+    let app = std::cell::RefCell::new(app);
+    let setup = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup.get() {
+                    setup.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+                // 真实路径在 draw_shell 里消费后台事件;夹具 draw_app 不含,补上
+                b.drain_events(ctx);
+            },
+            app,
+        );
+    h.run_steps(6);
+    let tab_id = h.state().borrow().tabs[idx].id.clone();
+    {
+        let mut b = h.state().borrow_mut();
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            let (gen, _flag) = tb.hash.start_file(&path);
+            assert_eq!(gen, 1);
+            tb.hash.cancel();
+            assert!(tb.hash.file.as_ref().unwrap().cancelled);
+            assert!(tb.hash.file.as_ref().unwrap().running.is_none());
+        }
+    }
+    // 已取消的任务(代次 1)的进度与结果迟到达:不得回填
+    h.state()
+        .borrow()
+        .event_tx
+        .send(crate::app::BgEvent::ToolboxHashProgress {
+            tab_id: tab_id.clone(),
+            gen: 1,
+            done: 4096,
+        })
+        .unwrap();
+    h.state()
+        .borrow()
+        .event_tx
+        .send(crate::app::BgEvent::ToolboxHashDone {
+            tab_id: tab_id.clone(),
+            gen: 1,
+            result: Ok(shujing_core::hashing::FileDigests {
+                size: 4096,
+                digests: shujing_core::hashing::digest_bytes(b"x"),
+            }),
+        })
+        .unwrap();
+    h.run_steps(4);
+    let b = h.state().borrow();
+    if let TabKind::Toolbox(tb) = &b.tabs[idx].kind {
+        let f = tb.hash.file.as_ref().unwrap();
+        assert!(f.cancelled, "取消状态被迟到事件清除");
+        assert!(f.digests.iter().all(|d| d.is_empty()), "迟到结果被回填");
+        assert_eq!(f.done, 0, "迟到进度被回填");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 哈希工具·任务叫停:重选文件叫停旧任务;关标签(ToolboxTab Drop)叫停在途任务
+#[test]
+fn toolbox_hash_stop_on_replace_and_drop() {
+    let dir = std::env::temp_dir().join(format!("shujing_hash_stop_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.dat");
+    let bpath = dir.join("b.dat");
+    std::fs::write(&a, b"aaaa").unwrap();
+    std::fs::write(&bpath, b"bbbb").unwrap();
+
+    let mut tb = crate::app::ToolboxTab::default();
+    let (g1, flag1) = tb.hash.start_file(&a);
+    assert_eq!(g1, 1);
+    assert!(!flag1.load(std::sync::atomic::Ordering::Relaxed));
+    // 重选文件:旧任务叫停,代次推进,状态换成新文件
+    let (g2, flag2) = tb.hash.start_file(&bpath);
+    assert_eq!(g2, 2);
+    assert!(
+        flag1.load(std::sync::atomic::Ordering::Relaxed),
+        "重选文件后旧任务未被叫停"
+    );
+    assert!(!flag2.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(tb.hash.file.as_ref().unwrap().name, "b.dat");
+    // 关标签:Drop 叫停在途任务
+    drop(tb);
+    assert!(
+        flag2.load(std::sync::atomic::Ordering::Relaxed),
+        "关标签未叫停在途任务"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 

@@ -629,7 +629,6 @@ impl RabbitTab {
     }
 }
 
-/// 服务器会话面板标签(MySQL processlist / PG pg_stat_activity)
 /// 开发工具箱标签(左侧工具导航 + 右侧工具页)
 pub struct ToolboxTab {
     pub tool: crate::toolbox::Tool,
@@ -637,6 +636,14 @@ pub struct ToolboxTab {
     pub ts: crate::toolbox::TsTool,
     pub uuid: crate::toolbox::UuidTool,
     pub json: crate::toolbox::JsonTool,
+    pub hash: crate::toolbox::HashTool,
+}
+
+impl Drop for ToolboxTab {
+    fn drop(&mut self) {
+        // 标签关闭(任何路径)即叫停在途的文件摘要任务,免得后台把大文件读完
+        self.hash.stop_running();
+    }
 }
 
 impl ToolboxTab {
@@ -654,6 +661,7 @@ impl Default for ToolboxTab {
             ts: Default::default(),
             uuid: Default::default(),
             json: Default::default(),
+            hash: Default::default(),
         }
     }
 }

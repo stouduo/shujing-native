@@ -202,6 +202,16 @@ pub enum BgEvent {
         path: String,
         result: Result<shujing_core::parquet_preview::ParquetPreview, String>,
     },
+    ToolboxHashProgress {
+        tab_id: String,
+        gen: u64,
+        done: u64,
+    },
+    ToolboxHashDone {
+        tab_id: String,
+        gen: u64,
+        result: Result<shujing_core::hashing::FileDigests, String>,
+    },
     ConnectDone {
         conn_id: String,
         result: Result<String, String>,
@@ -715,6 +725,21 @@ impl ShujingApp {
         match std::env::var("SHUJING_SHOT_MODAL").as_deref() {
             Ok("shortcuts") => app.shortcuts_open = true,
             Ok("settings") => app.settings_open = true,
+            // 工具箱哈希页(装机包真机自截图用)
+            Ok("toolbox-hash") => {
+                app.open_toolbox();
+                let idx = app
+                    .tabs
+                    .iter()
+                    .position(|t| matches!(&t.kind, TabKind::Toolbox(_)));
+                if let Some(i) = idx {
+                    app.active_tab = i;
+                    if let TabKind::Toolbox(tb) = &mut app.tabs[i].kind {
+                        tb.tool = crate::toolbox::Tool::Hash;
+                        tb.hash.input = "hello 数镜".into();
+                    }
+                }
+            }
             _ => {}
         }
         app
@@ -1351,6 +1376,60 @@ impl ShujingApp {
             kind: TabKind::Toolbox(Default::default()),
         });
         self.active_tab = self.tabs.len() - 1;
+    }
+
+    /// 工具箱·文件摘要:进度每这么多字节报一次(大文件不至于每块一个事件)
+    const HASH_PROGRESS_STEP: u64 = 64 * 1024 * 1024;
+
+    /// 工具箱标签(按 tab_id);已关闭或不是工具箱返回 None
+    fn toolbox_tab_mut(&mut self, tab_id: &str) -> Option<&mut crate::app::ToolboxTab> {
+        let tab = self.tabs.iter_mut().find(|t| t.id == tab_id)?;
+        match &mut tab.kind {
+            TabKind::Toolbox(tb) => Some(tb),
+            _ => None,
+        }
+    }
+
+    /// 工具箱·文件摘要:选文件后开始计算
+    pub fn toolbox_hash_pick(&mut self, tab_id: &str) {
+        let Some(path) = rfd::FileDialog::new().pick_file() else {
+            return;
+        };
+        self.toolbox_hash_start(tab_id, path);
+    }
+
+    /// 工具箱·文件摘要:后台流式计算。进度/结果都带任务代次——
+    /// 重选文件、取消或关标签之后迟到的消息按代次丢弃
+    pub fn toolbox_hash_start(&mut self, tab_id: &str, path: std::path::PathBuf) {
+        let Some(tb) = self.toolbox_tab_mut(tab_id) else {
+            return;
+        };
+        let (gen, cancel) = tb.hash.start_file(&path);
+        let tx = self.event_tx.clone();
+        let tid = tab_id.to_string();
+        net::spawn_blocking(move || {
+            let last_sent = std::cell::Cell::new(0u64);
+            let result = shujing_core::hashing::digest_file(
+                &path,
+                shujing_core::hashing::FILE_CHUNK,
+                || cancel.load(std::sync::atomic::Ordering::Relaxed),
+                |done| {
+                    if done - last_sent.get() >= Self::HASH_PROGRESS_STEP {
+                        last_sent.set(done);
+                        let _ = tx.send(BgEvent::ToolboxHashProgress {
+                            tab_id: tid.clone(),
+                            gen,
+                            done,
+                        });
+                    }
+                },
+            );
+            let _ = tx.send(BgEvent::ToolboxHashDone {
+                tab_id: tid,
+                gen,
+                result: result.map_err(|e| e.to_string()),
+            });
+        });
     }
 
     /// 打开 Kafka 控制台(拉 topic 列表)
@@ -6248,6 +6327,33 @@ impl ShujingApp {
                             q.col_comments = comments.into_iter().collect();
                             q.pk_checked = true;
                         }
+                    }
+                }
+                BgEvent::ToolboxHashProgress { tab_id, gen, done } => {
+                    if let Some(f) = self
+                        .toolbox_tab_mut(&tab_id)
+                        .and_then(|tb| tb.hash.running_mut(gen))
+                    {
+                        f.done = done;
+                    }
+                }
+                BgEvent::ToolboxHashDone { tab_id, gen, result } => {
+                    // 代次不匹配(已重选/取消/关标签)=迟到消息,丢弃
+                    let Some(f) = self
+                        .toolbox_tab_mut(&tab_id)
+                        .and_then(|tb| tb.hash.running_mut(gen))
+                    else {
+                        continue;
+                    };
+                    f.running = None;
+                    match result {
+                        Ok(r) => {
+                            f.done = r.size;
+                            f.total = r.size;
+                            f.digests = r.digests;
+                            f.error = None;
+                        }
+                        Err(e) => f.error = Some(e),
                     }
                 }
                 BgEvent::SearchDone {

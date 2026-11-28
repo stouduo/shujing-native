@@ -335,6 +335,15 @@ pub enum TabAction {
     OpenRedisInfo {
         conn_id: String,
     },
+    /// 工具箱·文件摘要:打开文件选择框
+    HashPickFile {
+        tab_id: String,
+    },
+    /// 工具箱·文件摘要:拖入文件,后台计算
+    HashFile {
+        tab_id: String,
+        path: std::path::PathBuf,
+    },
     /// 打开配置中心控制台
     OpenKvConsole {
         conn_id: String,
@@ -5048,6 +5057,8 @@ pub(crate) fn execute_tab_action(app: &mut ShujingApp, ctx: &egui::Context, acti
             });
         }
         TabAction::PreviewParquet => app.preview_parquet_file(),
+        TabAction::HashPickFile { tab_id } => app.toolbox_hash_pick(&tab_id),
+        TabAction::HashFile { tab_id, path } => app.toolbox_hash_start(&tab_id, path),
         TabAction::OpenTransfer { conn_id, db, table } => {
             app.open_transfer(&conn_id, db.as_deref(), &table)
         }

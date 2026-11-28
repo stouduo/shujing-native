@@ -1791,6 +1791,57 @@ pub fn console_body_panel<R>(ctx: &egui::Context, add: impl FnOnce(&mut egui::Ui
         .inner
 }
 
+// ---------------------------------------------------------------- 进度 / 拖放
+
+/// 细进度条:4px 高轨道 + 强调色填充。`total` 为 0(总量未知)时只画轨道。
+/// 无障碍标签带百分比,读屏器/测试可读
+pub fn progress_bar(ui: &mut egui::Ui, done: u64, total: u64, width: f32) {
+    let p = c();
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(width, 4.0), egui::Sense::hover());
+    let rr = egui::CornerRadius::same(2);
+    ui.painter().rect_filled(r, rr, tint(p.text, 16));
+    if total > 0 {
+        let frac = (done as f32 / total as f32).clamp(0.0, 1.0);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(r.min, egui::pos2(r.left() + r.width() * frac, r.bottom())),
+            rr,
+            p.accent,
+        );
+        resp.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Label,
+                true,
+                format!("{:.0}%", frac * 100.0),
+            )
+        });
+    }
+}
+
+/// 虚线框(拖放区标识):四条边等长线段,四角留白。
+/// epaint 的 Stroke 不带线型,虚线只能自己分段画
+pub fn dashed_frame(p: &egui::Painter, r: egui::Rect, color: Color32) {
+    let (dash, gap) = (6.0, 4.0);
+    let corner = 6.0;
+    let stroke = Stroke::new(1.0, color);
+    let mut x = r.left() + corner;
+    while x < r.right() - corner {
+        let x2 = (x + dash).min(r.right() - corner);
+        p.line_segment([egui::pos2(x, r.top()), egui::pos2(x2, r.top())], stroke);
+        p.line_segment(
+            [egui::pos2(x, r.bottom()), egui::pos2(x2, r.bottom())],
+            stroke,
+        );
+        x += dash + gap;
+    }
+    let mut y = r.top() + corner;
+    while y < r.bottom() - corner {
+        let y2 = (y + dash).min(r.bottom() - corner);
+        p.line_segment([egui::pos2(r.left(), y), egui::pos2(r.left(), y2)], stroke);
+        p.line_segment([egui::pos2(r.right(), y), egui::pos2(r.right(), y2)], stroke);
+        y += dash + gap;
+    }
+}
+
 // ---------------------------------------------------------------- 菜单项
 
 /// 菜单项(右键菜单/下拉弹层用):全行宽平铺文字行,悬停垫淡底。
