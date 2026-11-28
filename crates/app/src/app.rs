@@ -352,6 +352,7 @@ pub enum BgEvent {
     QueryPkDone {
         tab_id: String,
         cols: Vec<String>,
+        comments: Vec<(String, String)>,
     },
     /// 自动补全:某表的列名(懒加载)
     AcColumnsDone {
@@ -2513,6 +2514,7 @@ impl ShujingApp {
                 ac: None,
                 q_frozen: 0,
                 lint_cache: None,
+                col_comments: Default::default(),
             }),
         });
         self.active_tab = self.tabs.len() - 1;
@@ -4537,6 +4539,7 @@ impl ShujingApp {
                             ac: None,
                             q_frozen: 0,
                             lint_cache: None,
+                            col_comments: Default::default(),
                         }),
                     });
                 }
@@ -5136,19 +5139,32 @@ impl ShujingApp {
                                         let tx = self.event_tx.clone();
                                         let service = self.service.clone();
                                         net::spawn(async move {
-                                            let cols = service
+                                            // 主键与注释同一次结构拉取(列名 hover 提示用)
+                                            let (cols, comments) = service
                                                 .get_table_structure(&conn_id, &t, db)
                                                 .await
                                                 .map(|st| {
-                                                    st.columns
-                                                        .iter()
-                                                        .filter(|c| c.key == "PRI")
-                                                        .map(|c| c.name.clone())
-                                                        .collect::<Vec<_>>()
+                                                    (
+                                                        st.columns
+                                                            .iter()
+                                                            .filter(|c| c.key == "PRI")
+                                                            .map(|c| c.name.clone())
+                                                            .collect::<Vec<_>>(),
+                                                        st.columns
+                                                            .iter()
+                                                            .filter(|c| !c.comment.trim().is_empty())
+                                                            .map(|c| {
+                                                                (c.name.clone(), c.comment.trim().to_string())
+                                                            })
+                                                            .collect::<Vec<_>>(),
+                                                    )
                                                 })
                                                 .unwrap_or_default();
-                                            let _ =
-                                                tx.send(BgEvent::QueryPkDone { tab_id: tid, cols });
+                                            let _ = tx.send(BgEvent::QueryPkDone {
+                                                tab_id: tid,
+                                                cols,
+                                                comments,
+                                            });
                                         });
                                     }
                                 }
@@ -6197,10 +6213,15 @@ impl ShujingApp {
                     }
                     self.ac_rev += 1;
                 }
-                BgEvent::QueryPkDone { tab_id, cols } => {
+                BgEvent::QueryPkDone {
+                    tab_id,
+                    cols,
+                    comments,
+                } => {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                         if let TabKind::Query(q) = &mut tab.kind {
                             q.result_pk = cols;
+                            q.col_comments = comments.into_iter().collect();
                             q.pk_checked = true;
                         }
                     }

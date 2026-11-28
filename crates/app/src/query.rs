@@ -884,6 +884,7 @@ pub fn draw_query_view(
                         &mut q.q_draft,
                         &mut q.q_frozen,
                         Some(editor_focus),
+                        Some(&q.col_comments),
                     );
                     if let Some((ri, ci, old)) = start {
                         q.q_editing = Some((ri, ci));
@@ -914,6 +915,7 @@ pub fn draw_query_view(
                         &r.rows,
                         &mut q.q_frozen,
                         Some(editor_focus),
+                        Some(&q.col_comments),
                     );
                 }
             }
@@ -1132,6 +1134,7 @@ pub fn draw_optimize_modal(
                                     &plan.column_types,
                                     &plan.rows,
                                     &mut plan_frozen,
+                                    None,
                                     None,
                                 );
                                 plan_frozen_out = plan_frozen;

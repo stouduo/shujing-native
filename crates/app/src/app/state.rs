@@ -280,6 +280,8 @@ pub struct QueryTab {
     pub optimize: Option<OptimizeState>,
     /// 结果集回写:单表 SELECT 检测出的表名
     pub result_table: Option<String>,
+    /// 单表结果集的列注释(拉主键时顺带取回;JOIN/聚合查询没有可靠来源,留空)
+    pub col_comments: std::collections::HashMap<String, String>,
     /// 回写目标库(SQL 内显式库优先,否则执行时选中的库)
     pub result_db: Option<String>,
     pub result_pk: Vec<String>,

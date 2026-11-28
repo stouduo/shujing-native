@@ -757,6 +757,7 @@ static NONE_CELL: Option<String> = None;
 /// 画结果网格。`esc_to` = 网格持焦时按 Esc 把焦点交给谁(查询页交给 SQL 编辑器;
 /// None = 只放开焦点)。返回 (请求开始编辑的格, 要写入的格);只读网格两者皆空
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn draw_grid(
     ui: &mut egui::Ui,
     id_salt: &str,
@@ -766,6 +767,7 @@ fn draw_grid(
     frozen: &mut usize,
     esc_to: Option<egui::Id>,
     mut edits: Option<EditFields<'_>>,
+    col_comments: Option<&std::collections::HashMap<String, String>>,
 ) -> (Option<(usize, usize, String)>, Vec<(usize, usize, String)>) {
     let p = theme::c();
     let old_spacing = ui.spacing().item_spacing;
@@ -908,6 +910,21 @@ fn draw_grid(
                             theme::type_at(column_types, ci),
                         );
                         let resp = ui.allocate_rect(rect, Sense::click());
+                        // 悬停提示:列名/类型 + 字段注释(单表查询时随结构拉取)
+                        let mut tip = format!(
+                            "{}\n{}",
+                            columns[ci],
+                            theme::type_at(column_types, ci)
+                        );
+                        if let Some(cm) = col_comments
+                            .and_then(|m| m.get(&columns[ci]))
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                        {
+                            tip.push('\n');
+                            tip.push_str(cm);
+                        }
+                        resp.clone().on_hover_text(tip);
                         grid_header_freeze_menu(&resp, vw, vis.len(), frozen, grid_id);
                     });
                 }
@@ -1593,6 +1610,7 @@ pub fn result_rows(
     rows: &[Vec<Option<String>>],
     frozen: &mut usize,
     esc_to: Option<egui::Id>,
+    col_comments: Option<&std::collections::HashMap<String, String>>,
 ) {
     let _ = draw_grid(
         ui,
@@ -1603,11 +1621,13 @@ pub fn result_rows(
         frozen,
         esc_to,
         None,
+        col_comments,
     );
 }
 
 /// 可编辑结果集(查询回写):双击/回车进入编辑,改动以 (行号,列名,新值) 记在 changes。
 /// 返回 (请求开始编辑的格, 要写入的格);开始编辑由调用方置 draft,写入由调用方记 changes
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub fn result_rows_editable(
     ui: &mut egui::Ui,
@@ -1620,6 +1640,7 @@ pub fn result_rows_editable(
     draft: &mut String,
     frozen: &mut usize,
     esc_to: Option<egui::Id>,
+    col_comments: Option<&std::collections::HashMap<String, String>>,
 ) -> (Option<(usize, usize, String)>, Vec<(usize, usize, String)>) {
     draw_grid(
         ui,
@@ -1634,6 +1655,7 @@ pub fn result_rows_editable(
             editing,
             draft,
         }),
+        col_comments,
     )
 }
 

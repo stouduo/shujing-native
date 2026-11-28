@@ -3400,12 +3400,12 @@ fn draw_data_table(
                         *sc = Some(c.clone());
                     }
                 }
-                // 悬停提示:列注释(此前常驻表头第三行,挤)+ 操作说明
+                // 悬停提示:字段注释(用户要看的)+ 空行 + 操作说明(兜底教学)
                 {
                     let mut tip = String::new();
                     if let Some(cm) = col_comments.get(c).map(|s| s.trim()).filter(|s| !s.is_empty()) {
                         tip.push_str(cm);
-                        tip.push('\n');
+                        tip.push_str("\n\n");
                     }
                     tip.push_str(ui_kit::t!(
                         "Click to sort: asc → desc → clear · funnel: filter this column · drag column edge to resize",

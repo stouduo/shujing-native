@@ -1093,6 +1093,7 @@ fn query_view_fixture() -> (QueryTab, Vec<shujing_core::ConnInfo>, Vec<String>) 
         ac: None,
         q_frozen: 0,
         lint_cache: None,
+        col_comments: Default::default(),
     };
     let rows: Vec<Vec<Option<String>>> = (0..24)
         .map(|i| {
@@ -1212,6 +1213,7 @@ fn render_query_view_narrow_with_db() {
         ac: None,
         q_frozen: 0,
         lint_cache: None,
+        col_comments: Default::default(),
     };
     let conns = vec![shujing_core::ConnInfo {
         id: "c1".into(),
@@ -1932,6 +1934,7 @@ fn test_query_tab() -> QueryTab {
         ac: None,
         q_frozen: 0,
         lint_cache: None,
+        col_comments: Default::default(),
     }
 }
 
@@ -2344,6 +2347,7 @@ fn session_save_restore_roundtrip() {
         ac: None,
         q_frozen: 0,
         lint_cache: None,
+        col_comments: Default::default(),
     };
     q.sql = "SELECT id FROM backend_role_privilege".into();
     app.tabs.push(Tab {
@@ -3958,6 +3962,7 @@ fn render_query_autocomplete() {
         }),
         q_frozen: 0,
         lint_cache: None,
+        col_comments: Default::default(),
     };
     let conns = vec![shujing_core::ConnInfo {
         id: "c1".into(),
@@ -4202,6 +4207,7 @@ fn query_grid_frozen_columns_pin() {
         ac: None,
         q_frozen: 1,
         lint_cache: None,
+        col_comments: Default::default(),
     };
     q.results = vec![shujing_core::ExecResult {
         columns: (0..6).map(|i| format!("col_{i}")).collect(),
