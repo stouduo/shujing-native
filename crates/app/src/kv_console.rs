@@ -14,13 +14,7 @@ pub fn draw_kv_view(
     let mut actions = Vec::new();
     let p = theme::c();
 
-    egui::TopBottomPanel::top(format!("kv-top-{tab_id}"))
-        .frame(
-            egui::Frame::new()
-                .fill(p.panel)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_top_panel(ctx, tab_id, |ui| {
             ui.horizontal(|ui| {
                 theme::search_box(
                     ui,
@@ -47,13 +41,7 @@ pub fn draw_kv_view(
             });
         });
 
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::new()
-                .fill(p.bg)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_body_panel(ctx, |ui| {
             if k.loading && k.entries.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.add_space(30.0);
@@ -166,7 +154,6 @@ pub fn draw_kv_view(
                         false,
                         ui_kit::t!("Key name", "键名"),
                     );
-                    ui.add_space(10.0);
                     let cb = theme::button(
                     ui,
                     if k.busy {

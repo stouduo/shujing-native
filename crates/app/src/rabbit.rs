@@ -13,13 +13,7 @@ pub fn draw_rabbit_view(
     let mut actions = Vec::new();
     let p = theme::c();
 
-    egui::TopBottomPanel::top(format!("rabbit-top-{tab_id}"))
-        .frame(
-            egui::Frame::new()
-                .fill(p.panel)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_top_panel(ctx, tab_id, |ui| {
             ui.horizontal(|ui| {
                 if let Some(o) = &r.overview {
                     ui.label(
@@ -91,13 +85,7 @@ pub fn draw_rabbit_view(
             }
         });
 
-    egui::TopBottomPanel::bottom(format!("rabbit-send-{tab_id}"))
-        .frame(
-            egui::Frame::new()
-                .fill(p.panel)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_bottom_panel(ctx, tab_id, |ui| {
             let target = r.selected.clone().map(|(_, q)| q).unwrap_or_default();
             theme::form_row(ui, ui_kit::t!("Queue", "队列"), |ui| {
                 let text = if target.is_empty() {
@@ -151,13 +139,7 @@ pub fn draw_rabbit_view(
             });
         });
 
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::new()
-                .fill(p.bg)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_body_panel(ctx, |ui| {
             if r.loading && r.queues.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.add_space(30.0);

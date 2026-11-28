@@ -13,13 +13,7 @@ pub fn draw_mqtt_view(
     let mut actions = Vec::new();
     let p = theme::c();
 
-    egui::TopBottomPanel::top(format!("mqtt-top-{tab_id}"))
-        .frame(
-            egui::Frame::new()
-                .fill(p.panel)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_top_panel(ctx, tab_id, |ui| {
             ui.horizontal(|ui| {
                 let browse = theme::button(
                     ui,
@@ -50,13 +44,7 @@ pub fn draw_mqtt_view(
             }
         });
 
-    egui::TopBottomPanel::bottom(format!("mqtt-send-{tab_id}"))
-        .frame(
-            egui::Frame::new()
-                .fill(p.panel)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_bottom_panel(ctx, tab_id, |ui| {
             theme::form_row(ui, ui_kit::t!("Topic", "主题"), |ui| {
                 // form_row 的控件区是竖排布局:多控件要自己包一层横向
                 ui.horizontal(|ui| {
@@ -68,7 +56,6 @@ pub fn draw_mqtt_view(
                         false,
                         ui_kit::t!("e.g. sensor/temperature", "如 sensor/temperature"),
                     );
-                    ui.add_space(10.0);
                     let mut retain = m.pub_retain;
                     if theme::checkbox(ui, &mut retain, &ui_kit::t!("retain", "保留")).changed() {
                         m.pub_retain = retain;
@@ -114,13 +101,7 @@ pub fn draw_mqtt_view(
             });
         });
 
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::new()
-                .fill(p.bg)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_body_panel(ctx, |ui| {
             if m.loading {
                 ui.centered_and_justified(|ui| {
                     ui.add_space(30.0);

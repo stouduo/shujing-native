@@ -1161,6 +1161,9 @@ pub fn form_row<R>(
                     ))
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
+            // 控件区间距是 form_row 的布局规则,不是调用方的事:
+            // 横向 8px(输入框+按钮并排),纵向 0(单行)
+            ctrl.spacing_mut().item_spacing.x = 8.0;
             let out = add(&mut ctrl);
             let h = ctrl.min_rect().height().max(field_h());
             let _ = ui.allocate_exact_size(egui::vec2(row.width(), h), egui::Sense::hover());
@@ -1730,6 +1733,58 @@ pub fn select(
         );
     }
     picked
+}
+
+// ---------------------------------------------------------------- 控制台面板
+
+/// 控制台顶部工具面板:panel 底 + 统一 12/8 内边距(四个中间件控制台此前各写一份)
+pub fn console_top_panel<R>(ctx: &egui::Context, id: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::TopBottomPanel::top(format!("console-top-{id}"))
+        .frame(
+            egui::Frame::new()
+                .fill(c().panel)
+                .inner_margin(egui::Margin::symmetric(12, 8)),
+        )
+        .show(ctx, add)
+        .inner
+}
+
+/// 控制台底部动作面板:panel 底 + 顶部发丝线(与内容区分界)
+pub fn console_bottom_panel<R>(
+    ctx: &egui::Context,
+    id: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    egui::TopBottomPanel::bottom(format!("console-bottom-{id}"))
+        .frame(
+            egui::Frame::new()
+                .fill(c().panel)
+                .inner_margin(egui::Margin::symmetric(12, 8)),
+        )
+        .show(ctx, |ui| {
+            let r = ui.max_rect();
+            ui.painter().line_segment(
+                [
+                    egui::pos2(r.left(), r.top() + 0.5),
+                    egui::pos2(r.right(), r.top() + 0.5),
+                ],
+                Stroke::new(1.0, c().border),
+            );
+            add(ui)
+        })
+        .inner
+}
+
+/// 控制台中央内容面板:bg 底
+pub fn console_body_panel<R>(ctx: &egui::Context, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::new()
+                .fill(c().bg)
+                .inner_margin(egui::Margin::symmetric(12, 8)),
+        )
+        .show(ctx, add)
+        .inner
 }
 
 // ---------------------------------------------------------------- 菜单项

@@ -12,13 +12,7 @@ pub fn draw_kafka_view(
 ) -> Vec<TabAction> {
     let mut actions = Vec::new();
     let p = theme::c();
-    egui::TopBottomPanel::top(format!("kafka-top-{tab_id}"))
-        .frame(
-            egui::Frame::new()
-                .fill(p.panel)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_top_panel(ctx, tab_id, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(ui_kit::t!("Topic", "主题")).size(theme::fs_px(11.0)).color(p.muted));
                 let before = k.selected.clone();
@@ -143,13 +137,7 @@ pub fn draw_kafka_view(
             }
         });
 
-    egui::TopBottomPanel::bottom(format!("kafka-send-{tab_id}"))
-        .frame(
-            egui::Frame::new()
-                .fill(p.panel)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_bottom_panel(ctx, tab_id, |ui| {
             let target = k.selected.clone().unwrap_or_default();
             theme::form_row(ui, ui_kit::t!("Key", "键"), |ui| {
                 theme::field_hint(
@@ -200,13 +188,7 @@ pub fn draw_kafka_view(
             });
         });
 
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::new()
-                .fill(p.bg)
-                .inner_margin(egui::Margin::symmetric(12, 8)),
-        )
-        .show(ctx, |ui| {
+    theme::console_body_panel(ctx, |ui| {
             // 消费组表(打开时占上部固定高度)
             if k.groups_open {
                 ui.horizontal(|ui| {
