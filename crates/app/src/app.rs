@@ -1334,6 +1334,25 @@ impl ShujingApp {
         });
     }
 
+    /// 打开开发工具箱(单实例:已开则聚焦)
+    pub fn open_toolbox(&mut self) {
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.kind, TabKind::Toolbox(_)))
+        {
+            self.active_tab = i;
+            return;
+        }
+        let id = format!("tb{}", rand_suffix());
+        self.tabs.push(Tab {
+            id: id.clone(),
+            title: ui_kit::t!("Toolbox", "工具箱").to_string(),
+            kind: TabKind::Toolbox(Default::default()),
+        });
+        self.active_tab = self.tabs.len() - 1;
+    }
+
     /// 打开 Kafka 控制台(拉 topic 列表)
     pub fn open_kafka(&mut self, conn_id: &str) {
         // 已开则聚焦
@@ -1909,6 +1928,7 @@ impl ShujingApp {
             TabKind::Kv(k) => (k.conn_id.as_str(), "", None),
             TabKind::Rabbit(r) => (r.conn_id.as_str(), "", None),
             TabKind::Kafka(k) => (k.conn_id.as_str(), "", None),
+            TabKind::Toolbox(_) => return None,
             TabKind::Table(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Structure(x) => (x.conn_id.as_str(), x.table.as_str(), x.database.as_deref()),
             TabKind::Query(_)
@@ -2446,6 +2466,7 @@ impl ShujingApp {
                     TabKind::Mqtt(m) => m.conn_id.clone(),
                     TabKind::Kv(k) => k.conn_id.clone(),
                     TabKind::Session(s) => s.conn_id.clone(),
+                    TabKind::Toolbox(_) => String::new(),
                 })
             })
             .filter(|cid| self.conn_can_query(cid));
@@ -2462,6 +2483,7 @@ impl ShujingApp {
             TabKind::Rabbit(_) => None,
             TabKind::Mqtt(_) => None,
             TabKind::Kv(_) => None,
+            TabKind::Toolbox(_) => None,
         });
         // 指定了连接(侧栏右键"新建查询")时,取侧栏展开的库;
         // 仅限无默认库的 MySQL 连接——有默认库的连接保持 None 走默认,
@@ -2574,6 +2596,7 @@ impl ShujingApp {
                 TabKind::Mqtt(m) => m.conn_id == conn_id,
                 TabKind::Kv(k) => k.conn_id == conn_id,
                 TabKind::Session(s) => s.conn_id == conn_id,
+                TabKind::Toolbox(_) => false,
             };
             if belongs {
                 if i < self.active_tab {
@@ -4400,12 +4423,13 @@ impl ShujingApp {
                     conn: e.conn_id.clone(),
                     database: e.database.clone(),
                 }),
-                // Kafka/Rabbit/MQTT/会话面板不入会话(重启后从侧栏重开)
+                // Kafka/Rabbit/MQTT/会话面板/工具箱不入会话(重启后重开)
                 TabKind::Kafka(_) => {}
                 TabKind::Rabbit(_) => {}
                 TabKind::Mqtt(_) => {}
                 TabKind::Kv(_) => {}
                 TabKind::Session(_) => {}
+                TabKind::Toolbox(_) => {}
                 TabKind::Ddl(d) => tabs.push(SessionTab::Ddl {
                     conn: d.conn_id.clone(),
                     database: d.database.clone(),

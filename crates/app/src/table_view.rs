@@ -578,6 +578,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                                 TabKind::Mqtt(_) => 10,
                                 TabKind::Kv(_) => 11,
                                 TabKind::Session(_) => 8,
+                                TabKind::Toolbox(_) => 12,
                                 TabKind::Er(_) => 5,
                                 TabKind::Ddl(_) => 6,
                             };
@@ -6716,6 +6717,7 @@ impl eframe::App for ShujingApp {
                 TabKind::Mqtt(m) => crate::mqtt_console::draw_mqtt_view(ctx, &tab_id, m),
                 TabKind::Kv(k) => crate::kv_console::draw_kv_view(ctx, &tab_id, k),
                 TabKind::Session(s) => crate::sessions::draw_sessions_view(ctx, &tab_id, s),
+                TabKind::Toolbox(tb) => crate::toolbox::draw_toolbox_view(ctx, &tab_id, tb),
                 TabKind::Ddl(d) => structure::draw_ddl_view(ctx, &tab_id, d),
             };
             for a in actions {

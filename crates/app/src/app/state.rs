@@ -630,6 +630,34 @@ impl RabbitTab {
 }
 
 /// 服务器会话面板标签(MySQL processlist / PG pg_stat_activity)
+/// 开发工具箱标签(左侧工具导航 + 右侧工具页)
+pub struct ToolboxTab {
+    pub tool: crate::toolbox::Tool,
+    pub codec: crate::toolbox::CodecTool,
+    pub ts: crate::toolbox::TsTool,
+    pub uuid: crate::toolbox::UuidTool,
+    pub json: crate::toolbox::JsonTool,
+}
+
+impl ToolboxTab {
+    /// 用于 tabs 的独立实例(状态从零)
+    pub fn clone_shell(&self, _new_id: &str) -> ToolboxTab {
+        ToolboxTab::default()
+    }
+}
+
+impl Default for ToolboxTab {
+    fn default() -> Self {
+        ToolboxTab {
+            tool: crate::toolbox::Tool::Codec,
+            codec: Default::default(),
+            ts: Default::default(),
+            uuid: Default::default(),
+            json: Default::default(),
+        }
+    }
+}
+
 pub struct SessionsTab {
     pub conn_id: String,
     pub db_type: shujing_core::DbType,
@@ -916,6 +944,8 @@ pub enum TabKind {
     Kv(KvTab),
     /// 服务器会话面板(不参与会话恢复)
     Session(SessionsTab),
+    /// 开发工具箱(不参与会话恢复)
+    Toolbox(ToolboxTab),
     Ddl(DdlTab),
 }
 

@@ -490,6 +490,9 @@ fn draw_app(app: &mut ShujingApp, ctx: &egui::Context) {
         TabKind::Kv(k) => {
             let _ = crate::kv_console::draw_kv_view(ctx, &tab_id, k);
         }
+        TabKind::Toolbox(tb) => {
+            let _ = crate::toolbox::draw_toolbox_view(ctx, &tab_id, tb);
+        }
         TabKind::Ddl(d) => {
             let _ = crate::structure::draw_ddl_view(ctx, &tab_id, d);
         }
@@ -3116,6 +3119,7 @@ fn tab_kind_name(k: &TabKind) -> &'static str {
         TabKind::Mqtt(_) => "Mqtt",
         TabKind::Kv(_) => "Kv",
         TabKind::Session(_) => "Session",
+        TabKind::Toolbox(_) => "Toolbox",
         TabKind::Ddl(_) => "Ddl",
     }
 }
@@ -8518,6 +8522,52 @@ fn zz_tmp_gap() {
     ));
     render("zz_gap_mqtt", 1100.0, 640.0, true, move |ctx| {
         let mut b = app4.borrow_mut();
+        draw_app(&mut b, ctx);
+    });
+}
+
+/// 开发工具箱:编解码输入即输出(Base64 编码模式),时间戳→日期解析
+#[test]
+fn toolbox_codec_and_timestamp() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = test_app(vec![], 0);
+    app.open_toolbox();
+    assert!(app
+        .tabs
+        .iter()
+        .any(|t| matches!(&t.kind, TabKind::Toolbox(_))));
+    // 再次打开应聚焦而不是再开一个
+    app.open_toolbox();
+    assert_eq!(
+        app.tabs
+            .iter()
+            .filter(|t| matches!(&t.kind, TabKind::Toolbox(_)))
+            .count(),
+        1,
+        "工具箱应单实例"
+    );
+    let idx = app.tabs.len() - 1;
+    // 编解码:Base64 编码模式(默认 tool 0),输入 → 输出
+    if let TabKind::Toolbox(tb) = &mut app.tabs[idx].kind {
+        tb.codec.input = "你好".into();
+    }
+    // 直接调转换验证纯函数
+    // (渲染层每帧算;这里直接断言 draw 不 panic,转换正确性单独测)
+    let out = crate::toolbox::toolbox_codec_convert_for_test(0, "你好");
+    assert_eq!(out, "5L2g5aW9");
+    // 时间戳:秒
+    let out2 = crate::toolbox::toolbox_timestamp_for_test(1_790_000_000);
+    assert!(out2.contains("2026"), "秒时间戳应解析到日期: {out2}");
+}
+
+/// 工具箱快照(编解码默认页)
+#[test]
+fn render_toolbox() {
+    let mut app = test_app(vec![], 0);
+    app.open_toolbox();
+    let app = std::cell::RefCell::new(app);
+    render("toolbox", 1200.0, 720.0, true, move |ctx| {
+        let mut b = app.borrow_mut();
         draw_app(&mut b, ctx);
     });
 }

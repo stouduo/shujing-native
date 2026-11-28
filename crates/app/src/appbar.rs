@@ -57,6 +57,7 @@ impl ShujingApp {
                         ui_kit::t!("Compare Data…", "数据对比…"),
                         ui_kit::t!("Compare Structure…", "结构对比…"),
                         ui_kit::t!("Plugins", "插件管理"),
+                        ui_kit::t!("Toolbox", "工具箱"),
                     ];
                     // 数据对比与结构对比是两件事,图标也要分开(此前共用一个)
                     for (i, icon) in [
@@ -66,6 +67,7 @@ impl ShujingApp {
                         &icons::COMPARE,
                         &icons::FILE_DIFF,
                         &icons::BLOCKS,
+                        &icons::WAND,
                     ]
                     .into_iter()
                     .enumerate()
@@ -170,6 +172,7 @@ impl ShujingApp {
             Some(9) => self.export_connections_encrypted(),
             Some(10) => self.import_connections_encrypted(),
             Some(11) => self.shortcuts_open = true,
+            Some(12) => self.open_toolbox(),
             _ => {}
         }
     }

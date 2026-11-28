@@ -19,6 +19,7 @@ mod sidebar;
 mod sql_highlight;
 mod structure;
 mod table_view;
+pub mod toolbox;
 mod theme;
 
 #[cfg(test)]
