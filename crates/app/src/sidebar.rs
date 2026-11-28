@@ -849,32 +849,63 @@ impl ShujingApp {
                 egui::vec2(22.0, 22.0),
             );
             let mut picked: Option<&'static str> = None;
-            let plus_resp = ui
-                .allocate_new_ui(
-                    egui::UiBuilder::new()
-                        .max_rect(plus_rect)
-                        .layout(Layout::left_to_right(Align::Center)),
-                    |ui| {
-                        ui.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
-                        ui.menu_button(RichText::new("＋").size(theme::fs_px(13.0)).color(p.muted), |ui| {
-                            for (kind, label) in [
-                                ("trigger", ui_kit::t!("Triggers", "触发器")),
-                                ("procedure", ui_kit::t!("Stored Procedures", "存储过程")),
-                                ("function", ui_kit::t!("Functions", "函数")),
-                                ("view", ui_kit::t!("Views", "视图")),
-                            ] {
-                                if theme::menu_item(ui, label).clicked() {
-                                    picked = Some(kind);
-                                    ui.close_menu();
-                                }
-                            }
-                        })
-                        .response
-                    },
+            // 自绘小图标触发器 + popup_below_widget:原生 menu_button 是带底描边的
+            // 按钮,和全站工具按钮(悬停垫底、无边框)两张皮
+            let popup_id = egui::Id::new(("prog-plus", conn_id));
+            let plus_resp = ui.interact(
+                plus_rect,
+                egui::Id::new(("prog-plus-btn", conn_id)),
+                egui::Sense::click(),
+            );
+            let plus_hot = plus_resp.hovered() || ui.memory(|m| m.is_popup_open(popup_id));
+            if plus_hot {
+                ui.painter().rect_filled(
+                    plus_rect,
+                    egui::CornerRadius::same(theme::radius_small() as u8),
+                    p.hover,
+                );
+            }
+            crate::icons::paint_icon(
+                ui.painter(),
+                &ui_kit::lucide::PLUS,
+                plus_rect.center(),
+                12.0,
+                if plus_hot { p.text } else { p.muted },
+            );
+            plus_resp.clone().on_hover_text(ui_kit::t!("New Object (template)", "新建对象(模板)"));
+            plus_resp.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    &ui_kit::t!("New Object (template)", "新建对象(模板)"),
                 )
-                .inner;
+            });
+            if plus_resp.clicked() {
+                ui.memory_mut(|m| m.toggle_popup(popup_id));
+            }
+            if ui.memory(|m| m.is_popup_open(popup_id)) {
+                let _ = egui::popup_below_widget(
+                    ui,
+                    popup_id,
+                    &plus_resp,
+                    egui::PopupCloseBehavior::CloseOnClick,
+                    |ui| {
+                        ui.set_min_width(120.0);
+                        for (kind, label) in [
+                            ("trigger", ui_kit::t!("Triggers", "触发器")),
+                            ("procedure", ui_kit::t!("Stored Procedures", "存储过程")),
+                            ("function", ui_kit::t!("Functions", "函数")),
+                            ("view", ui_kit::t!("Views", "视图")),
+                        ] {
+                            if theme::menu_item(ui, label).clicked() {
+                                picked = Some(kind);
+                                ui.close_menu();
+                            }
+                        }
+                    },
+                );
+            }
             plus_clicked = plus_resp.clicked();
-            plus_resp.on_hover_text(ui_kit::t!("New Object (template)", "新建对象(模板)"));
             if let Some(kind) = picked {
                 self.open_query_tab(Some(conn_id.to_string()));
                 let idx = self.tabs.len() - 1;

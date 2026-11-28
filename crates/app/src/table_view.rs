@@ -781,15 +781,7 @@ pub(crate) fn draw_tabs(app: &mut ShujingApp, ctx: &egui::Context) {
                     for (i, t) in app.tabs.iter().enumerate() {
                         let sel = i == app.active_tab;
                         ui.horizontal(|ui| {
-                            let lbl = ui.selectable_label(
-                                sel,
-                                RichText::new(&t.title).size(theme::fs_px(12.0)).color(if sel {
-                                    p.text
-                                } else {
-                                    p.text2
-                                }),
-                            );
-                            if lbl.clicked() {
+                            if theme::menu_item_ex(ui, &t.title, sel, false, true).clicked() {
                                 activate = Some(i);
                                 ui.close_menu();
                             }
@@ -1093,21 +1085,13 @@ fn order_chip(ui: &mut egui::Ui, tab: &mut TableTab) -> bool {
                     .map(|(_, a)| *a);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    if ui
-                        .selectable_label(
-                            cur == Some(true),
-                            RichText::new(format!("{c} ↑")).size(theme::fs_px(12.0)),
-                        )
+                    if theme::menu_item_ex(ui, &format!("{c} ↑"), cur == Some(true), false, true)
                         .clicked()
                     {
                         pick = Some((c.clone(), true));
                         ui.close_menu();
                     }
-                    if ui
-                        .selectable_label(
-                            cur == Some(false),
-                            RichText::new(format!("{c} ↓")).size(theme::fs_px(12.0)),
-                        )
+                    if theme::menu_item_ex(ui, &format!("{c} ↓"), cur == Some(false), false, true)
                         .clicked()
                     {
                         pick = Some((c.clone(), false));
@@ -1848,16 +1832,12 @@ pub(crate) fn draw_table_view(
                     let _ = theme::tool_menu(ui, None, &size_label, "", |ui| {
                         ui.set_min_width(90.0);
                         for n in size_opts {
-                            if ui
-                                .selectable_label(
-                                    tab.page_size == n,
-                                    RichText::new(if ui_kit::i18n::is_english() {
-                                        format!("{n} rows")
-                                    } else {
-                                        format!("{n} 行")
-                                    })
-                                    .size(theme::fs_px(12.0)),
-                                )
+                            let label = if ui_kit::i18n::is_english() {
+                                format!("{n} rows")
+                            } else {
+                                format!("{n} 行")
+                            };
+                            if theme::menu_item_ex(ui, &label, tab.page_size == n, false, true)
                                 .clicked()
                             {
                                 if tab.page_size != n {

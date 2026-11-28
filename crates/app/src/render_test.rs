@@ -8617,3 +8617,5 @@ fn render_sidebar_menus() {
         .save("/tmp/shujing_ui/menu_items.png")
         .unwrap();
 }
+
+
