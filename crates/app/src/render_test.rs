@@ -8675,6 +8675,15 @@ fn render_toolbox_hash() {
     shot_tool("toolbox_cron_error", crate::toolbox::Tool::Cron, |tb| {
         tb.cron.expr = "* * 32 * *".into();
     });
+    shot_tool("toolbox_regex", crate::toolbox::Tool::Regex, |tb| {
+        tb.regex.pattern = r"(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})".into();
+        tb.regex.text = "从 2026-11-28 到 2027-01-15,以及 2025-07-08".into();
+        tb.regex.replacement = "$m/$d/$y".into();
+    });
+    shot_tool("toolbox_regex_error", crate::toolbox::Tool::Regex, |tb| {
+        tb.regex.pattern = r"(a+".into();
+        tb.regex.text = "abc".into();
+    });
 }
 
 /// 测试用 HS256 令牌:签名现算(core 的 HMAC),只为驱动页面状态;
@@ -8805,6 +8814,86 @@ fn toolbox_cron_states() {
     }
     h.run_steps(3);
     assert_label_contains(&h, "日(第 3 段): 32 超出范围 1-31");
+}
+
+/// 正则页:匹配列表带捕获组与字符偏移;flags 开关生效;非法表达式报错
+#[test]
+fn toolbox_regex_states() {
+    let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut app, idx) = hash_app(2);
+    app.auto_connect_done = true;
+    if let TabKind::Toolbox(tb) = &mut app.tabs[idx].kind {
+        tb.tool = crate::toolbox::Tool::Regex;
+        tb.regex.pattern = r"\b1[3-9]\d{9}\b".into();
+        tb.regex.text = "联系 13800138000 或 19912345678,座机 010-1234 不匹配".into();
+        tb.regex.replacement = "[手机]".into();
+    }
+    let app = std::cell::RefCell::new(app);
+    let setup = std::cell::Cell::new(false);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_state(
+            move |ctx, app: &mut std::cell::RefCell<ShujingApp>| {
+                if !setup.get() {
+                    setup.set(true);
+                    ShujingApp::apply_fonts(ctx);
+                    crate::theme::set_dark(true);
+                    crate::theme::apply(ctx);
+                    return;
+                }
+                let mut b = app.borrow_mut();
+                draw_app(&mut b, ctx);
+            },
+            app,
+        );
+    h.run_steps(6);
+    assert_label_contains(&h, "2 处匹配");
+    // 命中文本与字符偏移是两个节点:分别断言
+    for needle in ["13800138000", "[3..14]", "19912345678"] {
+        let fired = h.query_all_by(|n: &egui_kittest::kittest::Node| {
+            n.value().map_or(false, |v| v.contains(needle))
+        });
+        assert!(fired.count() > 0, "匹配列表没有 {needle}");
+    }
+    // 替换结果框里是展开后的文本
+    {
+        let hit = h.query_all_by(|n: &egui_kittest::kittest::Node| {
+            n.value().map_or(false, |v| {
+                v.contains("联系 [手机] 或 [手机],座机 010-1234 不匹配")
+            })
+        });
+        assert!(hit.count() > 0, "替换结果未展示");
+    }
+    // flags 开关必须真的传到引擎:小写 pattern 不开 i 匹配不到大写文本,开了才有
+    {
+        let mut b = h.state().borrow_mut();
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.regex.pattern = "error".into();
+            tb.regex.text = "Error: x".into();
+            tb.regex.replacement = String::new();
+            tb.regex.flag_i = false;
+        }
+    }
+    h.run_steps(3);
+    assert_label_contains(&h, "0 处匹配");
+    {
+        let mut b = h.state().borrow_mut();
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.regex.flag_i = true;
+        }
+    }
+    h.run_steps(3);
+    assert_label_contains(&h, "1 处匹配");
+    // 改非法表达式 → 引擎错误原样展示
+    {
+        let mut b = h.state().borrow_mut();
+        if let TabKind::Toolbox(tb) = &mut b.tabs[idx].kind {
+            tb.regex.pattern = r"(a+".into();
+        }
+    }
+    h.run_steps(3);
+    assert_label_contains(&h, "unclosed group");
 }
 
 /// 断言页面上存在文本包含 `needle` 的节点(状态行/说明文字是 Label,

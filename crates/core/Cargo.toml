@@ -23,6 +23,7 @@ sha1 = { workspace = true }
 hmac = { workspace = true }
 digest = { workspace = true }
 ring = { workspace = true }
+regex = { workspace = true }
 rand = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }

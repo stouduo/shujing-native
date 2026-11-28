@@ -740,6 +740,22 @@ impl ShujingApp {
                     }
                 }
             }
+            Ok("toolbox-regex") => {
+                app.open_toolbox();
+                let idx = app
+                    .tabs
+                    .iter()
+                    .position(|t| matches!(&t.kind, TabKind::Toolbox(_)));
+                if let Some(i) = idx {
+                    app.active_tab = i;
+                    if let TabKind::Toolbox(tb) = &mut app.tabs[i].kind {
+                        tb.tool = crate::toolbox::Tool::Regex;
+                        tb.regex.pattern = r"\b1[3-9]\d{9}\b".into();
+                        tb.regex.text = "联系 13800138000 或 19912345678".into();
+                        tb.regex.replacement = "[手机]".into();
+                    }
+                }
+            }
             Ok("toolbox-cron") => {
                 app.open_toolbox();
                 let idx = app

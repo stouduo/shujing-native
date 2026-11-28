@@ -22,6 +22,7 @@ pub mod hashing;
 pub mod jwt;
 mod model;
 pub mod redis_ops;
+pub mod regex_tool;
 pub mod config_crypto;
 pub mod conn_import;
 #[cfg(feature = "heavy-mw")]

@@ -1,0 +1,320 @@
+{
+ "cases": [
+  {
+   "pattern": "\\d+",
+   "flags": "",
+   "text": "订单 1024 号,金额 88.5 元,2026-11-28 下单",
+   "repl": "[$0]",
+   "matches": [
+    {
+     "text": "1024",
+     "start": 3,
+     "end": 7,
+     "groups": []
+    },
+    {
+     "text": "88",
+     "start": 13,
+     "end": 15,
+     "groups": []
+    },
+    {
+     "text": "5",
+     "start": 16,
+     "end": 17,
+     "groups": []
+    },
+    {
+     "text": "2026",
+     "start": 20,
+     "end": 24,
+     "groups": []
+    },
+    {
+     "text": "11",
+     "start": 25,
+     "end": 27,
+     "groups": []
+    },
+    {
+     "text": "28",
+     "start": 28,
+     "end": 30,
+     "groups": []
+    }
+   ],
+   "replaced": "订单 [1024] 号,金额 [88].[5] 元,[2026]-[11]-[28] 下单"
+  },
+  {
+   "pattern": "(?P<y>\\d{4})-(?P<m>\\d{2})-(?P<d>\\d{2})",
+   "flags": "",
+   "text": "从 2026-11-28 到 2027-01-15,再回到 2026-01-01",
+   "repl": "$m/$d/$y",
+   "matches": [
+    {
+     "text": "2026-11-28",
+     "start": 2,
+     "end": 12,
+     "groups": [
+      "2026",
+      "11",
+      "28"
+     ]
+    },
+    {
+     "text": "2027-01-15",
+     "start": 15,
+     "end": 25,
+     "groups": [
+      "2027",
+      "01",
+      "15"
+     ]
+    },
+    {
+     "text": "2026-01-01",
+     "start": 30,
+     "end": 40,
+     "groups": [
+      "2026",
+      "01",
+      "01"
+     ]
+    }
+   ],
+   "replaced": "从 11/28/2026 到 01/15/2027,再回到 01/01/2026"
+  },
+  {
+   "pattern": "^\\w+",
+   "flags": "m",
+   "text": "first line\nsecond line\nthird",
+   "repl": "<$0>",
+   "matches": [
+    {
+     "text": "first",
+     "start": 0,
+     "end": 5,
+     "groups": []
+    },
+    {
+     "text": "second",
+     "start": 11,
+     "end": 17,
+     "groups": []
+    },
+    {
+     "text": "third",
+     "start": 23,
+     "end": 28,
+     "groups": []
+    }
+   ],
+   "replaced": "<first> line\n<second> line\n<third>"
+  },
+  {
+   "pattern": "error",
+   "flags": "i",
+   "text": "Error: bad, ERROR again, eRRoR end",
+   "repl": "**",
+   "matches": [
+    {
+     "text": "Error",
+     "start": 0,
+     "end": 5,
+     "groups": []
+    },
+    {
+     "text": "ERROR",
+     "start": 12,
+     "end": 17,
+     "groups": []
+    },
+    {
+     "text": "eRRoR",
+     "start": 25,
+     "end": 30,
+     "groups": []
+    }
+   ],
+   "replaced": "**: bad, ** again, ** end"
+  },
+  {
+   "pattern": ".+",
+   "flags": "s",
+   "text": "line1\nline2",
+   "repl": "<$0>",
+   "matches": [
+    {
+     "text": "line1\nline2",
+     "start": 0,
+     "end": 11,
+     "groups": []
+    }
+   ],
+   "replaced": "<line1\nline2>"
+  },
+  {
+   "pattern": "[A-Z][a-z]+",
+   "flags": "",
+   "text": "Hello World Foo Bar baz Qux",
+   "repl": "-",
+   "matches": [
+    {
+     "text": "Hello",
+     "start": 0,
+     "end": 5,
+     "groups": []
+    },
+    {
+     "text": "World",
+     "start": 6,
+     "end": 11,
+     "groups": []
+    },
+    {
+     "text": "Foo",
+     "start": 12,
+     "end": 15,
+     "groups": []
+    },
+    {
+     "text": "Bar",
+     "start": 16,
+     "end": 19,
+     "groups": []
+    },
+    {
+     "text": "Qux",
+     "start": 24,
+     "end": 27,
+     "groups": []
+    }
+   ],
+   "replaced": "- - - - baz -"
+  },
+  {
+   "pattern": "\\s*,\\s*",
+   "flags": "",
+   "text": "a , b,  c ,d,  e",
+   "repl": ", ",
+   "matches": [
+    {
+     "text": " , ",
+     "start": 1,
+     "end": 4,
+     "groups": []
+    },
+    {
+     "text": ",  ",
+     "start": 5,
+     "end": 8,
+     "groups": []
+    },
+    {
+     "text": " ,",
+     "start": 9,
+     "end": 11,
+     "groups": []
+    },
+    {
+     "text": ",  ",
+     "start": 12,
+     "end": 15,
+     "groups": []
+    }
+   ],
+   "replaced": "a, b, c, d, e"
+  },
+  {
+   "pattern": "(a+)(b*)",
+   "flags": "",
+   "text": "aab aabbb ab bbaaa",
+   "repl": "$2|$1",
+   "matches": [
+    {
+     "text": "aab",
+     "start": 0,
+     "end": 3,
+     "groups": [
+      "aa",
+      "b"
+     ]
+    },
+    {
+     "text": "aabbb",
+     "start": 4,
+     "end": 9,
+     "groups": [
+      "aa",
+      "bbb"
+     ]
+    },
+    {
+     "text": "ab",
+     "start": 10,
+     "end": 12,
+     "groups": [
+      "a",
+      "b"
+     ]
+    },
+    {
+     "text": "aaa",
+     "start": 15,
+     "end": 18,
+     "groups": [
+      "aaa",
+      ""
+     ]
+    }
+   ],
+   "replaced": "b|aa bbb|aa b|a bb|aaa"
+  },
+  {
+   "pattern": "\\bapple\\b",
+   "flags": "",
+   "text": "an apple, apples, pineapple, apple pie",
+   "repl": "橙",
+   "matches": [
+    {
+     "text": "apple",
+     "start": 3,
+     "end": 8,
+     "groups": []
+    },
+    {
+     "text": "apple",
+     "start": 29,
+     "end": 34,
+     "groups": []
+    }
+   ],
+   "replaced": "an 橙, apples, pineapple, 橙 pie"
+  },
+  {
+   "pattern": "用户[_-]?(\\d+)",
+   "flags": "",
+   "text": "用户_1024 和 用户-2048,以及 用户x",
+   "repl": "u$1",
+   "matches": [
+    {
+     "text": "用户_1024",
+     "start": 0,
+     "end": 7,
+     "groups": [
+      "1024"
+     ]
+    },
+    {
+     "text": "用户-2048",
+     "start": 10,
+     "end": 17,
+     "groups": [
+      "2048"
+     ]
+    }
+   ],
+   "replaced": "u1024 和 u2048,以及 用户x"
+  }
+ ]
+}

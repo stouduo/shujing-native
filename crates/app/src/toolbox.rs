@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 工具条目:(分类, 名称)。分类只用于导航分组
-const TOOLS: [(&str, &str, Tool); 7] = [
+const TOOLS: [(&str, &str, Tool); 8] = [
     ("编解码", "Base64 / URL / Hex", Tool::Codec),
     ("时间", "时间戳 ⇄ 日期", Tool::Timestamp),
     ("生成器", "UUID", Tool::Uuid),
@@ -19,6 +19,7 @@ const TOOLS: [(&str, &str, Tool); 7] = [
     ("摘要", "哈希 / HMAC", Tool::Hash),
     ("令牌", "JWT", Tool::Jwt),
     ("定时", "Cron 表达式", Tool::Cron),
+    ("文本", "正则测试", Tool::Regex),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub enum Tool {
     Hash,
     Jwt,
     Cron,
+    Regex,
 }
 
 pub fn draw_toolbox_view(ctx: &egui::Context, tab_id: &str, tb: &mut ToolboxTab) -> Vec<TabAction> {
@@ -76,6 +78,7 @@ pub fn draw_toolbox_view(ctx: &egui::Context, tab_id: &str, tb: &mut ToolboxTab)
             Tool::Hash => draw_hash(ui, tab_id, &mut tb.hash, wide, &mut actions),
             Tool::Jwt => draw_jwt(ui, &mut tb.jwt, wide, &mut actions),
             Tool::Cron => draw_cron(ui, &mut tb.cron, wide, &mut actions),
+            Tool::Regex => draw_regex(ui, &mut tb.regex, wide, &mut actions),
         }
     });
     actions
@@ -1315,7 +1318,7 @@ fn human_duration_ms(ms: i64) -> String {
 fn draw_cron(
     ui: &mut egui::Ui,
     t: &mut CronTool,
-    wide: f32,
+    _wide: f32,
     actions: &mut Vec<TabAction>,
 ) {
     let p = theme::c();
@@ -1403,6 +1406,207 @@ fn draw_cron(
             ui.add_space(8.0);
             ui.label(
                 RichText::new("按本机时区预演;标准 5 段 crontab(分 时 日 月 周)与 @宏")
+                    .size(theme::fs_px(11.0))
+                    .color(p.muted),
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 正则
+
+const REGEX_PRESETS: [(&str, &str); 6] = [
+    ("邮箱", r"[\w.+-]+@[\w-]+\.[\w.]+"),
+    ("IPv4", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+    ("URL", r"https?://[\w.-]+(?:/[^\s]*)?"),
+    ("手机号", r"\b1[3-9]\d{9}\b"),
+    ("日期", r"\d{4}-\d{2}-\d{2}"),
+    ("HTML 标签", r"</?[a-zA-Z][^>]*>"),
+];
+
+/// 正则页状态:表达式/flags/文本/替换串,结果按全部输入缓存
+#[derive(Default, Clone)]
+pub struct RegexTool {
+    pub pattern: String,
+    /// 大小写不敏感 / ^$ 匹配每行 / . 匹配换行
+    pub flag_i: bool,
+    pub flag_m: bool,
+    pub flag_s: bool,
+    pub text: String,
+    pub replacement: String,
+    /// 预设下拉的选中下标(仅 UI 态)
+    pub preset: usize,
+    last: (String, bool, bool, bool, String),
+    result: Option<Result<shujing_core::regex_tool::RegexResult, String>>,
+}
+
+impl RegexTool {
+    /// 任一输入变了才重跑
+    fn refresh(&mut self) {
+        let key = (
+            self.pattern.clone(),
+            self.flag_i,
+            self.flag_m,
+            self.flag_s,
+            self.text.clone(),
+        );
+        if key == self.last {
+            return;
+        }
+        self.last = key.clone();
+        let flags = self.flag_i as u8 * shujing_core::regex_tool::FLAG_I
+            | self.flag_m as u8 * shujing_core::regex_tool::FLAG_M
+            | self.flag_s as u8 * shujing_core::regex_tool::FLAG_S;
+        self.result = Some(if self.pattern.trim().is_empty() {
+            Err("输入正则表达式".into())
+        } else {
+            shujing_core::regex_tool::run(&self.pattern, flags, &self.text, &self.replacement)
+        });
+    }
+}
+
+/// 正则测试:匹配列表 + 替换预览。环视/回引这类语法 regex 引擎不支持,
+/// 编译错误原样展示;替换语法是 $0/$1/${name}
+fn draw_regex(
+    ui: &mut egui::Ui,
+    t: &mut RegexTool,
+    wide: f32,
+    actions: &mut Vec<TabAction>,
+) {
+    let p = theme::c();
+    ui.heading(RichText::new("正则测试").size(theme::fs_px(15.0)));
+    ui.add_space(8.0);
+    theme::form_row(ui, "表达式", |ui| {
+        ui.horizontal(|ui| {
+            theme::field_hint(ui, "regex-pat", &mut t.pattern, 300.0, false, r"\d{4}-\d{2}");
+            let sel = if t.pattern.trim().is_empty() {
+                "常用正则".to_string()
+            } else {
+                t.pattern.trim().to_string()
+            };
+            let opts: Vec<(String, String)> = REGEX_PRESETS
+                .iter()
+                .map(|(n, e)| (e.to_string(), format!("{n}  {e}")))
+                .chain(std::iter::once(("__none".into(), "常用正则".into())))
+                .collect();
+            if let Some(v) = theme::select(ui, "regex-preset", &sel, &opts, 190.0) {
+                if v != "__none" {
+                    if let Some((_, e)) = REGEX_PRESETS.iter().find(|(_, e)| *e == v) {
+                        t.pattern = e.to_string();
+                    }
+                }
+            }
+        })
+    });
+    theme::form_row(ui, "选项", |ui| {
+        ui.horizontal(|ui| {
+            theme::checkbox(ui, &mut t.flag_i, "忽略大小写");
+            theme::checkbox(ui, &mut t.flag_m, "^ $ 匹配每行");
+            theme::checkbox(ui, &mut t.flag_s, ". 匹配换行");
+        })
+    });
+    theme::form_field_multiline(ui, "测试文本", "regex-text", &mut t.text, wide, 4);
+    t.refresh();
+
+    match &t.result {
+        None => {}
+        Some(Err(e)) => {
+            ui.add_space(6.0);
+            ui.label(RichText::new(e).size(theme::fs_px(12.0)).color(p.red));
+        }
+        Some(Ok(r)) => {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!("{} 处匹配", r.matches.len()))
+                    .size(theme::fs_px(12.5))
+                    .strong()
+                    .color(if r.matches.is_empty() { p.muted } else { p.accent }),
+            );
+            // 匹配列表:位置用字符偏移,与编辑器/向量口径一致;
+            // 列表行距收紧(全局 6 对列表太松)
+            ui.add_space(4.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            let show = r.matches.iter().take(50).enumerate();
+            for (i, m) in show {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.label(
+                        RichText::new(format!("#{}", i + 1))
+                            .font(theme::mono(11.5))
+                            .color(p.muted),
+                    );
+                    ui.label(
+                        RichText::new(crate::icons::clip(&m.text, 48))
+                            .font(theme::mono(12.0))
+                            .color(p.text),
+                    );
+                    ui.label(
+                        RichText::new(format!("[{}..{}]", m.start, m.end))
+                            .font(theme::mono(11.0))
+                            .color(p.muted),
+                    );
+                });
+                for (gi, g) in m.groups.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.add_space(28.0);
+                        ui.label(
+                            RichText::new(format!("${}", gi + 1))
+                                .font(theme::mono(11.0))
+                                .color(p.muted),
+                        );
+                        match g {
+                            Some(g) => ui.label(
+                                RichText::new(crate::icons::clip(g, 48))
+                                    .font(theme::mono(11.5))
+                                    .color(p.text2),
+                            ),
+                            None => ui.label(
+                                RichText::new("(未参与)")
+                                    .size(theme::fs_px(11.0))
+                                    .color(p.muted),
+                            ),
+                        };
+                    });
+                }
+            }
+            if r.matches.len() > 50 {
+                ui.label(
+                    RichText::new(format!("…其余 {} 处未列出", r.matches.len() - 50))
+                        .size(theme::fs_px(11.0))
+                        .color(p.muted),
+                );
+            }
+            // 替换预览
+            ui.add_space(12.0);
+            theme::form_row(ui, "替换为", |ui| {
+                ui.horizontal(|ui| {
+                    theme::field_hint(ui, "regex-repl", &mut t.replacement, 300.0, false, "$1 或 ${name}");
+                    if !t.replacement.is_empty() && !r.replaced.is_empty() {
+                        if theme::mini_text_button(ui, "复制结果", p.text2).0 {
+                            actions.push(TabAction::CopyToClipboard {
+                                text: r.replaced.clone(),
+                                toast: COPIED.into(),
+                            });
+                        }
+                    }
+                })
+            });
+            if !t.replacement.is_empty() {
+                let mut shown = r.replaced.clone();
+                theme::form_row(ui, "结果", |ui| {
+                    theme::code_box(
+                        ui,
+                        "regex-replaced",
+                        &mut shown,
+                        theme::fit_width(wide, ui.available_width()),
+                        4,
+                        "",
+                    )
+                });
+            }
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(r"替换引用:$0 全匹配、$1..$9 分组、${name} 命名组;环视/回引 \1 不受支持")
                     .size(theme::fs_px(11.0))
                     .color(p.muted),
             );
